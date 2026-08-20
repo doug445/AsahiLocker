@@ -132,7 +132,7 @@ a real measured estimate for each — not numbers from someone else's hardware:
    1) aggressive    4 GiB, 10 iterations    unlock ~8.5 s
       Strongest. Best if you rarely reboot.
 
-   2) moderate      2 GiB,  8 iterations    unlock ~4.0 s
+   2) moderate      2 GiB,  8 iterations    unlock ~4.0 s   [default]
       Balanced. Still strongly memory-hard.
 
    3) fast          1 GiB,  4 iterations    unlock ~2.0 s
@@ -141,8 +141,8 @@ a real measured estimate for each — not numbers from someone else's hardware:
 
 | Profile | Memory | Iterations | Threads |
 |---------|--------|-----------|---------|
-| `aggressive` (default) | 4 GiB | 10 | 4 |
-| `moderate` | 2 GiB | 8 | 4 |
+| `aggressive` | 4 GiB | 10 | 4 |
+| `moderate` (default) | 2 GiB | 8 | 4 |
 | `fast` | 1 GiB | 4 | 4 |
 
 **All three are argon2id — none uses pbkdf2.** Memory cost only has to be

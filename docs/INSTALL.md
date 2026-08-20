@@ -174,7 +174,7 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Proceed? (yes/no)` | Your root/boot/EFI selections span different physical disks. | `no` unless that is genuinely your layout |
 | `Continue anyway? (yes/no)` | The BLS boot entries disagree with `/etc/fstab` about which subvolume is root. | `no` — investigate first; see [RECOVERY.md](RECOVERY.md) |
 | `Run btrfs integrity check?` | A read-only `btrfs check`. Takes 5–30 min. | **`Y`** — this is your last chance to find pre-existing corruption |
-| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and shows a measured estimate for each. All three are argon2id. | `1` aggressive (4 GiB, ~8 s), `2` moderate (2 GiB, ~4 s), `3` fast (1 GiB, ~2 s). Default is `1` |
+| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and shows a measured estimate for each. All three are argon2id. | `1` aggressive (4 GiB, ~8 s), `2` moderate (2 GiB, ~4 s), `3` fast (1 GiB, ~2 s). Default is `2` |
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. | Read the summary carefully, then type `ENCRYPT` |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
@@ -192,7 +192,7 @@ checkpoint:
   Free    : 184320 MiB
   Arch    : aarch64
   Crypto  : cryptsetup 2.7.5
-  KDF     : argon2id aggressive — 4096 MiB, 10 iterations, 4 threads
+  KDF     : argon2id moderate — 2048 MiB, 8 iterations, 4 threads
 ```
 
 Confirm `ROOT` is the partition you expect and the subvolumes match your fstab.
