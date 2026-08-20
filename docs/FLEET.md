@@ -85,10 +85,11 @@ sha256 and a *time-benchmarked* memory cost that varies with how fast the machin
 happens to be that day — so two identical Macs would end up with different
 security parameters.
 
-If you deliberately vary it for smaller-RAM boxes, record which box got what:
+If you deliberately vary it for smaller-RAM boxes, record which box got what.
+Vary the *memory cost* only — every box stays on argon2id, never pbkdf2:
 
 ```bash
-sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=16 ./bin/luks-deploy.sh
+sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # ~2 s unlock
 ```
 
 Audit any box afterwards:

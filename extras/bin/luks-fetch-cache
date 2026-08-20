@@ -15,9 +15,11 @@ MAXAGE=1800    # seconds — reuse a fresh cache instead of re-dumping every hea
 LOCK=/run/luks-fetch-cache.lock
 # LUKS UUIDs of volumes that GRUB itself must unlock (as opposed to the initramfs).
 # Such volumes are KDF-constrained by whatever GRUB is installed:
-#   GRUB 2.12 (Fedora 44 / Fedora Asahi today): no argon2 support at all -> pbkdf2 only.
-#   GRUB >= 2.13: argon2i/id/d supported, but capped by GRUB's own heap; ~1 GiB
+#   GRUB >= 2.13: argon2i/id/d supported, capped by GRUB's own heap; ~1 GiB
 #                 argon2id memory cost is the practical ceiling (2.16 handles that).
+#   GRUB 2.12 (Fedora 44): no argon2 support at all. Do NOT answer that by
+#                 downgrading a volume to pbkdf2 -- either upgrade GRUB, or keep
+#                 the volume off GRUB's unlock path (what this repo does with /boot).
 # The root volume this repo encrypts is unlocked by the INITRAMFS, not GRUB, so it is
 # unaffected and uses the full 4 GiB argon2id. This list only tags GRUB-unlocked
 # volumes with "(GRUB boot)" in the output. Space-PADDED list; empty by default:
