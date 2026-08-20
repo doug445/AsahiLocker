@@ -181,6 +181,7 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and shows a measured estimate for each. All three are argon2id. | `1` aggressive (4 GiB, ~8 s), `2` moderate (2 GiB, ~4 s), `3` fast (1 GiB, ~2 s). Default is `2` |
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
+| `Press Enter once Caps Lock is OFF` | Only shown when the kernel reports Caps Lock on at the `ENCRYPT` gate — which is exactly what happens if you switched it on to type that all-caps word. | Turn Caps Lock off, then Enter. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
 
 If the script is interrupted at **any** point — power loss, closed lid, killed
