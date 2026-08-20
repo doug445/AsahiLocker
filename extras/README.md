@@ -1,7 +1,7 @@
 # extras — `luks-fetch-cache`
 
 Optional. An aligned, one-line-per-volume summary of every LUKS and BitLocker
-volume attached to the machine, for use as a fastfetch module.
+encrypted volume attached to the machine, for use as a fastfetch module.
 
 ```bash
 sudo ./install.sh
