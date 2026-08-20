@@ -25,3 +25,20 @@ jobs:
             $(git ls-files '*.sh') \
             boot-guards/bin/esp-grub-stub-rebaseline \
             extras/bin/luks-fetch-cache
+
+  loopback:
+    # Real cryptsetup reencrypt + hard-kill/repair/resume against a throwaway
+    # file-backed loop device — no real disk is ever touched.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cryptsetup + btrfs-progs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cryptsetup-bin btrfs-progs
+      - name: loopback core test
+        run: sudo bash tests/loopback-core-test.sh
