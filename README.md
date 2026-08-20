@@ -119,25 +119,19 @@ cost and sha256.
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
 
-The KDF re-runs **in the initramfs at every boot**, so the memory cost must be
-allocatable there — and you pay its cost as unlock latency on every single boot.
+The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
+allocatable there — and you pay its full cost as unlock latency on every boot.
 
 ### Choosing a profile
 
-You pay the KDF cost as unlock latency on **every** boot, so the installer asks
-you to pick one of three profiles. It **benchmarks your machine first** and shows
-a real measured estimate for each — not numbers from someone else's hardware:
+Because you wait for it every time you start the machine, the installer asks you
+to pick one of three profiles. It **benchmarks your machine first** and shows a
+real measured estimate for each — not numbers from someone else's hardware:
 
-```
-   1) aggressive    4 GiB, 10 iterations    unlock ~8.5 s
-      Strongest. Best if you rarely reboot.
+![The luks-deploy.sh KDF profile prompt, showing three argon2id profiles with unlock times benchmarked on the running machine](docs/images/kdf-profile-menu.png)
 
-   2) moderate      2 GiB,  8 iterations    unlock ~4.0 s   [default]
-      Balanced. Still strongly memory-hard.
-
-   3) fast          1 GiB,  4 iterations    unlock ~2.0 s
-      Snappy. Comfortable even on an 8 GiB M1.
-```
+*Times shown are from an M2 Max. Your machine is benchmarked at run time, so the
+numbers you see will be your own.*
 
 | Profile | Memory | Iterations | Threads |
 |---------|--------|-----------|---------|
@@ -149,9 +143,9 @@ a real measured estimate for each — not numbers from someone else's hardware:
 allocatable in the initramfs, which has the machine to itself, so any profile is
 safe on any Asahi-supported Mac including an 8 GiB M1.
 
-The times above were measured on an M2 Max. argon2id is memory-bandwidth-bound,
-so a base M1 will be slower for the same parameters — which is exactly why the
-installer measures rather than assumes.
+argon2id is memory-bandwidth-bound, so a base M1 is slower than an M2 Max for
+identical parameters — which is exactly why the installer measures your hardware
+rather than assuming.
 
 Non-interactive selection, for scripted or fleet deployments:
 
