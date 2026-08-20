@@ -24,23 +24,33 @@ G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 ok(){ echo -e "  ${G}✅${N} $*"; }; warn(){ echo -e "  ${Y}⚠️ ${N} $*"; }; err(){ echo -e "  ${R}❌${N} $*"; }
 [ "$(id -u)" -eq 0 ] || { err "run as root (sudo)"; exit 1; }
 
-# --- Determine where the target root lives (booted "/" vs live-USB "/mnt") ---
+# --- Determine the mapper name + where the target root lives ----------------
+# Default fedora_crypt; LUKS_MAPPER_NAME overrides; if neither exists, fall
+# back to whatever /dev/mapper/* device backs "/" (covers custom names set
+# via LUKS_MAPPER_NAME at deploy time).
+MAPPER_NAME="${LUKS_MAPPER_NAME:-fedora_crypt}"
+if [ ! -e "/dev/mapper/$MAPPER_NAME" ]; then
+  ROOT_SRC=$(/usr/bin/findmnt -no SOURCE / 2>/dev/null | /usr/bin/sed 's/\[.*//')
+  case "$ROOT_SRC" in
+    /dev/mapper/*) MAPPER_NAME=${ROOT_SRC#/dev/mapper/} ;;
+  esac
+fi
 PREFIX=""
 MAPPER=""
-if [ -e /dev/mapper/fedora_crypt ] && /usr/bin/findmnt -no SOURCE / 2>/dev/null | "$GREP" -q 'fedora_crypt'; then
-  PREFIX=""; MAPPER=/dev/mapper/fedora_crypt          # booted encrypted system
-elif [ -e /dev/mapper/fedora_crypt ] && /usr/bin/findmnt -no SOURCE /mnt 2>/dev/null | "$GREP" -q 'fedora_crypt'; then
-  PREFIX="/mnt"; MAPPER=/dev/mapper/fedora_crypt      # live USB, target mounted at /mnt
+if [ -e "/dev/mapper/$MAPPER_NAME" ] && /usr/bin/findmnt -no SOURCE / 2>/dev/null | "$GREP" -q "$MAPPER_NAME"; then
+  PREFIX=""; MAPPER="/dev/mapper/$MAPPER_NAME"        # booted encrypted system
+elif [ -e "/dev/mapper/$MAPPER_NAME" ] && /usr/bin/findmnt -no SOURCE /mnt 2>/dev/null | "$GREP" -q "$MAPPER_NAME"; then
+  PREFIX="/mnt"; MAPPER="/dev/mapper/$MAPPER_NAME"    # live USB, target mounted at /mnt
 else
-  err "no active /dev/mapper/fedora_crypt found — is the box encrypted & mounted?"; exit 1
+  err "no active /dev/mapper/$MAPPER_NAME found — is the box encrypted & mounted?"; exit 1
 fi
 
 # --- Resolve the RAW backing device + LUKS UUID -----------------------------
-RAW=$("$CRYPTSETUP" status fedora_crypt 2>/dev/null | "$GREP" -oE '/dev/[a-z0-9]+' | "$GREP" -vi mapper | /usr/bin/head -1)
+RAW=$("$CRYPTSETUP" status "$MAPPER_NAME" 2>/dev/null | "$GREP" -oE '/dev/[a-z0-9]+' | "$GREP" -vi mapper | /usr/bin/head -1)
 if [ -z "$RAW" ]; then
   # Fallback: resolve the crypttab UUID to a real device path (a bare
   # "UUID=xxxx" string is NOT usable as a device argument to cryptsetup/blkid)
-  CT_UUID=$("$GREP" -E '^\s*fedora_crypt' "$PREFIX/etc/crypttab" 2>/dev/null \
+  CT_UUID=$("$GREP" -E '^\s*'"$MAPPER_NAME"'' "$PREFIX/etc/crypttab" 2>/dev/null \
       | "$GREP" -oE 'UUID=[0-9a-fA-F-]+' | /usr/bin/head -1 | /usr/bin/sed 's/^UUID=//')
   [ -n "$CT_UUID" ] && RAW=$(/usr/bin/readlink -f "/dev/disk/by-uuid/$CT_UUID" 2>/dev/null || true)
 fi
@@ -105,15 +115,15 @@ RECOVERY — if the system won't boot (from a Fedora Asahi live USB):
   cryptsetup luksHeaderRestore $RAW --header-backup-file luks-header-${HOST}.img
 
   # Unlock + mount + chroot to repair boot config:
-  cryptsetup open $RAW fedora_crypt
-  mount -o subvol=root /dev/mapper/fedora_crypt /mnt
+  cryptsetup open $RAW $MAPPER_NAME
+  mount -o subvol=root /dev/mapper/$MAPPER_NAME /mnt
   mount ${RAW%p*}p5 /mnt/boot            # /boot (ext4) — adjust if layout differs
   mount ${RAW%p*}p4 /mnt/boot/efi        # EFI (vfat)
   for i in dev dev/pts proc sys run; do mount --bind /\$i /mnt/\$i; done
   chroot /mnt /bin/bash
   #   verify: crypttab/_fstab/_kernel_cmdline in this bundle vs live
   #   dracut --regenerate-all --force
-  #   grubby --update-kernel=ALL --args="rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=fedora_crypt"
+  #   grubby --update-kernel=ALL --args="rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=$MAPPER_NAME"
 
 Files in this bundle:
   luks-header-${HOST}.img    authoritative header (fresh luksHeaderBackup)
