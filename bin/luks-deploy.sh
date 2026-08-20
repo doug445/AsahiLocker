@@ -941,6 +941,39 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
 else
     read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
     [ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
+
+    # ── Caps Lock trap ──────────────────────────────────────────────────────
+    # 'ENCRYPT' is all caps, so it is natural to switch Caps Lock on to type it
+    # and leave it on for the new passphrase a few seconds later. cryptsetup
+    # asks for that passphrase twice, but both entries would be inverted the
+    # same way, so its verification passes. The mistake surfaces at the boot
+    # prompt — Caps Lock off, nothing works, and the volume holds the only copy
+    # of the data. Ask the kernel's keyboard LED state and say so plainly.
+    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+        CAPS_STATE="unknown"
+        for _led in /sys/class/leds/*::capslock/brightness; do
+            [ -r "$_led" ] || continue
+            if [ "$(cat "$_led" 2>/dev/null || echo 0)" != "0" ]; then
+                CAPS_STATE="on"; break
+            fi
+            CAPS_STATE="off"
+        done
+        echo ""
+        case "$CAPS_STATE" in
+            on)
+                warn "CAPS LOCK IS ON — turn it off before the passphrase prompt."
+                warn "  You are about to set the passphrase this machine boots with."
+                warn "  cryptsetup asks for it twice, but both entries would be"
+                warn "  capitalised the same way, so it cannot catch this."
+                read -p "  Press Enter once Caps Lock is OFF (or leave it on deliberately): " _
+                ;;
+            *)
+                log "  If you switched Caps Lock on to type ENCRYPT, switch it off now —"
+                log "  cryptsetup's type-it-twice check cannot catch a passphrase that is"
+                log "  inverted both times, and the boot prompt is where you would find out."
+                ;;
+        esac
+    fi
 fi
 
 log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
@@ -1002,6 +1035,7 @@ else
     log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
     log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
     log "  You will be prompted to set a passphrase (type it twice)."
+    log "  Check Caps Lock first — both entries would be inverted, so it verifies."
     log "  If interrupted, just re-run this script — it resumes automatically."
     echo ""
 
