@@ -1,0 +1,109 @@
+#!/bin/bash
+# Generate aligned disk-encryption summary for fastfetch.
+# Runs as root (blkid/luksDump/bitlkDump need it); writes a world-readable cache
+# AND prints to stdout so fastfetch can call it live. No key material is exposed
+# — only KDF / cipher metadata.
+KEYPAD=17   # visible width of "Disk Encryption: " — keep in sync with fastfetch key
+CACHE=/var/cache/luks-fetch.txt
+# fastfetch's `command` module treats its output as a single line, so an embedded
+# newline escapes the logo column and garbles every device after the first.
+# Instead fastfetch calls us once per line ($1 = 1-based line number) and we print
+# only that line; asking for a line that doesn't exist prints nothing, which makes
+# fastfetch skip that module entirely. With no argument the whole block is printed.
+LINE="${1:-}"
+MAXAGE=1800    # seconds — reuse a fresh cache instead of re-dumping every header per line
+LOCK=/run/luks-fetch-cache.lock
+# LUKS UUIDs of volumes that GRUB itself must unlock (as opposed to the initramfs).
+# Such volumes are KDF-constrained by whatever GRUB is installed:
+#   GRUB 2.12 (Fedora 44 / Fedora Asahi today): no argon2 support at all -> pbkdf2 only.
+#   GRUB >= 2.13: argon2i/id/d supported, but capped by GRUB's own heap; ~1 GiB
+#                 argon2id memory cost is the practical ceiling (2.16 handles that).
+# The root volume this repo encrypts is unlocked by the INITRAMFS, not GRUB, so it is
+# unaffected and uses the full 4 GiB argon2id. This list only tags GRUB-unlocked
+# volumes with "(GRUB boot)" in the output. Space-PADDED list; empty by default:
+#   GRUB_UUIDS=" uuid1 uuid2 " /usr/local/bin/luks-fetch-cache
+GRUB_UUIDS="${GRUB_UUIDS:- }"
+
+# Print either the whole block or just line $LINE of it.
+emit() { if [ -n "$LINE" ]; then printf '%s\n' "$1" | sed -n "${LINE}p"; else printf '%s\n' "$1"; fi; }
+
+fresh_cache() {
+  [ -r "$CACHE" ] || return 1
+  local age; age=$(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) ))
+  [ "$age" -ge 0 ] && [ "$age" -lt "$MAXAGE" ]
+}
+
+# fastfetch runs its command modules concurrently, so all the per-line calls fire
+# at once and would each do a full blkid/luksDump sweep. Serialize on a lock: the
+# first one in rescans, the rest wake up to a fresh cache and just slice it.
+if [ -n "$LINE" ]; then
+  fresh_cache && { sed -n "${LINE}p" "$CACHE"; exit 0; }
+fi
+exec 9>"$LOCK" 2>/dev/null || true
+flock 9 2>/dev/null || true
+if [ -n "$LINE" ]; then
+  fresh_cache && { sed -n "${LINE}p" "$CACHE"; exit 0; }
+fi
+
+emit_luks() {
+  local d="$1" uuid note
+  uuid=$(cryptsetup luksUUID "$d" 2>/dev/null)
+  note=""; [[ "$GRUB_UUIDS" == *" $uuid "* ]] && note="  (GRUB boot)"
+  cryptsetup luksDump "$d" 2>/dev/null | awk -v dev="$(basename "$d")" -v note="$note" '
+    /Version:/&&!v{v=$2} /PBKDF:/&&!p{p=$2} /Time cost:/&&!t{t=$3}
+    /Memory:/&&!mm{mm=$2} /Threads:/&&!th{th=$2}
+    /Iterations:/&&!it{it=$2} /AF hash:/&&!h{h=$3}
+    END{
+      if(p ~ /argon/) printf "%-10s LUKS%s %s, %.3g GiB, %d threads, t=%s, %s%s", dev,v,p,mm/1048576,th,t,h,note
+      else printf "%-10s LUKS%s %s, %s iters, %s%s", dev,v,p,it,h,note
+    }'
+}
+
+emit_bitlk() {
+  local d="$1"
+  # bitlkDump exposes only public FVE metadata (cipher, size, protector types) — no keys.
+  cryptsetup bitlkDump "$d" 2>/dev/null | awk -v dev="$(basename "$d")" '
+    /^Version:/{v=$2}
+    /^Volume size:/{vb=$3}
+    /^Cipher name:/{cn=$3}
+    /^Cipher mode:/{cm=$3}
+    /^Cipher key:/{ck=$3}
+    /Protection:/{
+      l=$0; sub(/.*protected with /,"",l)
+      if(l ~ /recovery passphrase/)      tag="recovery"
+      else if(l ~ /passphrase/)          tag="passphrase"
+      else if(l ~ /TPM and PIN/)         tag="TPM+PIN"
+      else if(l ~ /TPM/)                 tag="TPM"
+      else if(l ~ /startup key/)         tag="startup-key"
+      else if(l ~ /smart card/)          tag="smartcard"
+      else if(l ~ /clear key/)           tag="CLEAR-KEY"
+      else                               tag=l
+      if(!(tag in seen)){seen[tag]=1; prot=prot (prot?"+":"") tag}
+    }
+    END{
+      n=index(cm,"-"); mode=toupper(n?substr(cm,1,n-1):cm)   # xts-plain64 -> XTS
+      printf "%-10s BitLocker v%s %s-%d %s, %.4g GiB, %s", dev,v,toupper(cn),ck/2,mode,vb/1073741824,prot
+    }'
+}
+
+out=""; first=1
+mapfile -t devs < <( { blkid -t TYPE=crypto_LUKS -o device; \
+                       blkid -t TYPE=BitLocker  -o device; } 2>/dev/null | sort )
+for d in "${devs[@]}"; do
+  case "$(blkid -o value -s TYPE "$d" 2>/dev/null)" in
+    crypto_LUKS) line=$(emit_luks  "$d");;
+    BitLocker)   line=$(emit_bitlk "$d");;
+    *)           continue;;
+  esac
+  [ -z "$line" ] && continue
+  if [ $first -eq 1 ]; then out="$line"; first=0
+  else out="$out"$'\n'"$(printf '%*s' "$KEYPAD" '')$line"; fi
+done
+[ -z "$out" ] && out="(no encrypted volumes detected)"
+# Written via temp+rename so a concurrent reader never sees a half-written cache.
+if printf '%s\n' "$out" > "$CACHE.tmp" 2>/dev/null; then
+  chmod 644 "$CACHE.tmp" 2>/dev/null || true
+  mv -f "$CACHE.tmp" "$CACHE" 2>/dev/null || rm -f "$CACHE.tmp" 2>/dev/null
+fi
+# Also emit to stdout so fastfetch can call this live (the boot service ignores stdout).
+emit "$out"

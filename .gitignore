@@ -1,0 +1,11 @@
+# Deployment artifacts — never commit these, they contain machine identity
+luks-deploy-*.log
+pre-luks-state-*/
+LUKS-RECOVERY-*/
+*.img
+*.header
+post-encryption.conf
+grub-esp-stub.cfg.known-good
+grub-esp-stub.sha512
+*.bak
+*.tmp

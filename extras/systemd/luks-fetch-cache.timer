@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh LUKS/BitLocker keyslot cache for fastfetch
+
+[Timer]
+# Build the cache shortly after boot so the first terminal is already instant,
+# then refresh at intervals. The sweep probes every block device, so keep the
+# interval loose to avoid waking idle USB disks constantly.
+OnBootSec=45s
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

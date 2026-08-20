@@ -1,0 +1,33 @@
+#!/bin/sh
+# esp-grub-stub-rebaseline — record the CURRENT ESP grub.cfg as the known-good stub.
+#
+# Run this when you have deliberately changed the ESP stub and want the guard to
+# accept the new content (e.g. after reinstalling GRUB, or after changing which
+# filesystem holds /boot). It refuses to baseline an obviously-wrong file: a real
+# Asahi stub is a handful of lines, not a full generated grub.cfg.
+set -eu
+
+ESP=${ESP_GRUB_CFG:-/boot/efi/EFI/fedora/grub.cfg}
+REF=${ESP_GRUB_REF:-/root/grub-esp-stub.cfg.known-good}
+HASHFILE=${ESP_GRUB_HASH:-/root/grub-esp-stub.sha512}
+FORCE=${1:-}
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+[ -f "$ESP" ] || { echo "ESP grub.cfg missing: $ESP" >&2; exit 1; }
+
+lines=$(wc -l < "$ESP")
+if [ "$lines" -gt 40 ] && [ "$FORCE" != "--force" ]; then
+    echo "REFUSING: $ESP is $lines lines — that looks like a FULL generated grub.cfg," >&2
+    echo "not the small chainload stub. Baselining it would pin the broken state." >&2
+    echo "If you are certain, re-run with --force." >&2
+    exit 1
+fi
+
+cp -a "$ESP" "$REF"
+chmod 0400 "$REF"
+sha512sum "$ESP" | awk '{print $1}' > "$HASHFILE"
+chmod 0400 "$HASHFILE"
+sync
+echo "Baselined $ESP ($lines lines)"
+echo "  reference: $REF"
+echo "  sha512:    $(cat "$HASHFILE")"

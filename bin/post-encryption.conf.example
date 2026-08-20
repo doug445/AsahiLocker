@@ -1,0 +1,27 @@
+# post-encryption.conf — optional config for post-encryption-setup.sh
+#
+# Copy to post-encryption.conf (next to the script) or /etc/post-encryption.conf.
+# This is sourced by bash, so it is shell syntax. Everything here is optional;
+# unset values fall back to the script's defaults.
+
+# --- Snapper -----------------------------------------------------------------
+# Snapshot subvolumes are created AFTER encryption so they live on the encrypted
+# volume. Set ENABLE_SNAPPER=0 to skip snapper entirely.
+ENABLE_SNAPPER=1
+SNAPPER_SUBVOLS=("/.snapshots" "/home/.snapshots")
+SNAPPER_CONFIGS="root home"
+
+# --- Boot guards -------------------------------------------------------------
+# Units from boot-guards/ that are only safe to enable once root is encrypted.
+BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.timer)
+
+# --- Your own units ----------------------------------------------------------
+# Anything else you want enabled once the box is encrypted and booting. These
+# are examples from a real deployment — replace them with your own, or leave the
+# array empty.
+EXTRA_UNITS=()
+# EXTRA_UNITS=(
+#   luks-fetch-cache.timer        # extras/ — disk-encryption status for fastfetch
+#   borg-backup.timer
+#   trim-on-mount.path
+# )
