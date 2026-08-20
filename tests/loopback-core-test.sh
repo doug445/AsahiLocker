@@ -10,9 +10,12 @@
 #   3. the result is LUKS2/argon2id, opens, and the inner btrfs (subvols,
 #      files) survived intact
 #   4. recovery-key enrollment (luksAddKey via key-files) unlocks the volume
-#   5. an interrupted reencrypt carries the online-reencrypt flag and
-#      finishes with --resume-only  (skipped gracefully if the reencrypt
-#      completes before the interrupt lands — small devices are fast)
+#   5. an initialized-but-unfinished reencrypt carries the online-reencrypt
+#      flag and finishes with --resume-only  (built with --init-only, so it
+#      is deterministic — no race against a live reencrypt)
+#   5b. a hard-killed reencrypt demands `cryptsetup repair` before it will
+#      resume  (best-effort: the kill is inherently timing-dependent, so
+#      unreachable states are reported and skipped, never asserted against)
 #   6. btrfs resize max reclaims the container
 #
 # Run as root:  sudo bash tests/loopback-core-test.sh
@@ -28,7 +31,7 @@ done
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/luks-loopback-test.XXXXXX")
 MAP1="lbtest1-$$"
 MAP2="lbtest2-$$"
-LOOP1=""; LOOP2=""
+LOOP1=""; LOOP2=""; LOOP3=""
 PASS=0; FAIL=0
 pass() { echo "  PASS: $*"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $*"; FAIL=$((FAIL+1)); }
@@ -40,6 +43,7 @@ cleanup() {
     cryptsetup close "$MAP2" 2>/dev/null
     [ -n "$LOOP1" ] && losetup -d "$LOOP1" 2>/dev/null
     [ -n "$LOOP2" ] && losetup -d "$LOOP2" 2>/dev/null
+    [ -n "$LOOP3" ] && losetup -d "$LOOP3" 2>/dev/null
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -53,6 +57,26 @@ fs_gap() { # $1 = device; prints (device bytes - btrfs total_bytes)
     dev_b=$(blockdev --getsize64 "$1")
     fs_b=$(btrfs inspect-internal dump-super "$1" | awk '/^total_bytes/{print $2; exit}')
     echo $(( dev_b - fs_b ))
+}
+
+has_reenc_flag() { # $1 = device; true when the LUKS2 header still requires reencryption
+    cryptsetup luksDump "$1" 2>/dev/null | grep -q 'online-reencrypt'
+}
+
+mk_shrunk_btrfs() { # $1 = device; fresh btrfs with 32M of slack at the end
+    mkfs.btrfs -q -f "$1"
+    mount "$1" "$WORK/mnt"
+    btrfs -q filesystem resize -32M "$WORK/mnt"
+    umount "$WORK/mnt"
+}
+
+assert_unlocks() { # $1 = device, $2 = mapper name, $3 = label
+    if cryptsetup open --key-file "$WORK/pass" "$1" "$2"; then
+        pass "$3 unlocks"
+        cryptsetup close "$2" 2>/dev/null || true
+    else
+        fail "$3 cannot unlock"
+    fi
 }
 
 echo "== setup: 1200M image, btrfs with root/home subvols + a sentinel file =="
@@ -119,23 +143,49 @@ cryptsetup open --key-file "$WORK/rk" "$LOOP1" "$MAP1" \
     || fail "recovery key cannot unlock"
 cryptsetup close "$MAP1"
 
-echo "== 5. interrupted reencrypt carries the resume flag and finishes =="
+echo "== 5. an unfinished reencrypt carries the resume flag and finishes =="
 truncate -s 1200M "$WORK/disk2.img"
 LOOP2=$(losetup --show -f "$WORK/disk2.img")
-mkfs.btrfs -q -f "$LOOP2"
-mount "$LOOP2" "$WORK/mnt"; btrfs -q filesystem resize -32M "$WORK/mnt"; umount "$WORK/mnt"
+mk_shrunk_btrfs "$LOOP2"
 ENCRYPT_ARGS=(--encrypt --type luks2 "${KDF[@]}"
               --reduce-device-size 32M --resilience checksum
               --key-file "$WORK/pass" --batch-mode -q)
-cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" "$LOOP2" &
+
+# --init-only writes the header and the online-reencrypt requirement without
+# moving a byte of data: exactly the on-disk state an interrupted run leaves,
+# reached deterministically.  The previous version raced a kill -9 against a
+# live reencrypt and then *guessed* what state it had produced — on CI it
+# guessed wrong (isLuks said LUKS, `open` said otherwise) and asserted against
+# a device it had never successfully built.
+cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" --init-only "$LOOP2"
+if has_reenc_flag "$LOOP2"; then
+    pass "--init-only left the online-reencrypt requirement flag"
+else
+    fail "--init-only left no online-reencrypt requirement flag"
+fi
+cryptsetup reencrypt --resume-only --key-file "$WORK/pass" --batch-mode -q "$LOOP2"
+if has_reenc_flag "$LOOP2"; then
+    fail "flag still present after --resume-only"
+else
+    pass "--resume-only finished the encryption"
+fi
+assert_unlocks "$LOOP2" "$MAP2" "resumed volume"
+
+echo "== 5b. a hard-killed reencrypt demands repair before it resumes =="
+truncate -s 1200M "$WORK/disk3.img"
+LOOP3=$(losetup --show -f "$WORK/disk3.img")
+mk_shrunk_btrfs "$LOOP3"
+# The repair path is only reachable by killing the *initial* --encrypt run:
+# a kill during --resume-only leaves the checksum journal clean and resumes
+# without complaint. So this stage keeps the kill, and with it the timing
+# dependence — but every state it can land in is now classified by a full
+# header parse (luksDump), never by isLuks, and a state we did not manage to
+# build is reported instead of asserted against. Test 5 above already covers
+# the resume mechanics deterministically, so a skip here costs no coverage.
+cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" "$LOOP3" &
 RPID=$!
-# Kill once the header — and with it the online-reencrypt requirement — is on
-# disk.  A blind `sleep` is a coin flip on CI: too early and cryptsetup has not
-# written a header at all, too late and the whole 1200M is already encrypted.
-# Both cases leave nothing to resume, and the too-early one used to reach the
-# unlock check below against a device that was never a LUKS device.
 for _ in $(seq 1 200); do
-    if cryptsetup luksDump "$LOOP2" 2>/dev/null | grep -q 'online-reencrypt'; then
+    if has_reenc_flag "$LOOP3"; then
         sleep 0.2          # let some data actually move before pulling the plug
         break
     fi
@@ -145,32 +195,35 @@ done
 if kill -9 "$RPID" 2>/dev/null; then wait "$RPID" 2>/dev/null || true; fi
 sync
 
-if cryptsetup luksDump "$LOOP2" 2>/dev/null | grep -q 'online-reencrypt'; then
+if ! cryptsetup luksDump "$LOOP3" >/dev/null 2>&1; then
+    # The kill caught cryptsetup before or during the header write. Nothing to
+    # assert — but print the evidence, so a failure here explains itself.
+    echo "  SKIP: kill left no readable header — repair path not exercised"
+    echo "        luksDump: $(cryptsetup luksDump "$LOOP3" 2>&1 | head -1)"
+    echo "        isLuks:   $(cryptsetup isLuks "$LOOP3" 2>/dev/null && echo yes || echo no)"
+elif has_reenc_flag "$LOOP3"; then
     pass "interrupt left the online-reencrypt requirement flag"
     # A hard kill leaves the reencryption journal dirty: --resume-only refuses
     # with "Device requires reencryption recovery. Run repair first."
     # This mirrors luks-deploy.sh's resume path: repair, then resume.
-    if ! cryptsetup reencrypt --resume-only --key-file "$WORK/pass" --batch-mode -q "$LOOP2" 2>/dev/null; then
-        pass "--resume-only correctly demanded repair after a hard kill"
-        cryptsetup repair --key-file "$WORK/pass" --batch-mode -q "$LOOP2"
-        pass "cryptsetup repair cleaned the reencryption journal"
-        cryptsetup reencrypt --resume-only --key-file "$WORK/pass" --batch-mode -q "$LOOP2"
-    fi
-    if cryptsetup luksDump "$LOOP2" | grep -q 'online-reencrypt'; then
-        fail "flag still present after --resume-only"
+    if cryptsetup reencrypt --resume-only --key-file "$WORK/pass" --batch-mode -q "$LOOP3" 2>/dev/null; then
+        echo "  NOTE: --resume-only succeeded without repair (journal was clean)"
     else
-        pass "--resume-only finished the encryption"
+        pass "--resume-only correctly demanded repair after a hard kill"
+        cryptsetup repair --key-file "$WORK/pass" --batch-mode -q "$LOOP3"
+        pass "cryptsetup repair cleaned the reencryption journal"
+        cryptsetup reencrypt --resume-only --key-file "$WORK/pass" --batch-mode -q "$LOOP3"
     fi
-elif cryptsetup isLuks "$LOOP2" 2>/dev/null; then
-    echo "  SKIP: reencrypt finished before the interrupt landed (fast disk) — resume path not exercised"
+    if has_reenc_flag "$LOOP3"; then
+        fail "flag still present after repair + --resume-only"
+    else
+        pass "repair + --resume-only finished the encryption"
+    fi
+    assert_unlocks "$LOOP3" "$MAP2" "repaired volume"
 else
-    echo "  SKIP: interrupt landed before the LUKS header was written — resume path not exercised"
-    cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" "$LOOP2"
-    pass "reencrypt completed on the retry"
+    echo "  SKIP: reencrypt finished before the kill landed — repair path not exercised"
+    assert_unlocks "$LOOP3" "$MAP2" "completed volume"
 fi
-cryptsetup open --key-file "$WORK/pass" "$LOOP2" "$MAP2" \
-    && pass "volume unlocks" || fail "volume cannot unlock"
-cryptsetup close "$MAP2" 2>/dev/null || true
 
 echo ""
 echo "==================================================="
