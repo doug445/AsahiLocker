@@ -242,7 +242,7 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
   attacker with repeated physical access could tamper with the initramfs.
 - **The passphrase prompt can hide behind boot text.** If the machine looks hung
   right after GRUB, it is probably waiting — type the passphrase and press Enter.
-  Splash screen is disabled during 1st boot, so prompt should be visible.
+  Splash screen is disabled during 1st post-conversion boot, so prompt should be visible.
 
 ---
 
