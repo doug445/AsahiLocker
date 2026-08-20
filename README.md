@@ -9,7 +9,7 @@ container holding that same filesystem. Your files, subvolumes, snapshots and
 btrfs UUID all survive; the partition simply gains an encryption layer. It then
 rewrites every piece of boot configuration that has to change (`crypttab`,
 `fstab`, `/etc/kernel/cmdline`, GRUB defaults, **all** BLS entries, dracut
-config, **all** initramfs images) and refuses to let you reboot until a 10-point
+config, **all** initramfs images) and refuses to let you reboot until a 12-point
 verification gate passes.
 
 Works on every M-series Mac that Asahi supports — M1 / M1 Pro / M1 Max /
@@ -53,12 +53,13 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 | Path | What it is |
 |------|------------|
-| `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 10 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
+| `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 12 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
 | `bin/post-encryption-setup.sh` | Run once on the newly-encrypted system. Saves a recovery bundle, creates snapper subvolumes on the encrypted volume, enables the boot guards, verifies the result. Idempotent. |
 | `bin/save-luks-recovery-bundle.sh` | Assembles a labeled recovery bundle (LUKS header + `crypttab`/`fstab`/`cmdline`/BLS entries + a plain-English recovery README) so you are not dependent on a second USB. |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
+| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. Runs in CI on every push (x86_64 + aarch64); safe to run locally with sudo. |
 | `docs/` | [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [RECOVERY](docs/RECOVERY.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) |
 
 ---
@@ -168,6 +169,33 @@ sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
      LUKS_TARGET_EFI=/dev/nvme0n1p4 ./bin/luks-deploy.sh
 ```
 
+Fully hands-off (fleet imaging, automated testing): `LUKS_PASSPHRASE_FILE=<path>`
+reads the passphrase from a file — its exact bytes, no trailing newline — and is
+used for encrypt, resume, unlock, and as the existing key when enrolling the
+recovery key. `LUKS_MAPPER_NAME=<name>` changes the device-mapper name (default
+`fedora_crypt`; the companion scripts auto-detect a custom name from the booted
+system).
+
+### Dry run
+
+```bash
+sudo ./bin/luks-deploy.sh --dry-run     # or LUKS_DRY_RUN=1
+```
+
+Runs the entire read-only half — detection, selection menus, fstab
+cross-checks, the KDF benchmark, the state backup to the deployment drive —
+prints exactly what a real run would do (including the full
+`cryptsetup reencrypt` invocation), and exits before the point of no return.
+Nothing on the target is modified.
+
+### Boot splash
+
+The deploy strips `rhgb quiet` from the boot args, because with the splash
+active the first LUKS passphrase prompt hides behind it and the boot looks
+hung. `post-encryption-setup.sh` restores both tokens after the first
+encrypted boot (via a marker in `/var/lib/asahi-luks2-encrypter/`). Opt out
+with `LUKS_KEEP_SPLASH=1`.
+
 ### Recovery key
 
 During deployment the script offers to enroll a **recovery key**: 64 random hex
@@ -243,7 +271,7 @@ the boot guards and U-Boot documentation are Asahi-specific.
 | [LIVE-USB.md](docs/LIVE-USB.md) | Building a Fedora Asahi live USB, and the three ways to boot it |
 | [RECOVERY.md](docs/RECOVERY.md) | Interrupted encryption, unbootable system, corrupt header, undoing a shrink |
 | [UBOOT-BOOTFLOW.md](docs/UBOOT-BOOTFLOW.md) | Getting to the U-Boot prompt and booting the live USB |
-| [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 10-point gate, self-repair, why `/boot` stays plain |
+| [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 12-point gate, self-repair, why `/boot` stays plain |
 | [FLEET.md](docs/FLEET.md) | Deploying across several M-series boxes, and the UUID-uniqueness footgun |
 
 ## License

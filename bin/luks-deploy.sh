@@ -37,6 +37,44 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# Mapper name for the unlocked root. Overridable for fleets that need a
+# different device-mapper name; the companion scripts (recovery bundle,
+# post-encryption setup) auto-detect it from the booted system's root source.
+LUKS_NAME="${LUKS_MAPPER_NAME:-fedora_crypt}"
+case "$LUKS_NAME" in
+    *[!A-Za-z0-9_-]*|'') echo "LUKS_MAPPER_NAME must match [A-Za-z0-9_-]+" >&2; exit 1;;
+esac
+
+# ─── CLI flags ───────────────────────────────────────────────────────────────
+# --dry-run (or LUKS_DRY_RUN=1): run every read-only phase — detection, menus,
+# fstab cross-checks, KDF benchmark, state backup to the deployment drive —
+# print the full plan, and exit BEFORE the point of no return. Nothing on the
+# TARGET is modified (config-only dry-run still asks for the passphrase to
+# unlock the container read-only for discovery).
+DRY_RUN="${LUKS_DRY_RUN:-0}"
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        *) echo "Unknown argument: $arg (only --dry-run is accepted; everything else is via LUKS_* env vars — see the header of this script)" >&2; exit 1 ;;
+    esac
+done
+
+# ─── Non-interactive passphrase (fleet / automated testing) ──────────────────
+# LUKS_PASSPHRASE_FILE=<path>: read the passphrase from a file instead of the
+# terminal (used for reencrypt/resume/open and as the existing key when
+# enrolling the recovery key). The file's exact bytes are the passphrase — no
+# trailing newline. The file is NOT deleted; the caller owns its lifecycle.
+CRYPT_PASS_ARGS=()      # for interactive prompts these stay empty
+CRYPT_BATCH_ARGS=()
+if [ -n "${LUKS_PASSPHRASE_FILE:-}" ]; then
+    [ -r "$LUKS_PASSPHRASE_FILE" ] && [ -s "$LUKS_PASSPHRASE_FILE" ] \
+        || { echo "LUKS_PASSPHRASE_FILE=$LUKS_PASSPHRASE_FILE is missing, unreadable, or empty" >&2; exit 1; }
+    CRYPT_PASS_ARGS=(--key-file "$LUKS_PASSPHRASE_FILE")
+    # --batch-mode also skips cryptsetup's own are-you-sure prompt; this
+    # script's typed ENCRYPT gate remains the consent step.
+    CRYPT_BATCH_ARGS=(--batch-mode)
+fi
+
 # Log to the directory this script lives in (the USB/deployment drive),
 # not /tmp (which is tmpfs on live USB and gets wiped on reboot)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,6 +117,18 @@ fatal() { err "$@"; exit 1; }
 #
 # Recovery key (2nd keyslot): prompted interactively; pin with
 #   LUKS_RECOVERY_KEY=yes|no ./luks-deploy.sh
+#
+# More environment knobs:
+#   LUKS_PASSPHRASE_FILE=<path>  read the passphrase from a file (fleet/testing);
+#                                the file's exact bytes are the passphrase
+#   LUKS_MAPPER_NAME=<name>      device-mapper name (default: fedora_crypt)
+#   LUKS_KEEP_SPLASH=1           do NOT strip 'rhgb quiet' from the boot args
+#                                (default: strip, so the passphrase prompt is
+#                                visible; post-encryption-setup.sh restores them)
+#   LUKS_SKIP_VERSION_CHECK=1    bypass the cryptsetup >= 2.4 floor
+#   LUKS_DRY_RUN=1 (or --dry-run flag)  preview: full detection + plan, no
+#                                       changes to the target, exit before
+#                                       the point of no return
 
 KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=10
 KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=8
@@ -172,7 +222,7 @@ cleanup() {
     umount /mnt/boot 2>/dev/null || true
     umount /mnt/home 2>/dev/null || true
     umount /mnt 2>/dev/null || true
-    cryptsetup close fedora_crypt 2>/dev/null || true
+    cryptsetup close ${LUKS_NAME} 2>/dev/null || true
     rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
     if [ $exit_code -ne 0 ]; then
         echo ""
@@ -203,20 +253,20 @@ trap cleanup EXIT
 
 # ─── Partial Previous Run Detection ─────────────────────────────────────────
 # If a previous run was interrupted, detect and warn
-if [ -b /dev/mapper/fedora_crypt ] 2>/dev/null; then
-    warn "Found /dev/mapper/fedora_crypt already open from a previous run!"
+if [ -b /dev/mapper/${LUKS_NAME} ] 2>/dev/null; then
+    warn "Found /dev/mapper/${LUKS_NAME} already open from a previous run!"
     echo "  keep  = leave it open and reuse it (saves a passphrase prompt in config-only mode)"
     echo "  close = close it and start fresh"
     read -p "Keep or close? (keep/close): " STALE_CHOICE
     umount -R /mnt 2>/dev/null || true
     case "$STALE_CHOICE" in
         keep)
-            log "  Keeping fedora_crypt open — it will be reused."
+            log "  Keeping ${LUKS_NAME} open — it will be reused."
             ;;
         close)
-            cryptsetup close fedora_crypt 2>/dev/null \
-                || fatal "Could not close fedora_crypt (still in use?). Close it manually and re-run."
-            log "  Closed stale fedora_crypt."
+            cryptsetup close ${LUKS_NAME} 2>/dev/null \
+                || fatal "Could not close ${LUKS_NAME} (still in use?). Close it manually and re-run."
+            log "  Closed stale ${LUKS_NAME}."
             ;;
         *)
             fatal "Answer 'keep' or 'close'. Nothing was changed."
@@ -256,6 +306,12 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 CRYPTSETUP_VER=$(cryptsetup --version | awk '{print $2}')
+# LUKS2 online/in-place reencryption needs cryptsetup >= 2.4.
+if [ "${LUKS_SKIP_VERSION_CHECK:-0}" != "1" ]; then
+    if [ "$(printf '%s\n2.4.0\n' "$CRYPTSETUP_VER" | sort -V | head -1)" != "2.4.0" ]; then
+        fatal "cryptsetup $CRYPTSETUP_VER is too old — LUKS2 in-place reencryption needs >= 2.4 (LUKS_SKIP_VERSION_CHECK=1 to override)."
+    fi
+fi
 log "Tools OK. cryptsetup=$CRYPTSETUP_VER initramfs=$INITRAMFS_TOOL grub=$GRUB_MKCONFIG arch=$(uname -m)"
 
 # ─── Kernel Module Preload ───────────────────────────────────────────────────
@@ -454,25 +510,25 @@ else
 fi
 
 # ─── Stale Mapper Cross-Check ────────────────────────────────────────────────
-# If fedora_crypt is open (e.g. kept from a previous run), it MUST be backed by
+# If ${LUKS_NAME} is open (e.g. kept from a previous run), it MUST be backed by
 # the ROOT partition just selected. Otherwise every later step that reuses the
 # mapper (discovery, config, verification) would run against a DIFFERENT device
 # than the one LUKS_UUID/crypttab point at — cross-wiring two systems.
-if [ -b /dev/mapper/fedora_crypt ]; then
-    MAPPER_BACKING=$(cryptsetup status fedora_crypt 2>/dev/null \
+if [ -b /dev/mapper/${LUKS_NAME} ]; then
+    MAPPER_BACKING=$(cryptsetup status ${LUKS_NAME} 2>/dev/null \
         | awk '$1 == "device:" {print $2; exit}')
     MAPPER_BACKING=$(readlink -f "$MAPPER_BACKING" 2>/dev/null || echo "${MAPPER_BACKING:-unknown}")
     TARGET_ROOT_REAL=$(readlink -f "$TARGET_ROOT")
     if [ "$MAPPER_BACKING" = "$TARGET_ROOT_REAL" ]; then
-        log "Open fedora_crypt is backed by $TARGET_ROOT_REAL — OK to reuse."
+        log "Open ${LUKS_NAME} is backed by $TARGET_ROOT_REAL — OK to reuse."
     else
-        err "/dev/mapper/fedora_crypt is open but backed by: $MAPPER_BACKING"
+        err "/dev/mapper/${LUKS_NAME} is open but backed by: $MAPPER_BACKING"
         err "You selected ROOT: $TARGET_ROOT_REAL"
         err "Reusing this mapper would configure the WRONG system — closing it."
-        if cryptsetup close fedora_crypt 2>/dev/null; then
-            log "  Closed mismatched fedora_crypt; the selected device will be opened when needed."
+        if cryptsetup close ${LUKS_NAME} 2>/dev/null; then
+            log "  Closed mismatched ${LUKS_NAME}; the selected device will be opened when needed."
         else
-            fatal "Could not close fedora_crypt (still in use?). Close it manually and re-run."
+            fatal "Could not close ${LUKS_NAME} (still in use?). Close it manually and re-run."
         fi
     fi
 fi
@@ -489,6 +545,10 @@ ensure_unmounted() {
     [ -n "$mps" ] || return 0
     warn "$dev is currently mounted at:"
     echo "$mps" | sed 's/^/    /'
+    if [ "$DRY_RUN" = "1" ]; then
+        warn "  [dry-run] a real run would require unmounting these first."
+        return 0
+    fi
     read -p "  Unmount it now? (yes/no): " UNMOUNT_OK
     [ "$UNMOUNT_OK" = "yes" ] || fatal "Cannot operate on a mounted device."
     while IFS= read -r mp; do
@@ -498,8 +558,8 @@ ensure_unmounted() {
     log "  Unmounted $dev."
 }
 ensure_unmounted "$TARGET_ROOT"
-if [ -b /dev/mapper/fedora_crypt ]; then
-    ensure_unmounted /dev/mapper/fedora_crypt
+if [ -b /dev/mapper/${LUKS_NAME} ]; then
+    ensure_unmounted /dev/mapper/${LUKS_NAME}
 fi
 
 # ─── Same-Disk Sanity Check ──────────────────────────────────────────────────
@@ -571,8 +631,18 @@ fi
 if [ "$DEPLOY_MODE" = "resume" ]; then
     echo ""
     log "Resuming interrupted LUKS encryption (you will be asked for the passphrase)..."
-    cryptsetup reencrypt --resume-only --verbose "$TARGET_ROOT" \
-        || fatal "Resume failed. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+    if ! cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT"; then
+        # A HARD interruption (power loss, kill -9) leaves the reencryption
+        # journal dirty and --resume-only refuses with "Device requires
+        # reencryption recovery. Run repair first." — verified in
+        # tests/loopback-core-test.sh. cryptsetup repair fixes the journal,
+        # then resume proceeds normally.
+        warn "  Resume refused — running 'cryptsetup repair' (dirty reencryption journal after a hard interrupt), then retrying..."
+        cryptsetup repair "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
+            || fatal "cryptsetup repair failed. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+        cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
+            || fatal "Resume still failing after repair. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+    fi
     log "  Reencryption finished."
     DEPLOY_MODE="config-only"
 fi
@@ -581,11 +651,11 @@ fi
 # (subvolumes, fstab, UUIDs) must read through the opened mapper device.
 DISCOVERY_DEV="$TARGET_ROOT"
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    if [ ! -b /dev/mapper/fedora_crypt ]; then
+    if [ ! -b /dev/mapper/${LUKS_NAME} ]; then
         log "Unlocking $TARGET_ROOT (passphrase required)..."
-        cryptsetup open "$TARGET_ROOT" fedora_crypt
+        cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" ${LUKS_NAME}
     fi
-    DISCOVERY_DEV="/dev/mapper/fedora_crypt"
+    DISCOVERY_DEV="/dev/mapper/${LUKS_NAME}"
 fi
 
 # ─── Btrfs Subvolume Auto-Discovery ─────────────────────────────────────────
@@ -631,7 +701,7 @@ fi
 # Capture UUIDs before encryption. In config-only mode the raw partition
 # holds the LUKS header, so the btrfs UUID must be read from the open mapper.
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    BTRFS_UUID=$(blkid -s UUID -o value /dev/mapper/fedora_crypt)
+    BTRFS_UUID=$(blkid -s UUID -o value /dev/mapper/${LUKS_NAME})
 else
     BTRFS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
 fi
@@ -732,8 +802,13 @@ rmdir /mnt_temp
 # ─── Optional Btrfs Integrity Check ─────────────────────────────────────────
 echo ""
 CHECK_DEV="$TARGET_ROOT"
-[ "$DEPLOY_MODE" = "config-only" ] && CHECK_DEV="/dev/mapper/fedora_crypt"
-read -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
+[ "$DEPLOY_MODE" = "config-only" ] && CHECK_DEV="/dev/mapper/${LUKS_NAME}"
+if [ "$DRY_RUN" = "1" ]; then
+    DO_CHECK="n"
+    log "[dry-run] Skipping the btrfs integrity check (a real run offers it here)."
+else
+    read -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
+fi
 if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
     log "  Running btrfs check --readonly (this may take a while)..."
     if btrfs check --readonly "$CHECK_DEV" 2>&1 | tail -3; then
@@ -829,6 +904,37 @@ fi
 echo "  Pre-encryption state saved to: $STATE_DIR/"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
+# ─── Dry-run: print the plan and stop here ──────────────────────────────────
+if [ "$DRY_RUN" = "1" ]; then
+    echo ""
+    log "[dry-run] Detection, cross-checks and state backup are done. A real run would now:"
+    if [ "$DEPLOY_MODE" = "encrypt" ]; then
+        echo "  1. mount $TARGET_ROOT and: btrfs filesystem resize -32M  (skipped if already shrunk)"
+        echo "  2. cryptsetup reencrypt --encrypt --type luks2 \\"
+        echo "         --cipher aes-xts-plain64 --key-size 512 \\"
+        echo "         --pbkdf argon2id --pbkdf-memory $LUKS_PBKDF_MEMORY \\"
+        echo "         --pbkdf-parallel $LUKS_PBKDF_PARALLEL --pbkdf-force-iterations $LUKS_PBKDF_ITER \\"
+        echo "         --hash sha512 --reduce-device-size 32M --resilience checksum $TARGET_ROOT"
+    else
+        echo "  1-2. (config-only: no shrink, no encryption)"
+    fi
+    echo "  3. open the container as /dev/mapper/${LUKS_NAME}; verify inner btrfs UUID"
+    echo "  4. btrfs resize max; mount subvol=$ROOT_SUBVOL (+$HOME_SUBVOL, boot=$TARGET_BOOT, efi=$TARGET_EFI) and bind-mount for chroot"
+    echo "  5. offer a recovery keyslot; back up the LUKS header to /boot + $STATE_DIR/"
+    echo "  6. edit on the target: /etc/crypttab, /etc/fstab, /etc/default/grub,"
+    echo "     /etc/kernel/cmdline, /etc/dracut.conf.d/99-luks.conf   (originals saved as *.pre-luks)"
+    if [ "${LUKS_KEEP_SPLASH:-0}" != "1" ]; then
+        echo "     and strip 'rhgb quiet' so the passphrase prompt is visible"
+        echo "     (post-encryption-setup.sh restores them; LUKS_KEEP_SPLASH=1 to skip)"
+    fi
+    echo "  7. in chroot: rebuild ALL initramfs images, update ALL BLS entries (grubby),"
+    echo "     regenerate /boot/grub2/grub.cfg (never the ESP stub), restorecon"
+    echo "  8. run the verification gate; refuse the reboot message on any error"
+    echo ""
+    log "[dry-run] No changes were made to the target. Backups/plan artifacts: $STATE_DIR/"
+    exit 0
+fi
+
 if [ "$DEPLOY_MODE" = "config-only" ]; then
     read -p "Type 'CONFIGURE' to redo the configuration phase: " CONFIRM
     [ "$CONFIRM" = "CONFIGURE" ] || fatal "Aborted."
@@ -847,6 +953,21 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
     log "[1/8] Skipped (config-only mode) — btrfs shrink not needed."
 else
     log "[1/8] Shrinking btrfs filesystem by 32M for LUKS2 header..."
+
+    # Idempotency: if a previous interrupted run already shrank the fs, don't
+    # shrink again (each retry would silently eat another 32M until resize max).
+    # dump-super reads the fs size straight off the unmounted device.
+    DEV_BYTES=$(blockdev --getsize64 "$TARGET_ROOT" 2>/dev/null || echo 0)
+    FS_BYTES=$(btrfs inspect-internal dump-super "$TARGET_ROOT" 2>/dev/null \
+        | awk '/^total_bytes/{print $2; exit}')
+    if [ -n "$FS_BYTES" ] && [ "$DEV_BYTES" -gt 0 ] \
+       && [ $(( DEV_BYTES - FS_BYTES )) -ge $(( 32 * 1024 * 1024 )) ]; then
+        log "  Btrfs is already >= 32M smaller than the partition (fs=$FS_BYTES, dev=$DEV_BYTES) — skipping shrink."
+        SKIP_SHRINK=1
+    else
+        SKIP_SHRINK=0
+    fi
+
     mkdir -p /mnt_temp
     mount "$TARGET_ROOT" /mnt_temp
 
@@ -857,8 +978,10 @@ else
         fatal "Cannot read btrfs filesystem. Partition may be damaged."
     fi
 
-    btrfs filesystem resize -32M /mnt_temp
-    sync
+    if [ "$SKIP_SHRINK" != "1" ]; then
+        btrfs filesystem resize -32M /mnt_temp
+        sync
+    fi
     # Verify the resize took effect
     NEW_SIZE=$(btrfs filesystem usage -b /mnt_temp 2>/dev/null | grep "Device size:" | awk '{print $3}' || echo "unknown")
     log "  Btrfs resized. Device size: $NEW_SIZE"
@@ -901,6 +1024,7 @@ else
         --reduce-device-size 32M \
         --resilience checksum \
         --verbose \
+        "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
         "$TARGET_ROOT"
 
     log "  Encryption complete."
@@ -922,19 +1046,19 @@ LUKS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
 log "  LUKS UUID: $LUKS_UUID"
 
 # Open the LUKS container (already open if we came in via config-only mode)
-if [ -b /dev/mapper/fedora_crypt ]; then
-    log "  Container already open: /dev/mapper/fedora_crypt"
+if [ -b /dev/mapper/${LUKS_NAME} ]; then
+    log "  Container already open: /dev/mapper/${LUKS_NAME}"
 else
-    cryptsetup open "$TARGET_ROOT" fedora_crypt
+    cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" ${LUKS_NAME}
 fi
 
 # Verify mapper device exists
-[ -b /dev/mapper/fedora_crypt ] || fatal "/dev/mapper/fedora_crypt does not exist after open!"
-log "  Mapper device: /dev/mapper/fedora_crypt OK"
+[ -b /dev/mapper/${LUKS_NAME} ] || fatal "/dev/mapper/${LUKS_NAME} does not exist after open!"
+log "  Mapper device: /dev/mapper/${LUKS_NAME} OK"
 
 # Verify the btrfs filesystem is intact inside LUKS
-INNER_FSTYPE=$(blkid -s TYPE -o value /dev/mapper/fedora_crypt 2>/dev/null || echo "")
-INNER_UUID=$(blkid -s UUID -o value /dev/mapper/fedora_crypt 2>/dev/null || echo "")
+INNER_FSTYPE=$(blkid -s TYPE -o value /dev/mapper/${LUKS_NAME} 2>/dev/null || echo "")
+INNER_UUID=$(blkid -s UUID -o value /dev/mapper/${LUKS_NAME} 2>/dev/null || echo "")
 log "  Inner filesystem: type=$INNER_FSTYPE UUID=$INNER_UUID"
 
 if [ "$INNER_FSTYPE" != "btrfs" ]; then
@@ -960,7 +1084,7 @@ log "[4/8] Resizing btrfs to fill LUKS container and mounting..."
 
 # Resize btrfs to reclaim any space
 mkdir -p /mnt_temp
-mount /dev/mapper/fedora_crypt /mnt_temp
+mount /dev/mapper/${LUKS_NAME} /mnt_temp
 btrfs filesystem resize max /mnt_temp 2>/dev/null || true
 umount /mnt_temp
 rmdir /mnt_temp
@@ -968,18 +1092,18 @@ log "  Btrfs resize max complete."
 
 # Mount with correct subvolumes for chroot
 log "  Mounting filesystems for chroot..."
-mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/fedora_crypt /mnt
+mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt
 
 # Verify we got the right subvolume
 if [ ! -f /mnt/etc/fstab ]; then
     err "  /mnt/etc/fstab not found after mounting subvol=$ROOT_SUBVOL!"
     err "  Trying subvolid=5 (top-level) as fallback..."
     umount /mnt
-    mount -o subvolid=5 /dev/mapper/fedora_crypt /mnt
+    mount -o subvolid=5 /dev/mapper/${LUKS_NAME} /mnt
     if [ -f "/mnt/${ROOT_SUBVOL}/etc/fstab" ]; then
         log "  Found fstab at /mnt/${ROOT_SUBVOL}/etc/fstab — remounting correctly..."
         umount /mnt
-        mount -o "subvol=${ROOT_SUBVOL}" /dev/mapper/fedora_crypt /mnt
+        mount -o "subvol=${ROOT_SUBVOL}" /dev/mapper/${LUKS_NAME} /mnt
     else
         fatal "Cannot find /etc/fstab in any mount configuration."
     fi
@@ -988,7 +1112,7 @@ fi
 # Mount home subvolume (if separate from root)
 if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     mkdir -p /mnt/home
-    mount -o "subvol=$HOME_SUBVOL" /dev/mapper/fedora_crypt /mnt/home
+    mount -o "subvol=$HOME_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt/home
 fi
 
 # Mount boot and EFI
@@ -1072,7 +1196,7 @@ case "$RK_CHOICE" in
             install -m 600 /dev/null "$RK_FILE"
             printf '%s' "$RECOVERY_KEY" > "$RK_FILE"
             log "  Enrolling recovery key (enter the volume passphrase when asked)..."
-            if cryptsetup luksAddKey "$TARGET_ROOT" "$RK_FILE" \
+            if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
                    --pbkdf argon2id \
                    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
                    --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
@@ -1086,7 +1210,7 @@ The key is the 64 hex characters in recovery-key.txt (exactly, no trailing
 newline). Two ways to use it if the passphrase is ever lost:
   - Type/paste it at the boot passphrase prompt, or
   - From a live USB:
-      cryptsetup open $TARGET_ROOT fedora_crypt --key-file recovery-key.txt
+      cryptsetup open $TARGET_ROOT ${LUKS_NAME} --key-file recovery-key.txt
 
 MOVE BOTH FILES TO SECURE OFFLINE STORAGE — anyone holding the key can
 unlock the disk.
@@ -1119,8 +1243,6 @@ log "  Header backup: $STATE_DIR/luks-header-backup.img (USB copy)"
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
 log "[6/8] Updating system configuration..."
-
-LUKS_NAME="fedora_crypt"
 
 # ─── 6a: crypttab ────────────────────────────────────────────────────────────
 if [ ! -f /mnt/etc/crypttab ]; then
@@ -1206,8 +1328,13 @@ mkdir -p /mnt/etc/dracut.conf.d
 cat > /mnt/etc/dracut.conf.d/99-luks.conf <<'DRACUT_CONF'
 # Added by luks-deploy.sh — ensure initramfs includes LUKS unlock support
 add_dracutmodules+=" crypt dm btrfs "
+# Belt-and-suspenders for the kernel-side crypto stack: the crypt dracut
+# module's dependency graph usually pulls these, but a missing dm-crypt.ko in
+# the initramfs = an unopenable root at boot, so force it explicitly.
+# (add_drivers only warns if a name is builtin/absent — safe everywhere.)
+add_drivers+=" dm-crypt "
 DRACUT_CONF
-log "    Created /etc/dracut.conf.d/99-luks.conf (crypt+dm+btrfs)"
+log "    Created /etc/dracut.conf.d/99-luks.conf (crypt+dm+btrfs modules, dm-crypt driver pinned)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 7: Rebuild Initramfs + Update BLS + Rebuild GRUB (in chroot)
@@ -1221,6 +1348,7 @@ LUKS_UUID="$LUKS_UUID"
 LUKS_NAME="$LUKS_NAME"
 BTRFS_UUID="$BTRFS_UUID"
 LUKS_BOOT_ARGS="$LUKS_BOOT_ARGS"
+LUKS_KEEP_SPLASH="${LUKS_KEEP_SPLASH:-0}"
 EOF
 
 CHROOT_RC=0
@@ -1427,6 +1555,92 @@ else
     fi
 fi
 
+# ── 7b½: Kernel-module presence checks (dm-crypt hard, keyboard soft) ─────
+# A missing dm-crypt.ko in an initramfs is an unopenable root at boot.
+# A missing keyboard driver is worse in a subtler way: every other check can
+# pass and the user still cannot TYPE the passphrase. The input check only
+# warns (many kernels build HID support in), but it warns loudly.
+echo ""
+echo "[CHROOT] Checking initramfs kernel modules..."
+if command -v lsinitrd &>/dev/null; then
+    for initrd in /boot/initramfs-*.img; do
+        [ -f "$initrd" ] || continue
+        basename "$initrd" | grep -qE '(fallback|rescue)' && continue
+        kver=$(basename "$initrd" | sed -n 's/initramfs-\(.*\)\.img/\1/p')
+        [ -n "$kver" ] || continue
+        ilist=$(lsinitrd "$initrd" 2>/dev/null || true)
+
+        # dm-crypt: module in the image, or built into the kernel — else repair.
+        if echo "$ilist" | grep -q 'dm-crypt.ko'; then
+            echo "[CHROOT]   OK: $(basename "$initrd") carries dm-crypt.ko"
+        elif modinfo -k "$kver" -F filename dm-crypt 2>/dev/null | grep -q 'builtin'; then
+            echo "[CHROOT]   OK: dm-crypt is built into kernel $kver"
+        else
+            echo "[CHROOT]   FAIL: $(basename "$initrd") lacks dm-crypt — rebuilding with --add-drivers..."
+            if dracut --force --add-drivers "dm-crypt" "$initrd" "$kver" 2>&1 \
+               && lsinitrd "$initrd" 2>/dev/null | grep -q 'dm-crypt.ko'; then
+                echo "[CHROOT]   Repair: SUCCESS — dm-crypt now included"
+                ilist=$(lsinitrd "$initrd" 2>/dev/null || true)
+            else
+                echo "[CHROOT]   CRITICAL: cannot get dm-crypt into $initrd — the root will NOT unlock at boot!"
+                ERRORS=$((ERRORS + 1))
+            fi
+        fi
+
+        # Keyboard/input: dockchannel-hid (Apple internal, M2+), hid-apple,
+        # usbhid/hid-generic (external), atkbd... At least one should be in the
+        # image or builtin, or the passphrase prompt is a brick wall.
+        if echo "$ilist" | grep -qE '(dockchannel|hid[-_]apple|apple[-_]hid|applespi|spi[-_]hid|usbhid|hid[-_]generic|atkbd)'; then
+            echo "[CHROOT]   OK: $(basename "$initrd") carries keyboard/input driver(s)"
+        elif modinfo -k "$kver" -F filename hid_generic 2>/dev/null | grep -q 'builtin' \
+             || modinfo -k "$kver" -F filename usbhid 2>/dev/null | grep -q 'builtin'; then
+            echo "[CHROOT]   OK: generic HID input is built into kernel $kver"
+        else
+            echo "[CHROOT]   ╔══════════════════════════════════════════════════════════╗"
+            echo "[CHROOT]   ║ WARN: no keyboard/input driver found in $(basename "$initrd")"
+            echo "[CHROOT]   ║ If the boot console cannot take keystrokes, you CANNOT"
+            echo "[CHROOT]   ║ type the LUKS passphrase — verify before rebooting, e.g.:"
+            echo "[CHROOT]   ║   lsinitrd $initrd | grep -iE 'hid|input'"
+            echo "[CHROOT]   ╚══════════════════════════════════════════════════════════╝"
+        fi
+    done
+else
+    echo "[CHROOT] WARN: lsinitrd unavailable — skipping module presence checks."
+fi
+
+# ── 7c½: Strip 'rhgb quiet' so the passphrase prompt is visible ────────────
+# With the splash active, the first-boot LUKS prompt hides behind boot
+# graphics/text and looks like a hang. Strip both tokens now; a marker file
+# tells post-encryption-setup.sh to restore them after the first encrypted
+# boot. Opt out with LUKS_KEEP_SPLASH=1.
+echo ""
+if [ "${LUKS_KEEP_SPLASH:-0}" = "1" ]; then
+    echo "[CHROOT] LUKS_KEEP_SPLASH=1 — leaving 'rhgb quiet' in place."
+else
+    echo "[CHROOT] Stripping 'rhgb quiet' from boot args (post-encryption-setup.sh restores them)..."
+    strip_splash_tokens() {
+        # $1 = file, $2 = sed address ('' = whole line applies)
+        # Boundary \2 (space, closing quote, or EOL) is preserved; the token and
+        # its leading space are dropped. Two passes: adjacent tokens
+        # ('rhgb quiet') need a second sweep because sed resumes after \2.
+        sed -i -E "$2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g; $2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g; $2 s/[[:space:]]+\$//" "$1"
+    }
+    if command -v grubby &>/dev/null; then
+        grubby --update-kernel=ALL --remove-args="rhgb quiet" 2>&1 \
+            || echo "[CHROOT] WARN: grubby --remove-args failed (BLS entries keep the splash)."
+    else
+        for entry in /boot/loader/entries/*.conf; do
+            [ -f "$entry" ] || continue
+            strip_splash_tokens "$entry" '/^options /'
+        done
+    fi
+    [ -f /etc/kernel/cmdline ]  && strip_splash_tokens /etc/kernel/cmdline ''
+    [ -f /etc/default/grub ]    && strip_splash_tokens /etc/default/grub '/^GRUB_CMDLINE_LINUX/'
+    mkdir -p /var/lib/asahi-luks2-encrypter
+    echo "rhgb quiet" > /var/lib/asahi-luks2-encrypter/restore-splash
+    echo "[CHROOT] Splash stripped; marker written for post-encryption-setup.sh."
+fi
+
 # ── 7d: Rebuild GRUB config ───────────────────────────────────────────────
 # NEVER regenerate onto /boot/efi/EFI/*/grub.cfg. On Fedora (Asahi included)
 # that file is a tiny STUB that searches for /boot by UUID and chainloads the
@@ -1489,6 +1703,11 @@ if command -v restorecon &>/dev/null && [ -f /etc/selinux/config ]; then
         /etc/dracut.conf.d/99-luks.conf \
         /boot/luks-header-backup.img 2>/dev/null || true
     restorecon -RF /boot/loader/entries 2>/dev/null || true
+    # The freshly rebuilt initramfs images (and anything else dracut/grubby
+    # wrote) were created from a chroot with no SELinux policy loaded — sweep
+    # all of /boot and the marker dir so nothing is left unlabeled.
+    restorecon -RF /boot 2>/dev/null || true
+    restorecon -RF /var/lib/asahi-luks2-encrypter 2>/dev/null || true
     # -n -v lists anything STILL mislabeled; empty output means all clean
     RELABEL_LEFT=$(restorecon -n -v /etc/crypttab /etc/fstab /etc/default/grub \
         /etc/kernel/cmdline /etc/dracut.conf.d/99-luks.conf 2>/dev/null || true)
@@ -1680,10 +1899,10 @@ else
 fi
 
 # ─── V10: LUKS device integrity ──────────────────────────────────────────────
-if [ -b /dev/mapper/fedora_crypt ]; then
-    log "  V10 OK: /dev/mapper/fedora_crypt is active"
+if [ -b /dev/mapper/${LUKS_NAME} ]; then
+    log "  V10 OK: /dev/mapper/${LUKS_NAME} is active"
 else
-    err "  V10 FAIL: /dev/mapper/fedora_crypt not found!"
+    err "  V10 FAIL: /dev/mapper/${LUKS_NAME} not found!"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -1694,7 +1913,7 @@ ERRORS=$((ERRORS + CHROOT_RC))
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 if [ "$ERRORS" -eq 0 ]; then
-    echo -e "║  ${GREEN}${BOLD}ALL 10 CHECKS PASSED — LUKS deployment verified.${NC}         ║"
+    echo -e "║  ${GREEN}${BOLD}ALL CHECKS PASSED (12-point gate) — deployment verified.${NC} ║"
 else
     echo -e "║  ${RED}${BOLD}$ERRORS ERROR(S) DETECTED — DO NOT REBOOT until fixed!${NC}      ║"
 fi
@@ -1740,8 +1959,8 @@ echo "║  If the system appears hung, just type your passphrase.   ║"
 echo "╠════════════════════════════════════════════════════════════╣"
 echo "║  If the system fails to boot:                             ║"
 echo "║  1. Boot from live USB                                    ║"
-echo "║  2. cryptsetup open $TARGET_ROOT fedora_crypt"
-echo "║  3. mount -o subvol=$ROOT_SUBVOL /dev/mapper/fedora_crypt /mnt"
+echo "║  2. cryptsetup open $TARGET_ROOT ${LUKS_NAME}"
+echo "║  3. mount -o subvol=$ROOT_SUBVOL /dev/mapper/${LUKS_NAME} /mnt"
 echo "║  4. Mount /boot, bind-mount /dev /proc /sys /run          ║"
 echo "║  5. chroot /mnt and fix configuration                     ║"
 echo "║  6. Header restore if needed:                             ║"
