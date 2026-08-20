@@ -149,6 +149,35 @@ hdr "3. Extra units from config"
 enable_units "extra units" "${EXTRA_UNITS[@]}"
 
 # ============================================================================
+hdr "3b. Restore boot splash (rhgb quiet) if luks-deploy stripped it"
+# ============================================================================
+# luks-deploy.sh strips 'rhgb quiet' so the first LUKS passphrase prompt is
+# visible instead of hiding behind the splash, and leaves this marker so the
+# tokens come back once the encrypted system is up. Idempotent.
+SPLASH_MARKER=/var/lib/asahi-luks2-encrypter/restore-splash
+GRUBBY=/usr/sbin/grubby; [ -x "$GRUBBY" ] || GRUBBY=/usr/bin/grubby
+if [ -f "$SPLASH_MARKER" ]; then
+    TOKENS=$(/usr/bin/cat "$SPLASH_MARKER" 2>/dev/null)
+    TOKENS=${TOKENS:-rhgb quiet}
+    if "$GRUBBY" --update-kernel=ALL --args="$TOKENS" >/dev/null 2>&1; then
+        ok "BLS entries: restored '$TOKENS' (grubby)"
+    else
+        err "grubby could not restore '$TOKENS' to the BLS entries"; FAILS=$((FAILS+1))
+    fi
+    if [ -f /etc/kernel/cmdline ] && ! "$GREP" -qw rhgb /etc/kernel/cmdline; then
+        "$SED" -i "1s/[[:space:]]*\$/ $TOKENS/" /etc/kernel/cmdline \
+            && ok "/etc/kernel/cmdline: appended '$TOKENS'"
+    fi
+    if [ -f /etc/default/grub ] && ! "$GREP" -qw rhgb /etc/default/grub; then
+        "$SED" -i -E "s/^(GRUB_CMDLINE_LINUX=\".*)\"[[:space:]]*\$/\1 $TOKENS\"/" /etc/default/grub \
+            && ok "/etc/default/grub: appended '$TOKENS' to GRUB_CMDLINE_LINUX"
+    fi
+    /usr/bin/rm -f "$SPLASH_MARKER" && ok "splash restored; marker removed"
+else
+    ok "no splash-restore marker — nothing to do"
+fi
+
+# ============================================================================
 hdr "4. Verification"
 # ============================================================================
 echo "  --- is root actually LUKS-encrypted? ---"

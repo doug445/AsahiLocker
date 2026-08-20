@@ -213,7 +213,7 @@ Encryption runs for **15–60 minutes** depending on partition size. Progress is
 printed continuously. Do not close the terminal, do not let the machine sleep,
 do not unplug.
 
-The script runs 8 steps, then a 10-point verification gate. **If any check fails
+The script runs 8 steps, then a 12-point verification gate. **If any check fails
 it tells you and refuses to declare success** — do not reboot until you have
 resolved it. See [RECOVERY.md](RECOVERY.md).
 

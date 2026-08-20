@@ -16,7 +16,7 @@ before it lets you reboot.
 | 5/8 | Backs up the LUKS header to `/boot/` **and** to the script's own directory |
 | 6/8 | Rewrites `crypttab`, `fstab`, `/etc/default/grub`, `/etc/kernel/cmdline`, dracut config |
 | 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg`, then `restorecon`s every file the deployment wrote (against the *target's* SELinux policy, inside the chroot) |
-| 8/8 | 10-point verification gate — blocks the "you may reboot" message until every check passes |
+| 8/8 | 12-point verification gate — blocks the "you may reboot" message until every check passes |
 
 ## Resume and re-entrancy
 
@@ -47,6 +47,7 @@ pinning it (fstab, snapshots, backup configs) keeps working.
 /etc/kernel/cmdline      + rd.luks.uuid=… rd.luks.name=…=fedora_crypt
 /boot/loader/entries/*   + rd.luks.uuid + rd.luks.name on EVERY entry's options line
 /etc/dracut.conf.d/99-luks.conf   (new) add_dracutmodules+=" crypt dm btrfs "
+                                        add_drivers+=" dm-crypt "
 /boot/initramfs-*.img      rebuilt for every installed kernel
 ```
 
@@ -79,7 +80,7 @@ forces the mapper name to match.
 
 ---
 
-## The 10-point verification gate
+## The 12-point verification gate
 
 The script will not tell you it succeeded until all of these pass:
 
@@ -87,17 +88,20 @@ The script will not tell you it succeeded until all of these pass:
 |-------|----------|
 | V1 | `crypttab` has `fedora_crypt` with the correct LUKS UUID |
 | V2 | `fstab` references `/dev/mapper/fedora_crypt`, with no stale btrfs UUID left |
-| V3 | `/etc/default/grub` has `GRUB_ENABLE_CRYPTODISK`, `rd.luks.uuid`, `rd.luks.name` |
+| V3 | `/etc/default/grub` has `rd.luks.uuid`, `rd.luks.name` (`GRUB_ENABLE_CRYPTODISK` is a warn — `/boot` is unencrypted, GRUB never opens the LUKS volume) |
 | V4 | `/etc/kernel/cmdline` has `rd.luks.uuid` and `rd.luks.name` |
 | V5 | **Every** BLS entry in `/boot/loader/entries/` contains `rd.luks.uuid` |
-| V6 | A GRUB config exists (BLS `blscfg` or inline LUKS parameters) |
+| V6 | A GRUB config exists (BLS `blscfg` or inline LUKS parameters), and the ESP `grub.cfg` is still the chainload **stub**, not a full generated config |
 | V7 | Non-rescue initramfs images exist and are larger than 5 MB |
 | V8 | A LUKS header backup exists on the target (and, if available, on the USB) |
 | V9 | `/etc/dracut.conf.d/99-luks.conf` is present with the `crypt` module |
 | V10 | `/dev/mapper/fedora_crypt` is active |
+| V11 | Every initramfs carries `dm-crypt` (module or builtin) — auto-repaired with `--add-drivers` if missing (in-chroot check) |
+| V12 | Every initramfs carries a keyboard/input driver (`dockchannel-hid`, `hid-apple`, `usbhid`, …) — **warn-only**, because without one you cannot *type* the passphrase at boot (in-chroot check) |
 
-V8's "USB copy" half is a **warning**, not a gate — the authoritative header
-backup always goes to `/boot`, so a second USB is never required.
+V8's "USB copy" half and V12 are **warnings**, not gates — the authoritative
+header backup always goes to `/boot`, so a second USB is never required, and
+many kernels build generic HID support in.
 
 ---
 
