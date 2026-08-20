@@ -53,7 +53,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 | Path | What it is |
 |------|------------|
-| `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, self-repairs failed initramfs/BLS steps, and gates the reboot behind 10 verification checks. |
+| `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 10 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
 | `bin/post-encryption-setup.sh` | Run once on the newly-encrypted system. Saves a recovery bundle, creates snapper subvolumes on the encrypted volume, enables the boot guards, verifies the result. Idempotent. |
 | `bin/save-luks-recovery-bundle.sh` | Assembles a labeled recovery bundle (LUKS header + `crypttab`/`fstab`/`cmdline`/BLS entries + a plain-English recovery README) so you are not dependent on a second USB. |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
@@ -181,9 +181,11 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
   actually restored from or browsed. In-place re-encryption rewrites every sector
   of the root partition.
 - **You cannot brick the Mac.** Apple Silicon DFU / System Recovery always works,
-  and macOS is on separate APFS partitions this tooling never touches. You *can*
-  lose the Linux install if encryption is interrupted at the wrong moment — which
-  is what the header backups and `--resume-only` recovery path are for.
+  and macOS is on separate APFS partitions this tooling never touches. An
+  interrupted encryption is not fatal either: LUKS2 re-encryption is journaled
+  with checksum resilience, and re-running the script detects the interrupted
+  state and resumes it automatically. The header backups cover the remaining
+  worst case of a damaged header.
 - **LUKS protects data at rest, not boot integrity.** Only m1n1 stage 1 is
   cryptographically verified on Asahi; `/boot` is unencrypted and unsigned. An
   attacker with repeated physical access could tamper with the initramfs.
