@@ -15,8 +15,22 @@ before it lets you reboot.
 | 4/8 | Resizes btrfs back to fill the container, mounts a chroot using the auto-detected subvolumes |
 | 5/8 | Backs up the LUKS header to `/boot/` **and** to the script's own directory |
 | 6/8 | Rewrites `crypttab`, `fstab`, `/etc/default/grub`, `/etc/kernel/cmdline`, dracut config |
-| 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg` |
+| 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg`, then `restorecon`s every file the deployment wrote (against the *target's* SELinux policy, inside the chroot) |
 | 8/8 | 10-point verification gate — blocks the "you may reboot" message until every check passes |
+
+## Resume and re-entrancy
+
+The script never has to be babysat through a failure — re-running it recovers
+both interruption classes automatically:
+
+| Where it died | How re-running recovers |
+|---|---|
+| **Mid-encryption** (power loss, killed terminal) | The LUKS2 header carries the `online-reencrypt` requirement flag. The script detects it, offers to finish with `cryptsetup reencrypt --resume-only`, then continues into the normal config phase. |
+| **During the config phase** (steps 5–8) | The header is complete but boot config is half-written. The script offers **configuration-only mode**: it unlocks the container, discovers subvolumes *through the mapper*, skips the shrink/encrypt steps, redoes every config step (all idempotent — fstab conversion, crypttab dedupe, grubby, dracut), and re-runs the full verification gate. Confirmation word is `CONFIGURE` instead of `ENCRYPT`. |
+| **Header unreadable** (`luksDump` fails on a `crypto_LUKS` partition) | Refuses with a pointer to `cryptsetup repair` — nothing destructive is attempted. |
+
+A stale open mapper from a previous run can be kept (`keep`) and is reused,
+saving a passphrase prompt in config-only mode.
 
 The btrfs UUID is deliberately **preserved** through encryption, so anything
 pinning it (fstab, snapshots, backup configs) keeps working.
@@ -113,7 +127,9 @@ working image intact rather than leaving you with zero bootable kernels.
 | Battery / AC check | Power loss mid-encryption (refuses below 50% without override) |
 | Stale mapper detection | Colliding with a half-finished previous run |
 | Same-disk sanity check | Root/boot/EFI selections silently spanning different disks |
-| Already-encrypted check | Double-encrypting an already-LUKS partition |
+| **fstab cross-validation** | Picking a boot/EFI partition that belongs to a *different* install on the same machine: the UUIDs of the selected BOOT and EFI partitions are checked against the `/boot` and `/boot/efi` entries in the target's own fstab, and a mismatch requires a typed `MISMATCH` override |
+| Already-encrypted check | Double-encrypting an already-LUKS partition (now offers resume / config-only instead of aborting) |
+| SELinux relabel | Files written from the live environment carrying the live system's labels (or none) into the target — `restorecon` runs in the chroot against the target's policy, and anything it cannot fix is reported with the `enforcing=0` escape hatch |
 | Subvolume auto-discovery | Modifying the wrong (stale or restored) root subvolume |
 | BLS consistency check | Boot entries and fstab disagreeing about which subvolume is root |
 | Optional `btrfs check` | Encrypting a filesystem that is already corrupt |

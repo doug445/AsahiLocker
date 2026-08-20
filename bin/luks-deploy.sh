@@ -19,6 +19,14 @@
 #   7. Rebuilds ALL initramfs images with crypt+dm+btrfs modules
 #   8. Self-verifies every component; auto-repairs failed initramfs
 #   9. Full verification gate: blocks reboot until ALL checks pass
+#
+# Re-entrant / resumable:
+#   - Interrupted mid-encryption? Re-run the script: it detects the LUKS2
+#     'online-reencrypt' requirement flag and finishes the encryption with
+#     `cryptsetup reencrypt --resume-only`, then redoes the config phase.
+#   - Died during the config phase? Re-run the script: it offers a
+#     configuration-only mode that unlocks the container and redoes every
+#     config + verification step (all idempotent) without touching the data.
 # ============================================================================
 set -euo pipefail
 
@@ -155,11 +163,11 @@ cleanup() {
         echo "  If btrfs was shrunk but encryption didn't start:"
         echo "    mount <ROOT_DEV> /mnt && btrfs filesystem resize max /mnt && umount /mnt"
         echo "  If encryption was interrupted:"
-        echo "    cryptsetup reencrypt --resume-only <ROOT_DEV>"
+        echo "    RE-RUN THIS SCRIPT — it detects the interrupted state and"
+        echo "    resumes automatically (cryptsetup reencrypt --resume-only)."
         echo "  If encryption completed but config is wrong:"
-        echo "    cryptsetup open <ROOT_DEV> fedora_crypt"
-        echo "    mount -o subvol=<SUBVOL> /dev/mapper/fedora_crypt /mnt"
-        echo "    # then manually fix /mnt/etc/fstab, /mnt/etc/crypttab, etc."
+        echo "    RE-RUN THIS SCRIPT — it offers a configuration-only mode that"
+        echo "    redoes crypttab/fstab/initramfs/BLS and re-runs verification."
         echo "  LUKS header restore (if backed up):"
         echo "    cryptsetup luksHeaderRestore <ROOT_DEV> --header-backup-file /boot/luks-header-backup.img"
         echo ""
@@ -176,14 +184,23 @@ trap cleanup EXIT
 # If a previous run was interrupted, detect and warn
 if [ -b /dev/mapper/fedora_crypt ] 2>/dev/null; then
     warn "Found /dev/mapper/fedora_crypt already open from a previous run!"
-    read -p "Close it and start fresh? (yes/no): " CLOSE_OLD
-    if [ "$CLOSE_OLD" = "yes" ]; then
-        umount -R /mnt 2>/dev/null || true
-        cryptsetup close fedora_crypt 2>/dev/null || true
-        log "  Closed stale fedora_crypt."
-    else
-        fatal "Cannot proceed with stale mapper device. Close it manually: cryptsetup close fedora_crypt"
-    fi
+    echo "  keep  = leave it open and reuse it (saves a passphrase prompt in config-only mode)"
+    echo "  close = close it and start fresh"
+    read -p "Keep or close? (keep/close): " STALE_CHOICE
+    umount -R /mnt 2>/dev/null || true
+    case "$STALE_CHOICE" in
+        keep)
+            log "  Keeping fedora_crypt open — it will be reused."
+            ;;
+        close)
+            cryptsetup close fedora_crypt 2>/dev/null \
+                || fatal "Could not close fedora_crypt (still in use?). Close it manually and re-run."
+            log "  Closed stale fedora_crypt."
+            ;;
+        *)
+            fatal "Answer 'keep' or 'close'. Nothing was changed."
+            ;;
+    esac
 fi
 
 # ─── Dependency Check ────────────────────────────────────────────────────────
@@ -291,7 +308,7 @@ pick_partition() {
     # Collect all partitions matching fstype (skip loop devices)
     while read -r name fs size disk; do
         [ -n "$name" ] || continue
-        [ "$fs" = "$fstype" ] || continue
+        [[ "$fs" =~ ^($fstype)$ ]] || continue
         echo "$name" | grep -q "^loop" && continue
 
         local dev="/dev/$name"
@@ -361,7 +378,7 @@ pick_partition() {
         # Direct device path
         if [ -b "$choice" ]; then
             local actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
-            if [ "$actual_fs" != "$fstype" ]; then
+            if ! [[ "$actual_fs" =~ ^($fstype)$ ]]; then
                 echo "  WARNING: $choice has '$actual_fs', expected '$fstype'." >&2
                 read -p "  Accept anyway? (yes/no): " accept
                 [ "$accept" != "yes" ] && continue
@@ -375,7 +392,9 @@ pick_partition() {
     done
 }
 
-TARGET_ROOT=$(pick_partition "ROOT" "btrfs" "fedora|root")
+# ROOT also accepts crypto_LUKS so an interrupted/half-configured previous
+# run can be re-selected and resumed (see mode detection below).
+TARGET_ROOT=$(pick_partition "ROOT" "btrfs|crypto_LUKS" "fedora|root")
 TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot")
 TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor")
 
@@ -392,15 +411,78 @@ if [ "$DISK_ROOT" != "$DISK_BOOT" ] || [ "$DISK_ROOT" != "$DISK_EFI" ]; then
     [ "$cross_disk" = "yes" ] || fatal "Aborted."
 fi
 
-# ─── Already Encrypted Check ─────────────────────────────────────────────────
+# ─── Already Encrypted / Resume Detection ────────────────────────────────────
+# A previous run can be interrupted in two distinct places, and both are
+# recoverable by re-running this script rather than aborting:
+#   1. MID-ENCRYPTION: the LUKS2 header exists and carries the
+#      'online-reencrypt' requirement flag. cryptsetup can finish the job
+#      with `reencrypt --resume-only`; afterwards the config phase runs
+#      exactly as in a fresh deployment.
+#   2. AFTER ENCRYPTION, DURING CONFIG: the header is complete but
+#      crypttab/fstab/initramfs/BLS work never finished. All config steps
+#      are idempotent, so they can simply be re-driven against the
+#      unlocked container ("config-only" mode).
+DEPLOY_MODE="encrypt"          # encrypt | resume | config-only
 if blkid "$TARGET_ROOT" | grep -q 'TYPE="crypto_LUKS"'; then
     echo ""
-    err "$TARGET_ROOT already contains LUKS."
-    echo "  If a previous encryption completed but config is broken:"
-    echo "    cryptsetup open $TARGET_ROOT fedora_crypt"
-    echo "    mount -o subvol=<subvol> /dev/mapper/fedora_crypt /mnt"
-    echo "    # then chroot and fix config manually"
-    fatal "Aborting — partition is already LUKS."
+    warn "$TARGET_ROOT already contains a LUKS header."
+    if ! cryptsetup luksDump "$TARGET_ROOT" >/dev/null 2>&1; then
+        err "blkid reports crypto_LUKS but 'cryptsetup luksDump' cannot read the header."
+        echo "  Try repairing it first, then re-run this script:"
+        echo "    cryptsetup repair $TARGET_ROOT"
+        fatal "LUKS header unreadable — see docs/RECOVERY.md."
+    fi
+    if cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null | grep -q 'online-reencrypt'; then
+        warn "The header carries the 'online-reencrypt' requirement flag:"
+        warn "a previous in-place encryption was INTERRUPTED partway through."
+        echo ""
+        echo "  The safe fix is to let cryptsetup finish the encryption"
+        echo "  (reencrypt --resume-only) and then redo the configuration"
+        echo "  phase. This script can do both now."
+        echo ""
+        read -p "  Resume the interrupted encryption now? (yes/no): " RESUME_OK
+        [ "$RESUME_OK" = "yes" ] \
+            || fatal "Aborted. Resume manually with: cryptsetup reencrypt --resume-only $TARGET_ROOT"
+        DEPLOY_MODE="resume"
+    else
+        warn "The header is complete — the encryption itself FINISHED."
+        echo ""
+        echo "  If a previous run died during the configuration phase (crypttab,"
+        echo "  fstab, initramfs, BLS entries), re-running just that phase fixes"
+        echo "  it: this script will unlock the container, redo every config"
+        echo "  step (all idempotent) and re-run the verification gate."
+        echo ""
+        echo "  If this partition is an encrypted system that already boots"
+        echo "  fine, answer no."
+        echo ""
+        read -p "  Re-run configuration + verification on $TARGET_ROOT? (yes/no): " CONFIG_OK
+        [ "$CONFIG_OK" = "yes" ] || fatal "Aborted — partition is already LUKS."
+        DEPLOY_MODE="config-only"
+    fi
+fi
+
+# Resume the interrupted encryption immediately — a half-encrypted disk is the
+# most fragile state there is, so finish it before anything else. Afterwards
+# the remaining work is identical to the config-only path.
+if [ "$DEPLOY_MODE" = "resume" ]; then
+    echo ""
+    log "Resuming interrupted LUKS encryption (you will be asked for the passphrase)..."
+    cryptsetup reencrypt --resume-only --verbose "$TARGET_ROOT" \
+        || fatal "Resume failed. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+    log "  Reencryption finished."
+    DEPLOY_MODE="config-only"
+fi
+
+# In config-only mode the raw partition is a LUKS container, so discovery
+# (subvolumes, fstab, UUIDs) must read through the opened mapper device.
+DISCOVERY_DEV="$TARGET_ROOT"
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    if [ ! -b /dev/mapper/fedora_crypt ]; then
+        log "Unlocking $TARGET_ROOT (passphrase required)..."
+        cryptsetup open "$TARGET_ROOT" fedora_crypt
+    fi
+    LUKS_OPENED=true
+    DISCOVERY_DEV="/dev/mapper/fedora_crypt"
 fi
 
 # ─── Btrfs Subvolume Auto-Discovery ─────────────────────────────────────────
@@ -410,7 +492,8 @@ log "Auto-discovering btrfs subvolumes and system configuration..."
 mkdir -p /mnt_temp
 
 # Mount top-level subvolume (ID 5) to see all subvolume directories
-mount -o subvolid=5,ro "$TARGET_ROOT" /mnt_temp
+# (through the opened mapper in config-only mode, raw partition otherwise)
+mount -o subvolid=5,ro "$DISCOVERY_DEV" /mnt_temp
 
 # Auto-detect which subvolume contains the system
 ROOT_SUBVOL=""
@@ -442,10 +525,52 @@ if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     [ -d "/mnt_temp/${HOME_SUBVOL}" ] || warn "Home subvolume '$HOME_SUBVOL' directory not found — may be nested."
 fi
 
-# Capture UUIDs before encryption
-BTRFS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
+# Capture UUIDs before encryption. In config-only mode the raw partition
+# holds the LUKS header, so the btrfs UUID must be read from the open mapper.
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    BTRFS_UUID=$(blkid -s UUID -o value /dev/mapper/fedora_crypt)
+else
+    BTRFS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
+fi
 BOOT_UUID=$(blkid -s UUID -o value "$TARGET_BOOT")
 EFI_UUID=$(blkid -s UUID -o value "$TARGET_EFI")
+
+# ─── fstab Cross-Validation ─────────────────────────────────────────────────
+# Verify the BOOT/EFI partitions picked in the menu are the SAME ones the
+# target's own fstab expects. On a disk with several installs side by side it
+# is easy to pick a boot partition that belongs to a *different* install —
+# and this script would then write kernels, BLS entries and GRUB config into
+# the wrong system, breaking both.
+TARGET_FSTAB="/mnt_temp/${ROOT_SUBVOL}/etc/fstab"
+fstab_uuid_for() {
+    # $1 = mountpoint; prints the UUID= value of its non-comment fstab line, if any
+    awk -v mp="$1" '$1 !~ /^#/ && $2 == mp { print $1; exit }' "$TARGET_FSTAB" 2>/dev/null \
+        | sed -n 's/^UUID=//p'
+}
+cross_check_part() {
+    # $1 = role, $2 = mountpoint, $3 = selected device, $4 = selected device's UUID
+    local want
+    want=$(fstab_uuid_for "$2" || true)   # unreadable fstab ⇒ empty ⇒ skip, not die
+    if [ -z "$want" ]; then
+        warn "  fstab cross-check: target fstab has no UUID= entry for $2 — skipping $1 check."
+        return 0
+    fi
+    if [ "$want" = "$4" ]; then
+        log "  fstab cross-check OK: $2 → $3 (UUID matches target fstab)"
+        return 0
+    fi
+    echo ""
+    err "  fstab cross-check MISMATCH for $1:"
+    err "    You selected      : $3 (UUID=$4)"
+    err "    Target fstab wants: UUID=$want for $2"
+    err "  The selected $1 partition likely belongs to a DIFFERENT install on"
+    err "  this machine. Writing boot config there would break BOTH systems."
+    read -p "  Use $3 anyway? (Type 'MISMATCH' to override): " XCHK
+    [ "$XCHK" = "MISMATCH" ] || fatal "Fix the partition selection and re-run."
+}
+log "Cross-checking selected BOOT/EFI partitions against the target's fstab..."
+cross_check_part "BOOT" "/boot"     "$TARGET_BOOT" "$BOOT_UUID"
+cross_check_part "EFI"  "/boot/efi" "$TARGET_EFI"  "$EFI_UUID"
 
 # ─── Pre-Encryption State Backup (to USB drive) ─────────────────────────────
 log "  Saving pre-encryption state to USB drive..."
@@ -491,7 +616,8 @@ fi
 # ─── Btrfs Free Space Check ─────────────────────────────────────────────────
 FS_AVAIL_MB=$(df --block-size=1M /mnt_temp | tail -1 | awk '{print $4}')
 log "  Free space: ${FS_AVAIL_MB} MiB"
-if [ "$FS_AVAIL_MB" -lt 64 ]; then
+# Only the 32M shrink needs headroom; config-only mode never resizes.
+if [ "$DEPLOY_MODE" = "encrypt" ] && [ "$FS_AVAIL_MB" -lt 64 ]; then
     umount /mnt_temp
     rmdir /mnt_temp
     fatal "Less than 64 MiB free. Need at least 64 MiB. Free up space first."
@@ -502,10 +628,12 @@ rmdir /mnt_temp
 
 # ─── Optional Btrfs Integrity Check ─────────────────────────────────────────
 echo ""
-read -p "Run btrfs integrity check before encryption? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
+CHECK_DEV="$TARGET_ROOT"
+[ "$DEPLOY_MODE" = "config-only" ] && CHECK_DEV="/dev/mapper/fedora_crypt"
+read -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
 if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
     log "  Running btrfs check --readonly (this may take a while)..."
-    if btrfs check --readonly "$TARGET_ROOT" 2>&1 | tail -3; then
+    if btrfs check --readonly "$CHECK_DEV" 2>&1 | tail -3; then
         log "  Btrfs check: PASSED"
     else
         err "  Btrfs check found errors!"
@@ -519,7 +647,10 @@ fi
 # ─── KDF Profile Selection ──────────────────────────────────────────────────
 # Done here, just before the point of no return, so the estimates reflect the
 # machine as it will actually be. Skipped when parameters are pinned by env.
-if [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    KDF_PROFILE_NAME="(existing header — unchanged)"
+    log "Config-only mode: the KDF is already fixed in the LUKS header; skipping profile menu."
+elif [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
     KDF_PROFILE_NAME="custom (pinned by environment)"
     log "KDF pinned via environment: mem=$((LUKS_PBKDF_MEMORY / 1024)) MiB iters=$LUKS_PBKDF_ITER parallel=$LUKS_PBKDF_PARALLEL"
 elif [ -n "${LUKS_PROFILE:-}" ]; then
@@ -577,16 +708,31 @@ echo "  Subvols : root=$ROOT_SUBVOL, home=$HOME_SUBVOL"
 echo "  Free    : ${FS_AVAIL_MB} MiB"
 echo "  Arch    : $(uname -m)"
 echo "  Crypto  : cryptsetup $CRYPTSETUP_VER"
-echo "  KDF     : argon2id $KDF_PROFILE_NAME — $((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations, ${LUKS_PBKDF_PARALLEL} threads"
+echo "  Mode    : $DEPLOY_MODE"
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    echo "  KDF     : (existing LUKS header — unchanged)"
+else
+    echo "  KDF     : argon2id $KDF_PROFILE_NAME — $((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations, ${LUKS_PBKDF_PARALLEL} threads"
+fi
 [ -n "$BLS_ROOT_SUBVOL" ] && echo "  BLS boot: subvol=$BLS_ROOT_SUBVOL"
 echo ""
-echo -e "  ${RED}${BOLD}WARNING: This will perform IRREVERSIBLE in-place encryption.${NC}"
-echo -e "  ${RED}Ensure AC power is connected. Ensure you have a backup.${NC}"
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    echo -e "  ${YELLOW}${BOLD}Configuration-only mode: no data will be (re-)encrypted.${NC}"
+    echo -e "  ${YELLOW}Boot configuration will be rewritten and re-verified.${NC}"
+else
+    echo -e "  ${RED}${BOLD}WARNING: This will perform IRREVERSIBLE in-place encryption.${NC}"
+    echo -e "  ${RED}Ensure AC power is connected. Ensure you have a backup.${NC}"
+fi
 echo "  Pre-encryption state saved to: $STATE_DIR/"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
-read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
-[ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    read -p "Type 'CONFIGURE' to redo the configuration phase: " CONFIRM
+    [ "$CONFIRM" = "CONFIGURE" ] || fatal "Aborted."
+else
+    read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
+    [ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
+fi
 
 log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
 
@@ -594,60 +740,68 @@ log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
 # STEP 1: Shrink Btrfs
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-log "[1/8] Shrinking btrfs filesystem by 32M for LUKS2 header..."
-mkdir -p /mnt_temp
-mount "$TARGET_ROOT" /mnt_temp
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    log "[1/8] Skipped (config-only mode) — btrfs shrink not needed."
+else
+    log "[1/8] Shrinking btrfs filesystem by 32M for LUKS2 header..."
+    mkdir -p /mnt_temp
+    mount "$TARGET_ROOT" /mnt_temp
 
-# Verify btrfs is healthy enough to resize
-if ! btrfs filesystem df /mnt_temp >/dev/null 2>&1; then
+    # Verify btrfs is healthy enough to resize
+    if ! btrfs filesystem df /mnt_temp >/dev/null 2>&1; then
+        umount /mnt_temp
+        rmdir /mnt_temp
+        fatal "Cannot read btrfs filesystem. Partition may be damaged."
+    fi
+
+    btrfs filesystem resize -32M /mnt_temp
+    sync
+    # Verify the resize took effect
+    NEW_SIZE=$(btrfs filesystem usage -b /mnt_temp 2>/dev/null | grep "Device size:" | awk '{print $3}' || echo "unknown")
+    log "  Btrfs resized. Device size: $NEW_SIZE"
     umount /mnt_temp
     rmdir /mnt_temp
-    fatal "Cannot read btrfs filesystem. Partition may be damaged."
+    log "  Btrfs shrink complete."
 fi
-
-btrfs filesystem resize -32M /mnt_temp
-sync
-# Verify the resize took effect
-NEW_SIZE=$(btrfs filesystem usage -b /mnt_temp 2>/dev/null | grep "Device size:" | awk '{print $3}' || echo "unknown")
-log "  Btrfs resized. Device size: $NEW_SIZE"
-umount /mnt_temp
-rmdir /mnt_temp
-log "  Btrfs shrink complete."
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 2: In-Place LUKS2 Encryption
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-log "[2/8] Encrypting partition with LUKS2..."
-log "  KDF pinned: argon2id  mem=$(( LUKS_PBKDF_MEMORY / 1024 )) MiB (${LUKS_PBKDF_MEMORY} KiB)  time-cost(iters)=${LUKS_PBKDF_ITER}  parallel=${LUKS_PBKDF_PARALLEL}"
-log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
-log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
-log "  You will be prompted to set a passphrase (type it twice)."
-log "  If interrupted, resume with: cryptsetup reencrypt --resume-only $TARGET_ROOT"
-echo ""
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    log "[2/8] Skipped (config-only mode) — partition is already encrypted."
+else
+    log "[2/8] Encrypting partition with LUKS2..."
+    log "  KDF pinned: argon2id  mem=$(( LUKS_PBKDF_MEMORY / 1024 )) MiB (${LUKS_PBKDF_MEMORY} KiB)  time-cost(iters)=${LUKS_PBKDF_ITER}  parallel=${LUKS_PBKDF_PARALLEL}"
+    log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
+    log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
+    log "  You will be prompted to set a passphrase (type it twice)."
+    log "  If interrupted, just re-run this script — it resumes automatically."
+    echo ""
 
-# LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
-# auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
-# --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
-# Unlock at boot re-runs this KDF inside the initramfs, so LUKS_PBKDF_MEMORY KiB
-# must be allocatable there. 4 GiB is the default and is comfortable on 16 GiB+
-# M-series boxes; see the note next to the defaults above for 8 GiB machines.
-cryptsetup reencrypt \
-    --encrypt \
-    --type luks2 \
-    --cipher aes-xts-plain64 \
-    --key-size 512 \
-    --pbkdf argon2id \
-    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
-    --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
-    --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
-    --hash sha512 \
-    --reduce-device-size 32M \
-    --resilience checksum \
-    --verbose \
-    "$TARGET_ROOT"
+    # LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
+    # auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
+    # --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
+    # Unlock at boot re-runs this KDF inside the initramfs, so LUKS_PBKDF_MEMORY KiB
+    # must be allocatable there — fine for every profile: the initramfs has the
+    # machine to itself, so even 4 GiB (aggressive) fits on an 8 GiB M1.
+    cryptsetup reencrypt \
+        --encrypt \
+        --type luks2 \
+        --cipher aes-xts-plain64 \
+        --key-size 512 \
+        --pbkdf argon2id \
+        --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
+        --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
+        --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
+        --hash sha512 \
+        --reduce-device-size 32M \
+        --resilience checksum \
+        --verbose \
+        "$TARGET_ROOT"
 
-log "  Encryption complete."
+    log "  Encryption complete."
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 3: Open & Verify LUKS Container
@@ -664,8 +818,12 @@ LUKS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
 [ -n "$LUKS_UUID" ] || fatal "Cannot read LUKS UUID — header may be corrupt! Check: cryptsetup luksDump $TARGET_ROOT"
 log "  LUKS UUID: $LUKS_UUID"
 
-# Open the LUKS container
-cryptsetup open "$TARGET_ROOT" fedora_crypt
+# Open the LUKS container (already open if we came in via config-only mode)
+if [ -b /dev/mapper/fedora_crypt ]; then
+    log "  Container already open: /dev/mapper/fedora_crypt"
+else
+    cryptsetup open "$TARGET_ROOT" fedora_crypt
+fi
 LUKS_OPENED=true
 
 # Verify mapper device exists
@@ -774,6 +932,9 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
 log "[5/8] Backing up LUKS header..."
+# luksHeaderBackup refuses to overwrite; drop any stale copy from a previous
+# run first (the current header is always the authoritative one to keep).
+rm -f /mnt/boot/luks-header-backup.img
 cryptsetup luksHeaderBackup "$TARGET_ROOT" \
     --header-backup-file /mnt/boot/luks-header-backup.img
 chmod 400 /mnt/boot/luks-header-backup.img
@@ -811,6 +972,8 @@ log "  fstab backed up to fstab.pre-luks"
 if grep -q "UUID=$BTRFS_UUID" /mnt/etc/fstab; then
     sed -i "s|UUID=$BTRFS_UUID|/dev/mapper/$LUKS_NAME|g" /mnt/etc/fstab
     log "  fstab: UUID=$BTRFS_UUID → /dev/mapper/$LUKS_NAME"
+elif grep -q "/dev/mapper/$LUKS_NAME" /mnt/etc/fstab; then
+    log "  fstab already references /dev/mapper/$LUKS_NAME (previous run) — keeping."
 else
     warn "  UUID=$BTRFS_UUID not found in fstab!"
     echo "  Current btrfs entries:"
@@ -1122,6 +1285,37 @@ if ! $GRUB_REBUILT; then
 fi
 $GRUB_REBUILT && echo "[CHROOT] GRUB config rebuilt." || echo "[CHROOT] WARN: Could not rebuild GRUB config."
 
+# ── 7e: SELinux — relabel every file this deployment wrote ─────────────────
+# Files created from the live environment get labeled by the LIVE system's
+# policy (or not labeled at all, if its SELinux is off). A mislabeled
+# /etc/crypttab or dracut conf can fail the first boot in enforcing mode.
+# restorecon runs here IN the chroot, against the target's own policy.
+echo ""
+if command -v restorecon &>/dev/null && [ -f /etc/selinux/config ]; then
+    echo "[CHROOT] Restoring SELinux contexts on files written by this deployment..."
+    restorecon -F \
+        /etc/crypttab /etc/fstab /etc/fstab.pre-luks \
+        /etc/default/grub /etc/default/grub.pre-luks \
+        /etc/kernel/cmdline /etc/kernel/cmdline.pre-luks \
+        /etc/dracut.conf.d/99-luks.conf \
+        /boot/luks-header-backup.img 2>/dev/null || true
+    restorecon -RF /boot/loader/entries 2>/dev/null || true
+    # -n -v lists anything STILL mislabeled; empty output means all clean
+    RELABEL_LEFT=$(restorecon -n -v /etc/crypttab /etc/fstab /etc/default/grub \
+        /etc/kernel/cmdline /etc/dracut.conf.d/99-luks.conf 2>/dev/null || true)
+    if [ -n "$RELABEL_LEFT" ]; then
+        echo "[CHROOT] WARN: some files could not be relabeled:"
+        echo "$RELABEL_LEFT"
+        echo "[CHROOT] If the first boot fails with SELinux denials, add 'enforcing=0'"
+        echo "[CHROOT] to the kernel command line for one boot, then run:"
+        echo "[CHROOT]     sudo restorecon -RFv /etc /boot && sudo setenforce 1"
+    else
+        echo "[CHROOT] SELinux contexts OK."
+    fi
+else
+    echo "[CHROOT] SELinux not present on target (no /etc/selinux/config or restorecon) — skipping relabel."
+fi
+
 echo ""
 echo "[CHROOT] ═══════════════════════════════════════════════"
 echo "[CHROOT] Chroot work complete. Errors: $ERRORS"
@@ -1326,6 +1520,7 @@ echo ""
 
 # Save log to target system's /boot (survives if USB is removed)
 cp "$DEPLOY_LOG" /mnt/boot/luks-deploy.log 2>/dev/null || true
+chroot /mnt /usr/sbin/restorecon -F /boot/luks-deploy.log 2>/dev/null || true
 log "Log also saved to target: /boot/luks-deploy.log"
 echo ""
 echo "Full log: $DEPLOY_LOG (on deployment drive)"
