@@ -1,0 +1,10 @@
+[Unit]
+Description=Cache LUKS keyslot params for fastfetch
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/luks-fetch-cache
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore ESP grub.cfg stub if altered
+Documentation=man:systemd.service(5)
+ConditionPathExists=/boot/efi/EFI/fedora/grub.cfg
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/restore-esp-grub-stub.sh

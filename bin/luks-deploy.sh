@@ -1,0 +1,1241 @@
+#!/bin/bash
+# ============================================================================
+# Fedora Asahi Btrfs LUKS2 Deployment Script (hardened)
+# ============================================================================
+# In-place LUKS2 encryption of a btrfs root partition.
+#
+# Targets: Fedora Asahi Remix on Apple Silicon (aarch64), btrfs root
+# Also works on: Fedora x86_64, Manjaro, Arch (btrfs)
+#
+# MUST be run from a live USB / rescue environment, NOT the installed system.
+#
+# What this script does:
+#   1. Auto-detects partitions, subvolumes, and boot configuration
+#   2. Validates btrfs integrity, power state, kernel modules
+#   3. Shrinks btrfs by 32MB for LUKS2 header space
+#   4. In-place encrypts the partition with LUKS2 + checksum resilience
+#   5. Verifies LUKS header, opens container, resizes btrfs to max
+#   6. Updates fstab, crypttab, /etc/kernel/cmdline, BLS entries, GRUB
+#   7. Rebuilds ALL initramfs images with crypt+dm+btrfs modules
+#   8. Self-verifies every component; auto-repairs failed initramfs
+#   9. Full verification gate: blocks reboot until ALL checks pass
+# ============================================================================
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Log to the directory this script lives in (the USB/deployment drive),
+# not /tmp (which is tmpfs on live USB and gets wiped on reboot)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_LOG="$SCRIPT_DIR/luks-deploy-$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$DEPLOY_LOG") 2>&1
+echo "Full log: $DEPLOY_LOG"
+
+log()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[LUKS]${NC} $*"; }
+warn() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC} $*"; }
+err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}[ERROR]${NC} $*" >&2; }
+fatal() { err "$@"; exit 1; }
+
+# Safe increment that doesn't trigger set -e (bash ((x++)) returns 1 when x==0)
+incr() { eval "$1=\$(( ${!1} + 1 ))"; }
+
+# ─── Tunable LUKS2 KDF parameters ────────────────────────────────────────────
+# Defaults are the fleet-pinned values; override by exporting before running.
+# The KDF is re-run in the INITRAMFS at every boot, so the memory cost must be
+# allocatable there — not just on the running system.
+#
+#   16 GiB+ M-series (M1 Pro/Max, M2/M3/M4 and up): keep the 4 GiB default.
+#   8 GiB M-series  (base M1/M2 Air, base M1 mini) : 4 GiB usually still works,
+#       but if unlock fails or is very slow in the initramfs, drop to 1 GiB:
+#           sudo LUKS_PBKDF_MEMORY=1048576 ./luks-deploy.sh
+#
+# Lowering memory cost lowers brute-force resistance; compensate with iterations
+# (e.g. 1 GiB + iterations 16) and a strong passphrase.
+LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-4194304}"   # KiB (4194304 = 4 GiB)
+LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-10}"            # time cost / iterations
+LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-4}"     # threads
+case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
+case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
+case "$LUKS_PBKDF_PARALLEL" in ''|*[!0-9]*) echo "LUKS_PBKDF_PARALLEL must be an integer" >&2; exit 1;; esac
+
+# ─── Cleanup Trap ────────────────────────────────────────────────────────────
+LUKS_OPENED=false
+MOUNTS_ACTIVE=false
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        err "════════════════════════════════════════════════════════════"
+        err "  Script exited with error (code $exit_code). Cleaning up..."
+        err "════════════════════════════════════════════════════════════"
+    fi
+    # Clean up any temp mounts first
+    umount /mnt_temp 2>/dev/null || true
+    rmdir /mnt_temp 2>/dev/null || true
+    # Clean up chroot bind mounts (specific order matters)
+    umount /mnt/sys/firmware/efi/efivars 2>/dev/null || true
+    for mp in /mnt/run /mnt/sys /mnt/proc /mnt/dev/pts /mnt/dev; do
+        umount "$mp" 2>/dev/null || true
+    done
+    umount /mnt/boot/efi 2>/dev/null || true
+    umount /mnt/boot 2>/dev/null || true
+    umount /mnt/home 2>/dev/null || true
+    umount /mnt 2>/dev/null || true
+    cryptsetup close fedora_crypt 2>/dev/null || true
+    rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        echo "Recovery options:"
+        echo "  If btrfs was shrunk but encryption didn't start:"
+        echo "    mount <ROOT_DEV> /mnt && btrfs filesystem resize max /mnt && umount /mnt"
+        echo "  If encryption was interrupted:"
+        echo "    cryptsetup reencrypt --resume-only <ROOT_DEV>"
+        echo "  If encryption completed but config is wrong:"
+        echo "    cryptsetup open <ROOT_DEV> fedora_crypt"
+        echo "    mount -o subvol=<SUBVOL> /dev/mapper/fedora_crypt /mnt"
+        echo "    # then manually fix /mnt/etc/fstab, /mnt/etc/crypttab, etc."
+        echo "  LUKS header restore (if backed up):"
+        echo "    cryptsetup luksHeaderRestore <ROOT_DEV> --header-backup-file /boot/luks-header-backup.img"
+        echo ""
+        echo "  Pre-encryption backups saved to: $SCRIPT_DIR/"
+        echo "  Full log: $DEPLOY_LOG"
+    fi
+}
+trap cleanup EXIT
+
+# ─── Root Check ──────────────────────────────────────────────────────────────
+[ "$EUID" -eq 0 ] || fatal "Must run as root: sudo $0"
+
+# ─── Partial Previous Run Detection ─────────────────────────────────────────
+# If a previous run was interrupted, detect and warn
+if [ -b /dev/mapper/fedora_crypt ] 2>/dev/null; then
+    warn "Found /dev/mapper/fedora_crypt already open from a previous run!"
+    read -p "Close it and start fresh? (yes/no): " CLOSE_OLD
+    if [ "$CLOSE_OLD" = "yes" ]; then
+        umount -R /mnt 2>/dev/null || true
+        cryptsetup close fedora_crypt 2>/dev/null || true
+        log "  Closed stale fedora_crypt."
+    else
+        fatal "Cannot proceed with stale mapper device. Close it manually: cryptsetup close fedora_crypt"
+    fi
+fi
+
+# ─── Dependency Check ────────────────────────────────────────────────────────
+log "Checking required tools..."
+MISSING=()
+for cmd in cryptsetup btrfs blkid lsblk mktemp findmnt; do
+    command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
+done
+
+# Detect initramfs tool (on live USB; verified again inside chroot)
+INITRAMFS_TOOL=""
+if command -v dracut &>/dev/null; then
+    INITRAMFS_TOOL="dracut"
+elif command -v mkinitcpio &>/dev/null; then
+    INITRAMFS_TOOL="mkinitcpio"
+elif command -v update-initramfs &>/dev/null; then
+    INITRAMFS_TOOL="update-initramfs"
+fi
+[ -n "$INITRAMFS_TOOL" ] || MISSING+=("dracut/mkinitcpio/update-initramfs")
+
+# Detect GRUB config tool
+GRUB_MKCONFIG=""
+if command -v grub2-mkconfig &>/dev/null; then
+    GRUB_MKCONFIG="grub2-mkconfig"
+elif command -v grub-mkconfig &>/dev/null; then
+    GRUB_MKCONFIG="grub-mkconfig"
+fi
+[ -n "$GRUB_MKCONFIG" ] || MISSING+=("grub2-mkconfig/grub-mkconfig")
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+    fatal "Missing required tools: ${MISSING[*]}"
+fi
+
+CRYPTSETUP_VER=$(cryptsetup --version | awk '{print $2}')
+log "Tools OK. cryptsetup=$CRYPTSETUP_VER initramfs=$INITRAMFS_TOOL grub=$GRUB_MKCONFIG arch=$(uname -m)"
+
+# ─── Kernel Module Preload ───────────────────────────────────────────────────
+log "Loading required kernel modules..."
+modprobe dm-crypt 2>/dev/null || true
+modprobe dm_mod 2>/dev/null || true
+if ! lsmod | grep -q dm_crypt; then
+    warn "Cannot load dm-crypt module. cryptsetup may still work via kernel built-in."
+fi
+
+# ─── Live Environment Check ──────────────────────────────────────────────────
+CURRENT_ROOT_FSTYPE=$(findmnt -n -o FSTYPE / 2>/dev/null || echo "unknown")
+log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($(findmnt -n -o SOURCE / 2>/dev/null || echo 'unknown'))"
+
+if [ "$CURRENT_ROOT_FSTYPE" = "btrfs" ]; then
+    echo ""
+    err "Your current root filesystem is Btrfs."
+    err "This script MUST be run from a LIVE USB / rescue environment."
+    err "Running on the installed system WILL destroy your data."
+    echo ""
+    read -p "Are you certain you are in a live/rescue environment? (Type 'LIVE' to override): " LIVE_OVERRIDE
+    [ "$LIVE_OVERRIDE" = "LIVE" ] || fatal "Aborted for safety."
+fi
+
+# ─── Power / Battery Check ──────────────────────────────────────────────────
+for ps_dir in /sys/class/power_supply/*/; do
+    [ -d "$ps_dir" ] || continue
+    ps_type=$(cat "$ps_dir/type" 2>/dev/null || echo "")
+    if [ "$ps_type" = "Battery" ]; then
+        bat_capacity=$(cat "$ps_dir/capacity" 2>/dev/null || echo "100")
+        bat_status=$(cat "$ps_dir/status" 2>/dev/null || echo "Unknown")
+        log "Battery: ${bat_capacity}%, Status: ${bat_status}"
+        if [ "$bat_capacity" -lt 50 ] && [ "$bat_status" != "Charging" ] && [ "$bat_status" != "Full" ]; then
+            echo ""
+            err "╔══════════════════════════════════════════════════════╗"
+            err "║  DANGER: Battery at ${bat_capacity}% and NOT charging!       ║"
+            err "║  If power dies mid-encryption, ALL DATA IS LOST.    ║"
+            err "║  Connect AC power before proceeding.                ║"
+            err "╚══════════════════════════════════════════════════════╝"
+            echo ""
+            read -p "Continue on battery? (Type 'BATTERY' to override): " BAT_OVERRIDE
+            [ "$BAT_OVERRIDE" = "BATTERY" ] || fatal "Connect AC power and try again."
+        fi
+        break
+    fi
+done
+
+# ─── Block Device Display ────────────────────────────────────────────────────
+echo ""
+log "=== Block Devices ==="
+lsblk -o NAME,FSTYPE,LABEL,PARTLABEL,SIZE,MOUNTPOINT | grep -v "loop"
+echo ""
+
+# ─── Smart Partition Detection & Selection ──────────────────────────────────
+# Prefers NVMe over USB/sd*, uses LABEL/PARTLABEL for scoring, excludes live
+# USB disk from defaults, and presents a numbered menu for each partition type.
+
+# Identify the live USB's disk so we can deprioritize its partitions
+LIVE_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
+LIVE_ROOT_DISK=$(lsblk -no PKNAME "$LIVE_ROOT_DEV" 2>/dev/null | head -1)
+log "Live environment disk: ${LIVE_ROOT_DISK:-(unknown)}"
+
+pick_partition() {
+    # Usage: pick_partition <ROLE> <FSTYPE> <LABEL_HINT_REGEX>
+    # Displays scored numbered list, returns selected device path on stdout.
+    # All display/prompts go to stderr so stdout is clean for capture.
+    local role="$1" fstype="$2" label_hint="$3"
+    local -a devs=() disp_labels=() sizes=() disks=() scores=()
+    local idx=0 best_idx=0 best_score=-999
+
+    # Collect all partitions matching fstype (skip loop devices)
+    while read -r name fs size disk; do
+        [ -n "$name" ] || continue
+        [ "$fs" = "$fstype" ] || continue
+        echo "$name" | grep -q "^loop" && continue
+
+        local dev="/dev/$name"
+        local label=$(blkid -s LABEL -o value "$dev" 2>/dev/null || echo "")
+        local partlabel=$(blkid -s PARTLABEL -o value "$dev" 2>/dev/null || echo "")
+        local disp="${label:-${partlabel:-(none)}}"
+
+        # Score this candidate
+        local score=0
+        # Strongly prefer NVMe over USB/SATA
+        [[ "$dev" == *nvme* ]] && score=$((score + 100))
+        # Bonus for label matching the expected role
+        if [ -n "$label_hint" ]; then
+            echo "$label $partlabel" | grep -Eqi "$label_hint" 2>/dev/null && score=$((score + 50))
+        fi
+        # Heavily penalize anything on the live USB disk
+        [ -n "$LIVE_ROOT_DISK" ] && [ "$disk" = "$LIVE_ROOT_DISK" ] && score=$((score - 200))
+
+        devs+=("$dev")
+        disp_labels+=("$disp")
+        sizes+=("$size")
+        disks+=("$disk")
+        scores+=("$score")
+
+        if [ "$score" -gt "$best_score" ]; then
+            best_score=$score
+            best_idx=$idx
+        fi
+        idx=$((idx + 1))
+    done < <(lsblk -o NAME,FSTYPE,SIZE,PKNAME -ln 2>/dev/null)
+
+    echo "" >&2
+    echo -e "  ${CYAN}Select ${role} partition (${fstype}):${NC}" >&2
+
+    # No candidates at all — ask for manual entry
+    if [ ${#devs[@]} -eq 0 ]; then
+        echo "  No $fstype partitions found!" >&2
+        while true; do
+            read -p "  Enter device path manually: " manual_dev
+            [ -b "$manual_dev" ] && { echo "  Selected: $manual_dev" >&2; echo "$manual_dev"; return; }
+            echo "  ERROR: $manual_dev is not a block device." >&2
+        done
+    fi
+
+    # Display numbered candidates with recommended marker
+    for ((i=0; i<${#devs[@]}; i++)); do
+        local marker=""
+        [ "$i" -eq "$best_idx" ] && marker=" ${GREEN}← recommended${NC}"
+        printf "    %d) %-18s  %-22s  %8s  (%s)" \
+            "$((i+1))" "${devs[$i]}" "${disp_labels[$i]}" "${sizes[$i]}" "${disks[$i]}" >&2
+        echo -e "$marker" >&2
+    done
+
+    # Selection loop
+    while true; do
+        read -p "  Select [1-${#devs[@]}] or device path [default: $((best_idx+1))]: " choice
+        choice="${choice:-$((best_idx+1))}"
+
+        # Numeric selection
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#devs[@]}" ]; then
+            local sel="${devs[$((choice-1))]}"
+            echo -e "  Selected: ${GREEN}${sel}${NC}" >&2
+            echo "$sel"
+            return
+        fi
+
+        # Direct device path
+        if [ -b "$choice" ]; then
+            local actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
+            if [ "$actual_fs" != "$fstype" ]; then
+                echo "  WARNING: $choice has '$actual_fs', expected '$fstype'." >&2
+                read -p "  Accept anyway? (yes/no): " accept
+                [ "$accept" != "yes" ] && continue
+            fi
+            echo -e "  Selected: ${GREEN}${choice}${NC}" >&2
+            echo "$choice"
+            return
+        fi
+
+        echo "  Invalid selection. Enter a number or device path." >&2
+    done
+}
+
+TARGET_ROOT=$(pick_partition "ROOT" "btrfs" "fedora|root")
+TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot")
+TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor")
+
+# ─── Same-Disk Sanity Check ──────────────────────────────────────────────────
+DISK_ROOT=$(lsblk -no PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
+DISK_BOOT=$(lsblk -no PKNAME "$TARGET_BOOT" 2>/dev/null | head -n1)
+DISK_EFI=$(lsblk -no PKNAME "$TARGET_EFI" 2>/dev/null | head -n1)
+if [ "$DISK_ROOT" != "$DISK_BOOT" ] || [ "$DISK_ROOT" != "$DISK_EFI" ]; then
+    warn "Selected partitions are on different disks!"
+    echo "  ROOT: $TARGET_ROOT → $DISK_ROOT"
+    echo "  BOOT: $TARGET_BOOT → $DISK_BOOT"
+    echo "  EFI : $TARGET_EFI → $DISK_EFI"
+    read -p "Proceed? (yes/no): " cross_disk
+    [ "$cross_disk" = "yes" ] || fatal "Aborted."
+fi
+
+# ─── Already Encrypted Check ─────────────────────────────────────────────────
+if blkid "$TARGET_ROOT" | grep -q 'TYPE="crypto_LUKS"'; then
+    echo ""
+    err "$TARGET_ROOT already contains LUKS."
+    echo "  If a previous encryption completed but config is broken:"
+    echo "    cryptsetup open $TARGET_ROOT fedora_crypt"
+    echo "    mount -o subvol=<subvol> /dev/mapper/fedora_crypt /mnt"
+    echo "    # then chroot and fix config manually"
+    fatal "Aborting — partition is already LUKS."
+fi
+
+# ─── Btrfs Subvolume Auto-Discovery ─────────────────────────────────────────
+echo ""
+log "Auto-discovering btrfs subvolumes and system configuration..."
+
+mkdir -p /mnt_temp
+
+# Mount top-level subvolume (ID 5) to see all subvolume directories
+mount -o subvolid=5,ro "$TARGET_ROOT" /mnt_temp
+
+# Auto-detect which subvolume contains the system
+ROOT_SUBVOL=""
+for try_sub in root @rootfs @; do
+    if [ -f "/mnt_temp/${try_sub}/etc/fstab" ]; then
+        ROOT_SUBVOL="$try_sub"
+        break
+    fi
+done
+
+if [ -z "$ROOT_SUBVOL" ]; then
+    err "Cannot auto-detect root subvolume. Available subvolumes:"
+    btrfs subvolume list /mnt_temp 2>/dev/null || true
+    umount /mnt_temp
+    rmdir /mnt_temp
+    fatal "Please check btrfs subvolume layout."
+fi
+
+# Parse home subvolume name from fstab
+HOME_SUBVOL=$(sed -n 's|^[^#]*[[:space:]]/home[[:space:]]\+btrfs[[:space:]]\+.*subvol=\([^,[:space:]]*\).*|\1|p' \
+    "/mnt_temp/${ROOT_SUBVOL}/etc/fstab" | head -1)
+[ -n "$HOME_SUBVOL" ] || HOME_SUBVOL="home"
+
+log "  Discovered subvolumes: root='$ROOT_SUBVOL', home='$HOME_SUBVOL'"
+
+# Verify the subvolumes actually exist
+[ -d "/mnt_temp/${ROOT_SUBVOL}" ] || fatal "Root subvolume '$ROOT_SUBVOL' directory not found!"
+if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
+    [ -d "/mnt_temp/${HOME_SUBVOL}" ] || warn "Home subvolume '$HOME_SUBVOL' directory not found — may be nested."
+fi
+
+# Capture UUIDs before encryption
+BTRFS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
+BOOT_UUID=$(blkid -s UUID -o value "$TARGET_BOOT")
+EFI_UUID=$(blkid -s UUID -o value "$TARGET_EFI")
+
+# ─── Pre-Encryption State Backup (to USB drive) ─────────────────────────────
+log "  Saving pre-encryption state to USB drive..."
+STATE_DIR="$SCRIPT_DIR/pre-luks-state-$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$STATE_DIR"
+cp "/mnt_temp/${ROOT_SUBVOL}/etc/fstab" "$STATE_DIR/fstab" 2>/dev/null || true
+cp "/mnt_temp/${ROOT_SUBVOL}/etc/default/grub" "$STATE_DIR/grub-defaults" 2>/dev/null || true
+cp "/mnt_temp/${ROOT_SUBVOL}/etc/kernel/cmdline" "$STATE_DIR/kernel-cmdline" 2>/dev/null || true
+[ -f "/mnt_temp/${ROOT_SUBVOL}/etc/crypttab" ] && \
+    cp "/mnt_temp/${ROOT_SUBVOL}/etc/crypttab" "$STATE_DIR/crypttab"
+lsblk -o NAME,FSTYPE,LABEL,PARTLABEL,SIZE,UUID > "$STATE_DIR/lsblk.txt" 2>/dev/null || true
+blkid > "$STATE_DIR/blkid.txt" 2>/dev/null || true
+btrfs subvolume list /mnt_temp > "$STATE_DIR/btrfs-subvols.txt" 2>/dev/null || true
+log "  Pre-encryption state saved to: $STATE_DIR/"
+
+# ─── Check BLS entries for consistency ───────────────────────────────────────
+BLS_ROOT_SUBVOL=""
+if mount -o ro "$TARGET_BOOT" /mnt_temp/"${ROOT_SUBVOL}"/boot 2>/dev/null; then
+    # Intentionally mount boot inside our temp tree to read BLS
+    for bls_entry in /mnt_temp/"${ROOT_SUBVOL}"/boot/loader/entries/*.conf; do
+        [ -f "$bls_entry" ] || continue
+        echo "$bls_entry" | grep -q 'rescue' && continue
+        bls_subvol=$(sed -n 's/.*rootflags=subvol=\([^[:space:]]*\).*/\1/p' "$bls_entry")
+        if [ -n "$bls_subvol" ]; then
+            BLS_ROOT_SUBVOL="$bls_subvol"
+            break
+        fi
+    done
+    cp /mnt_temp/"${ROOT_SUBVOL}"/boot/loader/entries/*.conf "$STATE_DIR/" 2>/dev/null || true
+    umount /mnt_temp/"${ROOT_SUBVOL}"/boot 2>/dev/null || true
+fi
+
+if [ -n "$BLS_ROOT_SUBVOL" ] && [ "$BLS_ROOT_SUBVOL" != "$ROOT_SUBVOL" ]; then
+    warn "BLS boot entry uses subvol='$BLS_ROOT_SUBVOL'"
+    warn "  but fstab uses subvol='$ROOT_SUBVOL'"
+    warn "  The script will mount and modify the fstab subvolume ('$ROOT_SUBVOL')."
+    warn "  If the system boots from a DIFFERENT subvolume, config changes"
+    warn "  may not take effect. Consider fixing this inconsistency first."
+    read -p "  Continue anyway? (yes/no): " subvol_override
+    [ "$subvol_override" = "yes" ] || fatal "Fix subvolume inconsistency first."
+fi
+
+# ─── Btrfs Free Space Check ─────────────────────────────────────────────────
+FS_AVAIL_MB=$(df --block-size=1M /mnt_temp | tail -1 | awk '{print $4}')
+log "  Free space: ${FS_AVAIL_MB} MiB"
+if [ "$FS_AVAIL_MB" -lt 64 ]; then
+    umount /mnt_temp
+    rmdir /mnt_temp
+    fatal "Less than 64 MiB free. Need at least 64 MiB. Free up space first."
+fi
+
+umount /mnt_temp
+rmdir /mnt_temp
+
+# ─── Optional Btrfs Integrity Check ─────────────────────────────────────────
+echo ""
+read -p "Run btrfs integrity check before encryption? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
+if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
+    log "  Running btrfs check --readonly (this may take a while)..."
+    if btrfs check --readonly "$TARGET_ROOT" 2>&1 | tail -3; then
+        log "  Btrfs check: PASSED"
+    else
+        err "  Btrfs check found errors!"
+        read -p "  Continue despite btrfs errors? (Type 'FORCE' to override): " btrfs_override
+        [ "$btrfs_override" = "FORCE" ] || fatal "Fix btrfs errors before encrypting."
+    fi
+else
+    warn "  Skipping btrfs check."
+fi
+
+# ─── Pre-Flight Summary ─────────────────────────────────────────────────────
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║                    PRE-FLIGHT SUMMARY                     ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "  ROOT    : $TARGET_ROOT  (UUID=$BTRFS_UUID, btrfs)"
+echo "  BOOT    : $TARGET_BOOT  (UUID=$BOOT_UUID)"
+echo "  EFI     : $TARGET_EFI   (UUID=$EFI_UUID)"
+echo "  Subvols : root=$ROOT_SUBVOL, home=$HOME_SUBVOL"
+echo "  Free    : ${FS_AVAIL_MB} MiB"
+echo "  Arch    : $(uname -m)"
+echo "  Crypto  : cryptsetup $CRYPTSETUP_VER"
+[ -n "$BLS_ROOT_SUBVOL" ] && echo "  BLS boot: subvol=$BLS_ROOT_SUBVOL"
+echo ""
+echo -e "  ${RED}${BOLD}WARNING: This will perform IRREVERSIBLE in-place encryption.${NC}"
+echo -e "  ${RED}Ensure AC power is connected. Ensure you have a backup.${NC}"
+echo "  Pre-encryption state saved to: $STATE_DIR/"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
+[ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
+
+log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 1: Shrink Btrfs
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[1/8] Shrinking btrfs filesystem by 32M for LUKS2 header..."
+mkdir -p /mnt_temp
+mount "$TARGET_ROOT" /mnt_temp
+
+# Verify btrfs is healthy enough to resize
+if ! btrfs filesystem df /mnt_temp >/dev/null 2>&1; then
+    umount /mnt_temp
+    rmdir /mnt_temp
+    fatal "Cannot read btrfs filesystem. Partition may be damaged."
+fi
+
+btrfs filesystem resize -32M /mnt_temp
+sync
+# Verify the resize took effect
+NEW_SIZE=$(btrfs filesystem usage -b /mnt_temp 2>/dev/null | grep "Device size:" | awk '{print $3}' || echo "unknown")
+log "  Btrfs resized. Device size: $NEW_SIZE"
+umount /mnt_temp
+rmdir /mnt_temp
+log "  Btrfs shrink complete."
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 2: In-Place LUKS2 Encryption
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[2/8] Encrypting partition with LUKS2..."
+log "  KDF pinned: argon2id  mem=$(( LUKS_PBKDF_MEMORY / 1024 )) MiB (${LUKS_PBKDF_MEMORY} KiB)  time-cost(iters)=${LUKS_PBKDF_ITER}  parallel=${LUKS_PBKDF_PARALLEL}"
+log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
+log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
+log "  You will be prompted to set a passphrase (type it twice)."
+log "  If interrupted, resume with: cryptsetup reencrypt --resume-only $TARGET_ROOT"
+echo ""
+
+# LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
+# auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
+# --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
+# Unlock at boot re-runs this KDF inside the initramfs, so LUKS_PBKDF_MEMORY KiB
+# must be allocatable there. 4 GiB is the default and is comfortable on 16 GiB+
+# M-series boxes; see the note next to the defaults above for 8 GiB machines.
+cryptsetup reencrypt \
+    --encrypt \
+    --type luks2 \
+    --cipher aes-xts-plain64 \
+    --key-size 512 \
+    --pbkdf argon2id \
+    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
+    --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
+    --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
+    --hash sha512 \
+    --reduce-device-size 32M \
+    --resilience checksum \
+    --verbose \
+    "$TARGET_ROOT"
+
+log "  Encryption complete."
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 3: Open & Verify LUKS Container
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[3/8] Verifying LUKS header and opening container..."
+
+# Verify LUKS header integrity
+log "  LUKS header dump:"
+cryptsetup luksDump "$TARGET_ROOT" 2>&1 | grep -E '(Version|Cipher|Hash|Key Slot [0-9])' | head -10 || true
+echo ""
+
+LUKS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
+[ -n "$LUKS_UUID" ] || fatal "Cannot read LUKS UUID — header may be corrupt! Check: cryptsetup luksDump $TARGET_ROOT"
+log "  LUKS UUID: $LUKS_UUID"
+
+# Open the LUKS container
+cryptsetup open "$TARGET_ROOT" fedora_crypt
+LUKS_OPENED=true
+
+# Verify mapper device exists
+[ -b /dev/mapper/fedora_crypt ] || fatal "/dev/mapper/fedora_crypt does not exist after open!"
+log "  Mapper device: /dev/mapper/fedora_crypt OK"
+
+# Verify the btrfs filesystem is intact inside LUKS
+INNER_FSTYPE=$(blkid -s TYPE -o value /dev/mapper/fedora_crypt 2>/dev/null || echo "")
+INNER_UUID=$(blkid -s UUID -o value /dev/mapper/fedora_crypt 2>/dev/null || echo "")
+log "  Inner filesystem: type=$INNER_FSTYPE UUID=$INNER_UUID"
+
+if [ "$INNER_FSTYPE" != "btrfs" ]; then
+    fatal "Inner filesystem is '$INNER_FSTYPE', expected 'btrfs'! Encryption may have corrupted data."
+fi
+if [ "$INNER_UUID" != "$BTRFS_UUID" ]; then
+    warn "Inner btrfs UUID changed! Was: $BTRFS_UUID, Now: $INNER_UUID"
+    warn "  Updating BTRFS_UUID to match actual state."
+    BTRFS_UUID="$INNER_UUID"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 4: Resize Btrfs + Mount for Chroot
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[4/8] Resizing btrfs to fill LUKS container and mounting..."
+
+# Resize btrfs to reclaim any space
+mkdir -p /mnt_temp
+mount /dev/mapper/fedora_crypt /mnt_temp
+btrfs filesystem resize max /mnt_temp 2>/dev/null || true
+umount /mnt_temp
+rmdir /mnt_temp
+log "  Btrfs resize max complete."
+
+# Mount with correct subvolumes for chroot
+log "  Mounting filesystems for chroot..."
+mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/fedora_crypt /mnt
+MOUNTS_ACTIVE=true
+
+# Verify we got the right subvolume
+if [ ! -f /mnt/etc/fstab ]; then
+    err "  /mnt/etc/fstab not found after mounting subvol=$ROOT_SUBVOL!"
+    err "  Trying subvolid=5 (top-level) as fallback..."
+    umount /mnt
+    mount -o subvolid=5 /dev/mapper/fedora_crypt /mnt
+    if [ -f "/mnt/${ROOT_SUBVOL}/etc/fstab" ]; then
+        log "  Found fstab at /mnt/${ROOT_SUBVOL}/etc/fstab — remounting correctly..."
+        umount /mnt
+        mount -o "subvol=${ROOT_SUBVOL}" /dev/mapper/fedora_crypt /mnt
+    else
+        fatal "Cannot find /etc/fstab in any mount configuration."
+    fi
+fi
+
+# Mount home subvolume (if separate from root)
+if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
+    mkdir -p /mnt/home
+    mount -o "subvol=$HOME_SUBVOL" /dev/mapper/fedora_crypt /mnt/home
+fi
+
+# Mount boot and EFI
+mount "$TARGET_BOOT" /mnt/boot
+mount "$TARGET_EFI" /mnt/boot/efi
+
+# Bind-mount virtual filesystems for chroot
+for i in /dev /dev/pts /proc /sys /run; do
+    mount --bind "$i" "/mnt$i"
+done
+if [ -d /sys/firmware/efi/efivars ]; then
+    mount --bind /sys/firmware/efi/efivars /mnt/sys/firmware/efi/efivars 2>/dev/null || true
+fi
+log "  All mounts complete."
+
+# ─── Verify chroot environment has required tools ────────────────────────────
+log "  Verifying chroot tools..."
+CHROOT_TOOLS_OK=true
+for tool in dracut grub2-mkconfig; do
+    if chroot /mnt command -v "$tool" &>/dev/null; then
+        log "    $tool: found"
+    else
+        # Try alternatives
+        case "$tool" in
+            grub2-mkconfig)
+                if chroot /mnt command -v grub-mkconfig &>/dev/null; then
+                    log "    grub-mkconfig: found (alternative)"
+                else
+                    warn "    $tool: NOT FOUND"
+                    CHROOT_TOOLS_OK=false
+                fi
+                ;;
+            *)
+                warn "    $tool: NOT FOUND"
+                CHROOT_TOOLS_OK=false
+                ;;
+        esac
+    fi
+done
+if chroot /mnt command -v grubby &>/dev/null; then
+    log "    grubby: found (for BLS entries)"
+else
+    warn "    grubby: NOT FOUND — BLS entries must be updated manually!"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 5: LUKS Header Backup
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[5/8] Backing up LUKS header..."
+cryptsetup luksHeaderBackup "$TARGET_ROOT" \
+    --header-backup-file /mnt/boot/luks-header-backup.img
+chmod 400 /mnt/boot/luks-header-backup.img
+# Also save to USB drive
+cp /mnt/boot/luks-header-backup.img "$STATE_DIR/luks-header-backup.img"
+log "  Header backup: /boot/luks-header-backup.img"
+log "  Header backup: $STATE_DIR/luks-header-backup.img (USB copy)"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 6: Update System Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[6/8] Updating system configuration..."
+
+LUKS_NAME="fedora_crypt"
+
+# ─── 6a: crypttab ────────────────────────────────────────────────────────────
+if [ ! -f /mnt/etc/crypttab ]; then
+    echo "# /etc/crypttab — LUKS encrypted devices" > /mnt/etc/crypttab
+    log "  Created /etc/crypttab"
+fi
+if grep -q "$LUKS_NAME" /mnt/etc/crypttab 2>/dev/null; then
+    warn "  $LUKS_NAME already in crypttab — updating."
+    sed -i "/^${LUKS_NAME}[[:space:]]/d" /mnt/etc/crypttab
+fi
+echo "$LUKS_NAME UUID=$LUKS_UUID none luks,discard" >> /mnt/etc/crypttab
+log "  crypttab: added $LUKS_NAME UUID=$LUKS_UUID"
+echo "  --- /etc/crypttab ---"
+cat /mnt/etc/crypttab
+
+# ─── 6b: fstab ───────────────────────────────────────────────────────────────
+cp /mnt/etc/fstab /mnt/etc/fstab.pre-luks
+log "  fstab backed up to fstab.pre-luks"
+
+if grep -q "UUID=$BTRFS_UUID" /mnt/etc/fstab; then
+    sed -i "s|UUID=$BTRFS_UUID|/dev/mapper/$LUKS_NAME|g" /mnt/etc/fstab
+    log "  fstab: UUID=$BTRFS_UUID → /dev/mapper/$LUKS_NAME"
+else
+    warn "  UUID=$BTRFS_UUID not found in fstab!"
+    echo "  Current btrfs entries:"
+    grep -E "^[^#].*btrfs" /mnt/etc/fstab || echo "  (none)"
+    fatal "  fstab update failed — cannot find original btrfs UUID."
+fi
+
+# Verify fstab was updated correctly
+if ! grep -q "$LUKS_NAME" /mnt/etc/fstab; then
+    fatal "  fstab does not reference $LUKS_NAME after update!"
+fi
+if grep -q "UUID=$BTRFS_UUID" /mnt/etc/fstab; then
+    fatal "  fstab still contains old UUID=$BTRFS_UUID after replacement!"
+fi
+echo "  --- /etc/fstab ---"
+cat /mnt/etc/fstab
+
+# ─── 6c: /etc/default/grub ───────────────────────────────────────────────────
+log "  Updating /etc/default/grub..."
+cp /mnt/etc/default/grub /mnt/etc/default/grub.pre-luks
+
+# GRUB_ENABLE_CRYPTODISK=y (allows GRUB to access encrypted partitions if needed)
+if ! grep -q "^GRUB_ENABLE_CRYPTODISK=y" /mnt/etc/default/grub; then
+    echo "GRUB_ENABLE_CRYPTODISK=y" >> /mnt/etc/default/grub
+    log "    Added GRUB_ENABLE_CRYPTODISK=y"
+fi
+
+# Add rd.luks.uuid AND rd.luks.name to GRUB_CMDLINE_LINUX
+LUKS_BOOT_ARGS="rd.luks.uuid=$LUKS_UUID rd.luks.name=${LUKS_UUID}=$LUKS_NAME"
+CURRENT_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX=" /mnt/etc/default/grub | sed 's/^GRUB_CMDLINE_LINUX="//' | sed 's/"$//')
+if ! echo "$CURRENT_CMDLINE" | grep -q "rd.luks.uuid=$LUKS_UUID"; then
+    NEW_CMDLINE="$LUKS_BOOT_ARGS $CURRENT_CMDLINE"
+    sed -i "s|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$NEW_CMDLINE\"|" /mnt/etc/default/grub
+    log "    Added $LUKS_BOOT_ARGS to GRUB_CMDLINE_LINUX"
+fi
+echo "  --- /etc/default/grub ---"
+cat /mnt/etc/default/grub
+
+# ─── 6d: /etc/kernel/cmdline (BLS source of truth for kernel-install) ────────
+log "  Updating /etc/kernel/cmdline..."
+if [ -f /mnt/etc/kernel/cmdline ]; then
+    cp /mnt/etc/kernel/cmdline /mnt/etc/kernel/cmdline.pre-luks
+    KERN_CMDLINE=$(cat /mnt/etc/kernel/cmdline | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    if ! echo "$KERN_CMDLINE" | grep -q "rd.luks.uuid=$LUKS_UUID"; then
+        echo "$KERN_CMDLINE $LUKS_BOOT_ARGS" > /mnt/etc/kernel/cmdline
+        log "    Added LUKS params to /etc/kernel/cmdline"
+    fi
+else
+    warn "  /etc/kernel/cmdline not found — creating it."
+    echo "root=UUID=$BTRFS_UUID ro rootflags=subvol=$ROOT_SUBVOL $LUKS_BOOT_ARGS rhgb quiet" \
+        > /mnt/etc/kernel/cmdline
+fi
+echo "  --- /etc/kernel/cmdline ---"
+cat /mnt/etc/kernel/cmdline
+
+# ─── 6e: dracut LUKS module config ───────────────────────────────────────────
+log "  Configuring dracut LUKS modules..."
+mkdir -p /mnt/etc/dracut.conf.d
+cat > /mnt/etc/dracut.conf.d/99-luks.conf <<'DRACUT_CONF'
+# Added by luks-deploy.sh — ensure initramfs includes LUKS unlock support
+add_dracutmodules+=" crypt dm btrfs "
+DRACUT_CONF
+log "    Created /etc/dracut.conf.d/99-luks.conf (crypt+dm+btrfs)"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 7: Rebuild Initramfs + Update BLS + Rebuild GRUB (in chroot)
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[7/8] Rebuilding initramfs, BLS entries, and GRUB config..."
+
+# Pass required variables into the chroot via a sourced env file
+cat > /mnt/tmp/.luks-deploy-env <<EOF
+LUKS_UUID="$LUKS_UUID"
+LUKS_NAME="$LUKS_NAME"
+BTRFS_UUID="$BTRFS_UUID"
+LUKS_BOOT_ARGS="$LUKS_BOOT_ARGS"
+EOF
+
+CHROOT_RC=0
+chroot /mnt /bin/bash <<'CHROOT_SCRIPT' || CHROOT_RC=$?
+# ── Inside chroot ──────────────────────────────────────────────────────────
+source /tmp/.luks-deploy-env
+rm -f /tmp/.luks-deploy-env
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+ERRORS=0
+echo ""
+echo "[CHROOT] ═══════════════════════════════════════════════"
+echo "[CHROOT] Architecture : $(uname -m)"
+echo "[CHROOT] LUKS UUID    : $LUKS_UUID"
+echo "[CHROOT] Mapper name  : $LUKS_NAME"
+echo "[CHROOT] ═══════════════════════════════════════════════"
+echo ""
+
+# ── 7a: Rebuild initramfs for ALL kernels ──────────────────────────────────
+# NOTE: We do NOT delete existing initramfs first.
+# dracut --force overwrites in place. This way, if dracut fails for one
+# kernel, the other kernels still have working initramfs images.
+echo "[CHROOT] Rebuilding initramfs for all installed kernels..."
+
+if command -v dracut &>/dev/null; then
+    DRACUT_VER=$(dracut --version 2>/dev/null || echo "unknown")
+    echo "[CHROOT] dracut version: $DRACUT_VER"
+
+    if dracut --help 2>&1 | grep -q -- '--regenerate-all'; then
+        echo "[CHROOT] Using dracut --regenerate-all --force..."
+        if ! dracut --regenerate-all --force 2>&1; then
+            echo "[CHROOT] WARN: --regenerate-all failed, trying per-kernel..."
+            for kernel in /boot/vmlinuz-*; do
+                [ -f "$kernel" ] || continue
+                kver=$(basename "$kernel" | sed 's/vmlinuz-//')
+                echo "[CHROOT] Building initramfs for $kver ..."
+                if ! dracut --force "/boot/initramfs-${kver}.img" "$kver" 2>&1; then
+                    echo "[CHROOT] WARN: dracut failed for $kver, retrying with explicit modules..."
+                    if ! dracut --force --add "crypt dm btrfs" "/boot/initramfs-${kver}.img" "$kver" 2>&1; then
+                        echo "[CHROOT] FAIL: dracut failed for $kver even with explicit modules"
+                        ERRORS=$((ERRORS + 1))
+                    fi
+                fi
+            done
+        fi
+    else
+        for kernel in /boot/vmlinuz-*; do
+            [ -f "$kernel" ] || continue
+            kver=$(basename "$kernel" | sed 's/vmlinuz-//')
+            echo "[CHROOT] Building initramfs for $kver ..."
+            if ! dracut --force "/boot/initramfs-${kver}.img" "$kver" 2>&1; then
+                echo "[CHROOT] FAIL: dracut failed for $kver"
+                ERRORS=$((ERRORS + 1))
+            fi
+        done
+    fi
+elif command -v mkinitcpio &>/dev/null; then
+    echo "[CHROOT] Using mkinitcpio -P..."
+    mkinitcpio -P 2>&1 || ERRORS=$((ERRORS + 1))
+elif command -v update-initramfs &>/dev/null; then
+    echo "[CHROOT] Using update-initramfs..."
+    for kernel in /boot/vmlinuz-*; do
+        [ -f "$kernel" ] || continue
+        kver=$(basename "$kernel" | sed 's/vmlinuz-//')
+        update-initramfs -c -k "$kver" 2>&1 || ERRORS=$((ERRORS + 1))
+    done
+fi
+
+# ── 7b: Verify initramfs images contain cryptsetup ─────────────────────────
+echo ""
+echo "[CHROOT] Verifying initramfs images..."
+INITRD_FOUND=0
+for initrd in /boot/initramfs-*.img /boot/initrd.img-*; do
+    [ -f "$initrd" ] || continue
+    # Skip rescue/fallback images (they may be legitimately different)
+    basename "$initrd" | grep -qE '(fallback|rescue)' && continue
+
+    INITRD_FOUND=$((INITRD_FOUND + 1))
+    size=$(stat -c%s "$initrd" 2>/dev/null || echo 0)
+
+    if [ "$size" -lt 5000000 ]; then
+        echo "[CHROOT]   FAIL: $initrd too small (${size} bytes) — likely corrupt"
+        ERRORS=$((ERRORS + 1))
+        continue
+    fi
+
+    echo "[CHROOT]   OK: $(basename "$initrd") ($((size / 1024 / 1024))MB)"
+
+    # Check for cryptsetup inside the initramfs
+    if command -v lsinitrd &>/dev/null; then
+        if lsinitrd "$initrd" 2>/dev/null | grep -q 'cryptsetup'; then
+            echo "[CHROOT]       Contains cryptsetup: YES"
+        else
+            echo "[CHROOT]       Contains cryptsetup: NO — attempting auto-repair..."
+            kver=$(basename "$initrd" | sed -n 's/initramfs-\(.*\)\.img/\1/p')
+            if [ -n "$kver" ]; then
+                # Auto-repair: force rebuild with explicit crypt module
+                if dracut --force --add "crypt dm" "$initrd" "$kver" 2>&1; then
+                    # Re-check
+                    if lsinitrd "$initrd" 2>/dev/null | grep -q 'cryptsetup'; then
+                        echo "[CHROOT]       Auto-repair: SUCCESS — cryptsetup now included"
+                    else
+                        echo "[CHROOT]       Auto-repair: FAILED — cryptsetup still missing!"
+                        # Last resort: try with install flag
+                        echo "[CHROOT]       Trying --install /usr/sbin/cryptsetup..."
+                        dracut --force --add "crypt dm" --install "/usr/sbin/cryptsetup" \
+                            "$initrd" "$kver" 2>&1 || true
+                        if lsinitrd "$initrd" 2>/dev/null | grep -q 'cryptsetup'; then
+                            echo "[CHROOT]       Last-resort repair: SUCCESS"
+                        else
+                            echo "[CHROOT]       CRITICAL: Cannot include cryptsetup in initramfs!"
+                            ERRORS=$((ERRORS + 1))
+                        fi
+                    fi
+                else
+                    echo "[CHROOT]       Auto-repair: dracut rebuild failed!"
+                    ERRORS=$((ERRORS + 1))
+                fi
+            fi
+        fi
+    elif command -v lsinitramfs &>/dev/null; then
+        if lsinitramfs "$initrd" 2>/dev/null | grep -q 'cryptsetup'; then
+            echo "[CHROOT]       Contains cryptsetup: YES"
+        else
+            echo "[CHROOT]       Contains cryptsetup: NO"
+            ERRORS=$((ERRORS + 1))
+        fi
+    else
+        echo "[CHROOT]       Cannot verify contents (no lsinitrd/lsinitramfs)"
+    fi
+done
+
+if [ "$INITRD_FOUND" -eq 0 ]; then
+    echo "[CHROOT] FAIL: No non-rescue initramfs images found!"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "[CHROOT] Found $INITRD_FOUND non-rescue initramfs image(s)."
+fi
+
+# ── 7c: Update BLS boot entries with grubby ────────────────────────────────
+echo ""
+echo "[CHROOT] Updating BLS boot entries..."
+if command -v grubby &>/dev/null; then
+    echo "[CHROOT] Using grubby to add: $LUKS_BOOT_ARGS"
+
+    if grubby --update-kernel=ALL --args="$LUKS_BOOT_ARGS" 2>&1; then
+        echo "[CHROOT] grubby: updated ALL kernel entries."
+    else
+        echo "[CHROOT] WARN: grubby --update-kernel=ALL failed. Trying individually..."
+        for entry in /boot/loader/entries/*.conf; do
+            [ -f "$entry" ] || continue
+            kpath=$(grep "^linux " "$entry" | awk '{print $2}')
+            [ -n "$kpath" ] || continue
+            grubby --update-kernel="$kpath" --args="$LUKS_BOOT_ARGS" 2>&1 || true
+        done
+    fi
+
+    # Verify BLS entries
+    echo "[CHROOT] Verifying BLS entries..."
+    BLS_ERRORS=0
+    for entry in /boot/loader/entries/*.conf; do
+        [ -f "$entry" ] || continue
+        ename=$(basename "$entry")
+        if grep -q "rd.luks.uuid=$LUKS_UUID" "$entry"; then
+            echo "[CHROOT]   OK: $ename"
+        else
+            echo "[CHROOT]   FAIL: $ename — missing rd.luks.uuid!"
+            echo "[CHROOT]   Attempting manual fix..."
+            # Auto-repair: directly append to options line
+            if grep -q "^options " "$entry"; then
+                sed -i "s|^options |options $LUKS_BOOT_ARGS |" "$entry"
+                if grep -q "rd.luks.uuid=$LUKS_UUID" "$entry"; then
+                    echo "[CHROOT]   Auto-repair: SUCCESS"
+                else
+                    echo "[CHROOT]   Auto-repair: FAILED"
+                    BLS_ERRORS=$((BLS_ERRORS + 1))
+                fi
+            else
+                echo "[CHROOT]   No 'options' line found in BLS entry!"
+                BLS_ERRORS=$((BLS_ERRORS + 1))
+            fi
+        fi
+    done
+    if [ "$BLS_ERRORS" -gt 0 ]; then
+        ERRORS=$((ERRORS + BLS_ERRORS))
+    fi
+else
+    echo "[CHROOT] WARN: grubby not found!"
+    echo "[CHROOT] Attempting direct BLS entry modification..."
+    PATCHED=0
+    for entry in /boot/loader/entries/*.conf; do
+        [ -f "$entry" ] || continue
+        if ! grep -q "rd.luks.uuid=$LUKS_UUID" "$entry"; then
+            if grep -q "^options " "$entry"; then
+                sed -i "s|^options |options $LUKS_BOOT_ARGS |" "$entry"
+                PATCHED=$((PATCHED + 1))
+            fi
+        fi
+    done
+    echo "[CHROOT] Patched $PATCHED BLS entries directly."
+    if [ "$PATCHED" -eq 0 ]; then
+        echo "[CHROOT] FAIL: No BLS entries were updated!"
+        ERRORS=$((ERRORS + 1))
+    fi
+fi
+
+# ── 7d: Rebuild GRUB config ───────────────────────────────────────────────
+echo ""
+echo "[CHROOT] Rebuilding GRUB config..."
+GRUB_REBUILT=false
+for grub_cfg in /boot/efi/EFI/fedora/grub.cfg /boot/grub2/grub.cfg /boot/grub/grub.cfg; do
+    [ -f "$grub_cfg" ] || continue
+    grub_tool=""
+    if command -v grub2-mkconfig &>/dev/null; then
+        grub_tool="grub2-mkconfig"
+    elif command -v grub-mkconfig &>/dev/null; then
+        grub_tool="grub-mkconfig"
+    fi
+    if [ -n "$grub_tool" ]; then
+        echo "[CHROOT] $grub_tool -o $grub_cfg"
+        $grub_tool -o "$grub_cfg" 2>&1
+        GRUB_REBUILT=true
+        break
+    fi
+done
+if ! $GRUB_REBUILT; then
+    # Fallback: try common commands
+    if command -v grub2-mkconfig &>/dev/null; then
+        grub2-mkconfig -o /boot/grub2/grub.cfg 2>&1 && GRUB_REBUILT=true
+    elif command -v grub-mkconfig &>/dev/null; then
+        grub-mkconfig -o /boot/grub/grub.cfg 2>&1 && GRUB_REBUILT=true
+    fi
+fi
+$GRUB_REBUILT && echo "[CHROOT] GRUB config rebuilt." || echo "[CHROOT] WARN: Could not rebuild GRUB config."
+
+echo ""
+echo "[CHROOT] ═══════════════════════════════════════════════"
+echo "[CHROOT] Chroot work complete. Errors: $ERRORS"
+echo "[CHROOT] ═══════════════════════════════════════════════"
+exit $ERRORS
+CHROOT_SCRIPT
+
+rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+
+if [ "$CHROOT_RC" -ne 0 ]; then
+    err "Chroot reported $CHROOT_RC error(s)!"
+    warn "Continuing to verification to show full status..."
+fi
+
+# Sync all writes to disk
+log "  Syncing all writes to disk..."
+sync
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 8: Comprehensive Verification
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+log "[8/8] Running comprehensive verification..."
+ERRORS=0
+
+# ─── V1: crypttab ────────────────────────────────────────────────────────────
+if grep -q "$LUKS_NAME" /mnt/etc/crypttab && grep -q "UUID=$LUKS_UUID" /mnt/etc/crypttab; then
+    log "  V1 OK: crypttab has $LUKS_NAME with correct UUID"
+else
+    err "  V1 FAIL: crypttab missing or incorrect!"
+    cat /mnt/etc/crypttab
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V2: fstab ───────────────────────────────────────────────────────────────
+if grep -q "/dev/mapper/$LUKS_NAME" /mnt/etc/fstab; then
+    log "  V2 OK: fstab references /dev/mapper/$LUKS_NAME"
+else
+    err "  V2 FAIL: fstab does not reference /dev/mapper/$LUKS_NAME!"
+    ERRORS=$((ERRORS + 1))
+fi
+if grep -q "UUID=$BTRFS_UUID" /mnt/etc/fstab; then
+    err "  V2 FAIL: fstab still contains old UUID=$BTRFS_UUID!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V3: /etc/default/grub ───────────────────────────────────────────────────
+if grep -q "GRUB_ENABLE_CRYPTODISK=y" /mnt/etc/default/grub; then
+    log "  V3 OK: GRUB_ENABLE_CRYPTODISK=y set"
+else
+    err "  V3 FAIL: GRUB_ENABLE_CRYPTODISK=y missing!"
+    ERRORS=$((ERRORS + 1))
+fi
+if grep -q "rd.luks.uuid=$LUKS_UUID" /mnt/etc/default/grub; then
+    log "  V3 OK: rd.luks.uuid in GRUB_CMDLINE_LINUX"
+else
+    err "  V3 FAIL: rd.luks.uuid not in GRUB_CMDLINE_LINUX!"
+    ERRORS=$((ERRORS + 1))
+fi
+if grep -q "rd.luks.name=${LUKS_UUID}=$LUKS_NAME" /mnt/etc/default/grub; then
+    log "  V3 OK: rd.luks.name in GRUB_CMDLINE_LINUX"
+else
+    err "  V3 FAIL: rd.luks.name not in GRUB_CMDLINE_LINUX!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V4: /etc/kernel/cmdline ─────────────────────────────────────────────────
+if [ -f /mnt/etc/kernel/cmdline ]; then
+    if grep -q "rd.luks.uuid=$LUKS_UUID" /mnt/etc/kernel/cmdline; then
+        log "  V4 OK: /etc/kernel/cmdline has rd.luks.uuid"
+    else
+        err "  V4 FAIL: /etc/kernel/cmdline missing rd.luks.uuid!"
+        ERRORS=$((ERRORS + 1))
+    fi
+    if grep -q "rd.luks.name=${LUKS_UUID}=$LUKS_NAME" /mnt/etc/kernel/cmdline; then
+        log "  V4 OK: /etc/kernel/cmdline has rd.luks.name"
+    else
+        err "  V4 FAIL: /etc/kernel/cmdline missing rd.luks.name!"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    err "  V4 FAIL: /etc/kernel/cmdline does not exist!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V5: BLS entries ─────────────────────────────────────────────────────────
+BLS_TOTAL=0
+BLS_OK=0
+for entry in /mnt/boot/loader/entries/*.conf; do
+    [ -f "$entry" ] || continue
+    BLS_TOTAL=$((BLS_TOTAL + 1))
+    if grep -q "rd.luks.uuid=$LUKS_UUID" "$entry"; then
+        BLS_OK=$((BLS_OK + 1))
+    else
+        err "  V5 FAIL: $(basename "$entry") missing rd.luks.uuid!"
+        ERRORS=$((ERRORS + 1))
+    fi
+done
+if [ "$BLS_TOTAL" -gt 0 ]; then
+    log "  V5 OK: $BLS_OK/$BLS_TOTAL BLS entries have rd.luks.uuid"
+else
+    warn "  V5 SKIP: No BLS entries found (may not use BLS)"
+fi
+
+# ─── V6: GRUB config ─────────────────────────────────────────────────────────
+GRUB_CFG=""
+for f in /mnt/boot/efi/EFI/fedora/grub.cfg /mnt/boot/grub2/grub.cfg /mnt/boot/grub/grub.cfg; do
+    [ -f "$f" ] && GRUB_CFG="$f" && break
+done
+if [ -n "$GRUB_CFG" ]; then
+    log "  V6 OK: GRUB config found at $GRUB_CFG"
+    # On BLS systems, grub.cfg just has blscfg command; LUKS params are in BLS entries
+    if grep -q "blscfg" "$GRUB_CFG"; then
+        log "  V6 OK: GRUB config uses BLS (blscfg) — LUKS params come from BLS entries"
+    elif grep -q "rd.luks.uuid=$LUKS_UUID" "$GRUB_CFG"; then
+        log "  V6 OK: GRUB config contains rd.luks.uuid"
+    else
+        warn "  V6 WARN: GRUB config has neither blscfg nor rd.luks.uuid"
+    fi
+else
+    err "  V6 FAIL: No grub.cfg found!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V7: Initramfs images ────────────────────────────────────────────────────
+INITRD_COUNT=0
+for f in /mnt/boot/initramfs-*.img /mnt/boot/initrd.img-*; do
+    [ -f "$f" ] || continue
+    basename "$f" | grep -qE '(fallback|rescue)' && continue
+    INITRD_COUNT=$((INITRD_COUNT + 1))
+done
+if [ "$INITRD_COUNT" -gt 0 ]; then
+    log "  V7 OK: $INITRD_COUNT non-rescue initramfs image(s) found"
+else
+    err "  V7 FAIL: No initramfs images!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V8: LUKS header backup ──────────────────────────────────────────────────
+if [ -f /mnt/boot/luks-header-backup.img ]; then
+    log "  V8 OK: LUKS header backup exists on target"
+else
+    warn "  V8 WARN: LUKS header backup missing from /boot"
+fi
+if [ -f "$STATE_DIR/luks-header-backup.img" ]; then
+    log "  V8 OK: LUKS header backup exists on USB"
+else
+    warn "  V8 WARN: LUKS header backup missing from USB"
+fi
+
+# ─── V9: dracut config ───────────────────────────────────────────────────────
+if [ -f /mnt/etc/dracut.conf.d/99-luks.conf ]; then
+    if grep -q 'crypt' /mnt/etc/dracut.conf.d/99-luks.conf; then
+        log "  V9 OK: dracut LUKS module config present"
+    else
+        err "  V9 FAIL: dracut config exists but missing crypt module!"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    err "  V9 FAIL: /etc/dracut.conf.d/99-luks.conf not found!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── V10: LUKS device integrity ──────────────────────────────────────────────
+if [ -b /dev/mapper/fedora_crypt ]; then
+    log "  V10 OK: /dev/mapper/fedora_crypt is active"
+else
+    err "  V10 FAIL: /dev/mapper/fedora_crypt not found!"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Add chroot errors to total
+ERRORS=$((ERRORS + CHROOT_RC))
+
+# ─── Verification Result ─────────────────────────────────────────────────────
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+if [ "$ERRORS" -eq 0 ]; then
+    echo -e "║  ${GREEN}${BOLD}ALL 10 CHECKS PASSED — LUKS deployment verified.${NC}         ║"
+else
+    echo -e "║  ${RED}${BOLD}$ERRORS ERROR(S) DETECTED — DO NOT REBOOT until fixed!${NC}      ║"
+fi
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+if [ "$ERRORS" -gt 0 ]; then
+    fatal "Verification failed with $ERRORS error(s). See log: $DEPLOY_LOG"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Summary & Recovery Instructions
+# ═══════════════════════════════════════════════════════════════════════════════
+echo "Summary of changes:"
+echo "  crypttab    : $LUKS_NAME UUID=$LUKS_UUID none luks,discard"
+echo "  fstab       : /dev/mapper/$LUKS_NAME (was UUID=$BTRFS_UUID)"
+echo "  grub default: GRUB_ENABLE_CRYPTODISK=y + rd.luks.uuid + rd.luks.name"
+echo "  kernel cmd  : rd.luks.uuid=$LUKS_UUID rd.luks.name=${LUKS_UUID}=$LUKS_NAME"
+echo "  BLS entries : ALL updated with LUKS parameters"
+echo "  initramfs   : ALL kernels rebuilt with crypt+dm+btrfs modules"
+echo "  header bkup : /boot/luks-header-backup.img + $STATE_DIR/"
+echo ""
+
+# Save log to target system's /boot (survives if USB is removed)
+cp "$DEPLOY_LOG" /mnt/boot/luks-deploy.log 2>/dev/null || true
+log "Log also saved to target: /boot/luks-deploy.log"
+echo ""
+echo "Full log: $DEPLOY_LOG (on deployment drive)"
+echo "          /boot/luks-deploy.log (on target system)"
+echo ""
+echo "Pre-encryption backups: $STATE_DIR/"
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║  You can now reboot. You will be prompted for your        ║"
+echo "║  LUKS passphrase at boot.                                 ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "║  NOTE: The password prompt may appear behind boot text.   ║"
+echo "║  If the system appears hung, just type your passphrase.   ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "║  If the system fails to boot:                             ║"
+echo "║  1. Boot from live USB                                    ║"
+echo "║  2. cryptsetup open $TARGET_ROOT fedora_crypt"
+echo "║  3. mount -o subvol=$ROOT_SUBVOL /dev/mapper/fedora_crypt /mnt"
+echo "║  4. Mount /boot, bind-mount /dev /proc /sys /run          ║"
+echo "║  5. chroot /mnt and fix configuration                     ║"
+echo "║  6. Header restore if needed:                             ║"
+echo "║     cryptsetup luksHeaderRestore $TARGET_ROOT \\"
+echo "║       --header-backup-file /boot/luks-header-backup.img   ║"
+echo "╚════════════════════════════════════════════════════════════╝"

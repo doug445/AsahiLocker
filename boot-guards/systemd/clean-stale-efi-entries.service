@@ -1,0 +1,13 @@
+[Unit]
+Description=Delete EFI boot entries for vanished partitions (Asahi U-Boot quirk)
+Documentation=man:efibootmgr(8)
+After=systemd-udev-settle.service local-fs.target
+Wants=systemd-udev-settle.service
+ConditionPathExists=/sys/firmware/efi/efivars
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/clean-stale-efi-entries.sh
+
+[Install]
+WantedBy=multi-user.target
