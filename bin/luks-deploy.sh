@@ -49,9 +49,6 @@ warn() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}[ERROR]${NC} $*" >&2; }
 fatal() { err "$@"; exit 1; }
 
-# Safe increment that doesn't trigger set -e (bash ((x++)) returns 1 when x==0)
-incr() { eval "$1=\$(( ${!1} + 1 ))"; }
-
 # ─── LUKS2 KDF profiles ──────────────────────────────────────────────────────
 # Three presets, chosen interactively before encryption starts. The KDF is
 # re-run in the INITRAMFS at every boot, so its memory cost must be allocatable
@@ -73,6 +70,15 @@ incr() { eval "$1=\$(( ${!1} + 1 ))"; }
 #   LUKS_PROFILE=fast ./luks-deploy.sh                       # pick a preset
 #   LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./luks-deploy.sh   # fully custom
 # Setting any LUKS_PBKDF_* variable pins the parameters and skips the menu.
+#
+# Partition pinning (skips the selection menus — for fleet/scripted use):
+#   LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
+#   LUKS_TARGET_EFI=/dev/nvme0n1p4 ./luks-deploy.sh
+# Each pinned device is still fstype-checked, cross-checked against the
+# target's fstab, and subject to the same typed ENCRYPT confirmation.
+#
+# Recovery key (2nd keyslot): prompted interactively; pin with
+#   LUKS_RECOVERY_KEY=yes|no ./luks-deploy.sh
 
 KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=10
 KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=8
@@ -94,6 +100,18 @@ KDF_PROFILE_NAME="moderate"
 case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
 case "$LUKS_PBKDF_PARALLEL" in ''|*[!0-9]*) echo "LUKS_PBKDF_PARALLEL must be an integer" >&2; exit 1;; esac
+
+# Refuse accidentally-weak pinned parameters. Floor = half the 'fast' profile.
+# A typo like LUKS_PBKDF_MEMORY=1048 (meant 1048576) would otherwise silently
+# produce a near-worthless KDF. Set LUKS_PBKDF_ACK_WEAK=1 to proceed anyway.
+if [ "$KDF_PINNED_BY_ENV" -eq 1 ] \
+   && { [ "$LUKS_PBKDF_MEMORY" -lt 524288 ] || [ "$LUKS_PBKDF_ITER" -lt 4 ]; }; then
+    if [ "${LUKS_PBKDF_ACK_WEAK:-0}" = "1" ]; then
+        warn "Pinned KDF parameters are BELOW the safety floor (mem=${LUKS_PBKDF_MEMORY} KiB, iters=${LUKS_PBKDF_ITER}) — proceeding because LUKS_PBKDF_ACK_WEAK=1."
+    else
+        fatal "Pinned KDF parameters too weak: mem=${LUKS_PBKDF_MEMORY} KiB, iters=${LUKS_PBKDF_ITER} (floor: 524288 KiB / 4 iterations). If this is intentional, set LUKS_PBKDF_ACK_WEAK=1."
+    fi
+fi
 
 # Apply a named profile requested via the environment.
 apply_kdf_profile() {
@@ -133,8 +151,6 @@ kdf_fmt_ms() {
 }
 
 # ─── Cleanup Trap ────────────────────────────────────────────────────────────
-LUKS_OPENED=false
-MOUNTS_ACTIVE=false
 cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
@@ -143,8 +159,9 @@ cleanup() {
         err "  Script exited with error (code $exit_code). Cleaning up..."
         err "════════════════════════════════════════════════════════════"
     fi
-    # Clean up any temp mounts first
-    umount /mnt_temp 2>/dev/null || true
+    # Clean up any temp mounts first (-R: the BLS check nests a boot mount
+    # inside /mnt_temp, and a plain umount would fail on the child mount)
+    umount -R /mnt_temp 2>/dev/null || umount /mnt_temp 2>/dev/null || true
     rmdir /mnt_temp 2>/dev/null || true
     # Clean up chroot bind mounts (specific order matters)
     umount /mnt/sys/firmware/efi/efivars 2>/dev/null || true
@@ -174,6 +191,10 @@ cleanup() {
         echo "  Pre-encryption backups saved to: $SCRIPT_DIR/"
         echo "  Full log: $DEPLOY_LOG"
     fi
+    # Give the background tee logger a moment to drain the pipe, so the final
+    # lines (including the recovery instructions above) reach the log file.
+    sync
+    sleep 1
 }
 trap cleanup EXIT
 
@@ -305,15 +326,22 @@ pick_partition() {
     local -a devs=() disp_labels=() sizes=() disks=() scores=()
     local idx=0 best_idx=0 best_score=-999
 
-    # Collect all partitions matching fstype (skip loop devices)
-    while read -r name fs size disk; do
+    # Collect all partitions matching fstype (skip loop devices).
+    # lsblk -P (KEY="value" pairs) instead of positional columns: columnar
+    # output collapses empty fields (e.g. missing FSTYPE) and shifts columns.
+    local NAME FSTYPE SIZE PKNAME lsblk_line
+    while IFS= read -r lsblk_line; do
+        NAME=""; FSTYPE=""; SIZE=""; PKNAME=""
+        eval "$lsblk_line"    # safe: lsblk -P hex-escapes unsafe characters
+        local name="$NAME" fs="$FSTYPE" size="$SIZE" disk="$PKNAME"
         [ -n "$name" ] || continue
         [[ "$fs" =~ ^($fstype)$ ]] || continue
         echo "$name" | grep -q "^loop" && continue
 
         local dev="/dev/$name"
-        local label=$(blkid -s LABEL -o value "$dev" 2>/dev/null || echo "")
-        local partlabel=$(blkid -s PARTLABEL -o value "$dev" 2>/dev/null || echo "")
+        local label partlabel
+        label=$(blkid -s LABEL -o value "$dev" 2>/dev/null || echo "")
+        partlabel=$(blkid -s PARTLABEL -o value "$dev" 2>/dev/null || echo "")
         local disp="${label:-${partlabel:-(none)}}"
 
         # Score this candidate
@@ -338,7 +366,7 @@ pick_partition() {
             best_idx=$idx
         fi
         idx=$((idx + 1))
-    done < <(lsblk -o NAME,FSTYPE,SIZE,PKNAME -ln 2>/dev/null)
+    done < <(lsblk -P -o NAME,FSTYPE,SIZE,PKNAME 2>/dev/null)
 
     echo "" >&2
     echo -e "  ${CYAN}Select ${role} partition (${fstype}):${NC}" >&2
@@ -377,7 +405,8 @@ pick_partition() {
 
         # Direct device path
         if [ -b "$choice" ]; then
-            local actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
+            local actual_fs
+            actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
             if ! [[ "$actual_fs" =~ ^($fstype)$ ]]; then
                 echo "  WARNING: $choice has '$actual_fs', expected '$fstype'." >&2
                 read -p "  Accept anyway? (yes/no): " accept
@@ -392,11 +421,86 @@ pick_partition() {
     done
 }
 
+# Non-interactive pinning: LUKS_TARGET_ROOT / LUKS_TARGET_BOOT / LUKS_TARGET_EFI
+# skip the menu but still enforce the fstype (all display goes to stderr —
+# stdout is captured by the caller).
+pinned_partition() {
+    # $1 = role, $2 = env var name, $3 = pinned device, $4 = fstype regex
+    local role="$1" var="$2" dev="$3" fstype="$4" actual
+    [ -b "$dev" ] || fatal "\$$var=$dev is not a block device."
+    actual=$(blkid -s TYPE -o value "$dev" 2>/dev/null || echo "unknown")
+    [[ "$actual" =~ ^($fstype)$ ]] \
+        || fatal "\$$var=$dev has fstype '$actual', expected '$fstype'."
+    log "  $role pinned via \$$var: $dev ($actual)" >&2
+    echo "$dev"
+}
+
 # ROOT also accepts crypto_LUKS so an interrupted/half-configured previous
 # run can be re-selected and resumed (see mode detection below).
-TARGET_ROOT=$(pick_partition "ROOT" "btrfs|crypto_LUKS" "fedora|root")
-TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot")
-TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor")
+if [ -n "${LUKS_TARGET_ROOT:-}" ]; then
+    TARGET_ROOT=$(pinned_partition "ROOT" "LUKS_TARGET_ROOT" "$LUKS_TARGET_ROOT" "btrfs|crypto_LUKS")
+else
+    TARGET_ROOT=$(pick_partition "ROOT" "btrfs|crypto_LUKS" "fedora|root")
+fi
+if [ -n "${LUKS_TARGET_BOOT:-}" ]; then
+    TARGET_BOOT=$(pinned_partition "BOOT" "LUKS_TARGET_BOOT" "$LUKS_TARGET_BOOT" "ext4")
+else
+    TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot")
+fi
+if [ -n "${LUKS_TARGET_EFI:-}" ]; then
+    TARGET_EFI=$(pinned_partition "EFI" "LUKS_TARGET_EFI" "$LUKS_TARGET_EFI" "vfat")
+else
+    TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor")
+fi
+
+# ─── Stale Mapper Cross-Check ────────────────────────────────────────────────
+# If fedora_crypt is open (e.g. kept from a previous run), it MUST be backed by
+# the ROOT partition just selected. Otherwise every later step that reuses the
+# mapper (discovery, config, verification) would run against a DIFFERENT device
+# than the one LUKS_UUID/crypttab point at — cross-wiring two systems.
+if [ -b /dev/mapper/fedora_crypt ]; then
+    MAPPER_BACKING=$(cryptsetup status fedora_crypt 2>/dev/null \
+        | awk '$1 == "device:" {print $2; exit}')
+    MAPPER_BACKING=$(readlink -f "$MAPPER_BACKING" 2>/dev/null || echo "${MAPPER_BACKING:-unknown}")
+    TARGET_ROOT_REAL=$(readlink -f "$TARGET_ROOT")
+    if [ "$MAPPER_BACKING" = "$TARGET_ROOT_REAL" ]; then
+        log "Open fedora_crypt is backed by $TARGET_ROOT_REAL — OK to reuse."
+    else
+        err "/dev/mapper/fedora_crypt is open but backed by: $MAPPER_BACKING"
+        err "You selected ROOT: $TARGET_ROOT_REAL"
+        err "Reusing this mapper would configure the WRONG system — closing it."
+        if cryptsetup close fedora_crypt 2>/dev/null; then
+            log "  Closed mismatched fedora_crypt; the selected device will be opened when needed."
+        else
+            fatal "Could not close fedora_crypt (still in use?). Close it manually and re-run."
+        fi
+    fi
+fi
+
+# ─── Mounted-Target Guard ────────────────────────────────────────────────────
+# Live desktops (udisks) automount internal partitions, and cryptsetup
+# reencrypt refuses busy devices — catch that NOW, not an hour after the
+# user typed ENCRYPT and walked away.
+ensure_unmounted() {
+    # $1 = device; offer to unmount every mountpoint it currently has
+    local dev="$1" mps mp
+    # sort -r: unmount nested child mounts (/mnt/home) before parents (/mnt)
+    mps=$(lsblk -no MOUNTPOINTS "$dev" 2>/dev/null | grep -v '^$' | sort -r || true)
+    [ -n "$mps" ] || return 0
+    warn "$dev is currently mounted at:"
+    echo "$mps" | sed 's/^/    /'
+    read -p "  Unmount it now? (yes/no): " UNMOUNT_OK
+    [ "$UNMOUNT_OK" = "yes" ] || fatal "Cannot operate on a mounted device."
+    while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        umount "$mp" || fatal "Could not unmount $mp — close whatever is using it and re-run."
+    done <<< "$mps"
+    log "  Unmounted $dev."
+}
+ensure_unmounted "$TARGET_ROOT"
+if [ -b /dev/mapper/fedora_crypt ]; then
+    ensure_unmounted /dev/mapper/fedora_crypt
+fi
 
 # ─── Same-Disk Sanity Check ──────────────────────────────────────────────────
 DISK_ROOT=$(lsblk -no PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
@@ -481,7 +585,6 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
         log "Unlocking $TARGET_ROOT (passphrase required)..."
         cryptsetup open "$TARGET_ROOT" fedora_crypt
     fi
-    LUKS_OPENED=true
     DISCOVERY_DEV="/dev/mapper/fedora_crypt"
 fi
 
@@ -824,7 +927,6 @@ if [ -b /dev/mapper/fedora_crypt ]; then
 else
     cryptsetup open "$TARGET_ROOT" fedora_crypt
 fi
-LUKS_OPENED=true
 
 # Verify mapper device exists
 [ -b /dev/mapper/fedora_crypt ] || fatal "/dev/mapper/fedora_crypt does not exist after open!"
@@ -839,8 +941,14 @@ if [ "$INNER_FSTYPE" != "btrfs" ]; then
     fatal "Inner filesystem is '$INNER_FSTYPE', expected 'btrfs'! Encryption may have corrupted data."
 fi
 if [ "$INNER_UUID" != "$BTRFS_UUID" ]; then
-    warn "Inner btrfs UUID changed! Was: $BTRFS_UUID, Now: $INNER_UUID"
-    warn "  Updating BTRFS_UUID to match actual state."
+    err "Inner btrfs UUID changed! Was: $BTRFS_UUID, Now: $INNER_UUID"
+    err "  This should NEVER happen — in-place encryption preserves the inner"
+    err "  filesystem. It usually means the open mapper is backed by a DIFFERENT"
+    err "  device than expected, or the filesystem was damaged. Continuing"
+    err "  would write boot configuration for the wrong system."
+    read -p "  Continue with UUID $INNER_UUID anyway? (Type 'UUID-CHANGED' to override): " UUID_OVERRIDE
+    [ "$UUID_OVERRIDE" = "UUID-CHANGED" ] || fatal "Aborted — investigate before configuring anything."
+    warn "  Override accepted — updating BTRFS_UUID to $INNER_UUID."
     BTRFS_UUID="$INNER_UUID"
 fi
 
@@ -861,7 +969,6 @@ log "  Btrfs resize max complete."
 # Mount with correct subvolumes for chroot
 log "  Mounting filesystems for chroot..."
 mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/fedora_crypt /mnt
-MOUNTS_ACTIVE=true
 
 # Verify we got the right subvolume
 if [ ! -f /mnt/etc/fstab ]; then
@@ -899,7 +1006,6 @@ log "  All mounts complete."
 
 # ─── Verify chroot environment has required tools ────────────────────────────
 log "  Verifying chroot tools..."
-CHROOT_TOOLS_OK=true
 for tool in dracut grub2-mkconfig; do
     if chroot /mnt command -v "$tool" &>/dev/null; then
         log "    $tool: found"
@@ -911,12 +1017,10 @@ for tool in dracut grub2-mkconfig; do
                     log "    grub-mkconfig: found (alternative)"
                 else
                     warn "    $tool: NOT FOUND"
-                    CHROOT_TOOLS_OK=false
                 fi
                 ;;
             *)
                 warn "    $tool: NOT FOUND"
-                CHROOT_TOOLS_OK=false
                 ;;
         esac
     fi
@@ -931,7 +1035,74 @@ fi
 # STEP 5: LUKS Header Backup
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-log "[5/8] Backing up LUKS header..."
+log "[5/8] Recovery key + LUKS header backup..."
+
+# ─── 5a: Optional recovery key (second keyslot) ─────────────────────────────
+# A random 256-bit key in its own keyslot: if the passphrase is ever forgotten,
+# this key still unlocks the volume. Enrolled BEFORE the header backup below so
+# the backup contains the new slot. Saved to the deployment drive — the user
+# must move it to secure OFFLINE storage afterwards.
+# Non-interactive: LUKS_RECOVERY_KEY=yes|no
+SLOTS_IN_USE=$(cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null | grep -cE '^[[:space:]]+[0-9]+: luks2' || true)
+RK_CHOICE="${LUKS_RECOVERY_KEY:-}"
+if [ -z "$RK_CHOICE" ]; then
+    echo ""
+    echo "  A recovery key is a random 64-hex-character key in a second LUKS"
+    echo "  keyslot. It unlocks the volume if the passphrase is ever forgotten."
+    echo "  It will be written to $STATE_DIR/ — move it to secure offline"
+    echo "  storage (NOT this machine) once deployment is done."
+    if [ "${SLOTS_IN_USE:-0}" -gt 1 ]; then
+        warn "  Note: $SLOTS_IN_USE keyslots are already in use — a recovery key may already be enrolled."
+    fi
+    read -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
+fi
+case "$RK_CHOICE" in
+    n|N|no|NO)
+        warn "  Skipping recovery key (passphrase will be the only way in)."
+        ;;
+    *)
+        RK_FILE="$STATE_DIR/recovery-key.txt"
+        # 32 random bytes as 64 hex chars: unambiguous to read back and type.
+        RECOVERY_KEY=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+        if [ "${#RECOVERY_KEY}" -ne 64 ]; then
+            warn "  Could not generate a recovery key (urandom read failed?) — skipping."
+        else
+            # No trailing newline: the file must byte-match what a human would
+            # later TYPE at a passphrase prompt.
+            install -m 600 /dev/null "$RK_FILE"
+            printf '%s' "$RECOVERY_KEY" > "$RK_FILE"
+            log "  Enrolling recovery key (enter the volume passphrase when asked)..."
+            if cryptsetup luksAddKey "$TARGET_ROOT" "$RK_FILE" \
+                   --pbkdf argon2id \
+                   --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
+                   --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
+                   --pbkdf-force-iterations "$LUKS_PBKDF_ITER"; then
+                # Keep the keyfile PURE (usable as-is with --key-file); the
+                # instructions live in a sibling README instead.
+                cat > "$STATE_DIR/recovery-key-README.txt" <<RK_EOF
+LUKS recovery key for $TARGET_ROOT (UUID=$LUKS_UUID), enrolled $(date '+%Y-%m-%d %H:%M').
+
+The key is the 64 hex characters in recovery-key.txt (exactly, no trailing
+newline). Two ways to use it if the passphrase is ever lost:
+  - Type/paste it at the boot passphrase prompt, or
+  - From a live USB:
+      cryptsetup open $TARGET_ROOT fedora_crypt --key-file recovery-key.txt
+
+MOVE BOTH FILES TO SECURE OFFLINE STORAGE — anyone holding the key can
+unlock the disk.
+RK_EOF
+                chmod 600 "$STATE_DIR/recovery-key-README.txt"
+                log "  Recovery key enrolled. Saved to: $RK_FILE"
+            else
+                rm -f "$RK_FILE"
+                warn "  Recovery key enrollment FAILED (wrong passphrase?) — continuing without it."
+                warn "  You can enroll one later: cryptsetup luksAddKey $TARGET_ROOT"
+            fi
+        fi
+        ;;
+esac
+
+# ─── 5b: LUKS header backup ─────────────────────────────────────────────────
 # luksHeaderBackup refuses to overwrite; drop any stale copy from a previous
 # run first (the current header is always the authoritative one to keep).
 rm -f /mnt/boot/luks-header-backup.img
@@ -1257,33 +1428,51 @@ else
 fi
 
 # ── 7d: Rebuild GRUB config ───────────────────────────────────────────────
+# NEVER regenerate onto /boot/efi/EFI/*/grub.cfg. On Fedora (Asahi included)
+# that file is a tiny STUB that searches for /boot by UUID and chainloads the
+# real config from /boot/grub2/grub.cfg. Overwriting the stub with a full
+# generated config is exactly the failure the boot-guards esp-grub-stub-guard
+# exists to undo — it can drop the next boot at a GRUB rescue prompt.
+# Only the real config locations are regenerated here.
 echo ""
 echo "[CHROOT] Rebuilding GRUB config..."
 GRUB_REBUILT=false
-for grub_cfg in /boot/efi/EFI/fedora/grub.cfg /boot/grub2/grub.cfg /boot/grub/grub.cfg; do
-    [ -f "$grub_cfg" ] || continue
-    grub_tool=""
-    if command -v grub2-mkconfig &>/dev/null; then
-        grub_tool="grub2-mkconfig"
-    elif command -v grub-mkconfig &>/dev/null; then
-        grub_tool="grub-mkconfig"
-    fi
-    if [ -n "$grub_tool" ]; then
+grub_tool=""
+if command -v grub2-mkconfig &>/dev/null; then
+    grub_tool="grub2-mkconfig"
+elif command -v grub-mkconfig &>/dev/null; then
+    grub_tool="grub-mkconfig"
+fi
+if [ -n "$grub_tool" ]; then
+    for grub_cfg in /boot/grub2/grub.cfg /boot/grub/grub.cfg; do
+        [ -f "$grub_cfg" ] || continue
         echo "[CHROOT] $grub_tool -o $grub_cfg"
         $grub_tool -o "$grub_cfg" 2>&1
         GRUB_REBUILT=true
         break
-    fi
-done
-if ! $GRUB_REBUILT; then
-    # Fallback: try common commands
-    if command -v grub2-mkconfig &>/dev/null; then
-        grub2-mkconfig -o /boot/grub2/grub.cfg 2>&1 && GRUB_REBUILT=true
-    elif command -v grub-mkconfig &>/dev/null; then
-        grub-mkconfig -o /boot/grub/grub.cfg 2>&1 && GRUB_REBUILT=true
+    done
+    if ! $GRUB_REBUILT; then
+        # No existing real config — create one at the tool's native location
+        # (still never on the ESP).
+        case "$grub_tool" in
+            grub2-mkconfig) $grub_tool -o /boot/grub2/grub.cfg 2>&1 && GRUB_REBUILT=true ;;
+            grub-mkconfig)  $grub_tool -o /boot/grub/grub.cfg  2>&1 && GRUB_REBUILT=true ;;
+        esac
     fi
 fi
 $GRUB_REBUILT && echo "[CHROOT] GRUB config rebuilt." || echo "[CHROOT] WARN: Could not rebuild GRUB config."
+
+# Detect an ESP grub.cfg that has ALREADY been clobbered with a full config
+# (by a previous run of this script, or by a guide-following mishap).
+for esp_cfg in /boot/efi/EFI/*/grub.cfg; do
+    [ -f "$esp_cfg" ] || continue
+    if grep -q '### BEGIN /etc/grub.d' "$esp_cfg"; then
+        echo "[CHROOT] WARN: $esp_cfg is a FULL generated config, not the Fedora stub."
+        echo "[CHROOT]       Something previously ran grub2-mkconfig against the ESP."
+        echo "[CHROOT]       Restore the stub after first boot — see boot-guards/README.md"
+        echo "[CHROOT]       (restore-esp-grub-stub.sh / esp-grub-stub-rebaseline)."
+    fi
+done
 
 # ── 7e: SELinux — relabel every file this deployment wrote ─────────────────
 # Files created from the live environment get labeled by the LIVE system's
@@ -1366,8 +1555,10 @@ fi
 if grep -q "GRUB_ENABLE_CRYPTODISK=y" /mnt/etc/default/grub; then
     log "  V3 OK: GRUB_ENABLE_CRYPTODISK=y set"
 else
-    err "  V3 FAIL: GRUB_ENABLE_CRYPTODISK=y missing!"
-    ERRORS=$((ERRORS + 1))
+    # Not boot-critical on this layout (/boot is unencrypted, so GRUB never
+    # opens the LUKS volume itself) — but the script sets it, so its absence
+    # means something interfered.
+    warn "  V3 WARN: GRUB_ENABLE_CRYPTODISK=y missing (not fatal: /boot is unencrypted)"
 fi
 if grep -q "rd.luks.uuid=$LUKS_UUID" /mnt/etc/default/grub; then
     log "  V3 OK: rd.luks.uuid in GRUB_CMDLINE_LINUX"
@@ -1421,9 +1612,18 @@ else
 fi
 
 # ─── V6: GRUB config ─────────────────────────────────────────────────────────
+# Real config locations first; the ESP copy is normally just the chainload stub.
 GRUB_CFG=""
-for f in /mnt/boot/efi/EFI/fedora/grub.cfg /mnt/boot/grub2/grub.cfg /mnt/boot/grub/grub.cfg; do
+for f in /mnt/boot/grub2/grub.cfg /mnt/boot/grub/grub.cfg /mnt/boot/efi/EFI/fedora/grub.cfg; do
     [ -f "$f" ] && GRUB_CFG="$f" && break
+done
+# The ESP grub.cfg must still be the Fedora stub, not a full generated config.
+for esp_cfg in /mnt/boot/efi/EFI/*/grub.cfg; do
+    [ -f "$esp_cfg" ] || continue
+    if grep -q '### BEGIN /etc/grub.d' "$esp_cfg"; then
+        warn "  V6 WARN: ${esp_cfg#/mnt} is a FULL generated config, not the chainload stub."
+        warn "           Restore the stub after first boot (boot-guards/restore-esp-grub-stub.sh)."
+    fi
 done
 if [ -n "$GRUB_CFG" ]; then
     log "  V6 OK: GRUB config found at $GRUB_CFG"
@@ -1516,6 +1716,9 @@ echo "  kernel cmd  : rd.luks.uuid=$LUKS_UUID rd.luks.name=${LUKS_UUID}=$LUKS_NA
 echo "  BLS entries : ALL updated with LUKS parameters"
 echo "  initramfs   : ALL kernels rebuilt with crypt+dm+btrfs modules"
 echo "  header bkup : /boot/luks-header-backup.img + $STATE_DIR/"
+if [ -f "$STATE_DIR/recovery-key.txt" ]; then
+    echo "  recovery key: $STATE_DIR/recovery-key.txt  ← MOVE TO SECURE OFFLINE STORAGE"
+fi
 echo ""
 
 # Save log to target system's /boot (survives if USB is removed)
