@@ -49,13 +49,21 @@ incr() { eval "$1=\$(( ${!1} + 1 ))"; }
 # The KDF is re-run in the INITRAMFS at every boot, so the memory cost must be
 # allocatable there — not just on the running system.
 #
-#   16 GiB+ M-series (M1 Pro/Max, M2/M3/M4 and up): keep the 4 GiB default.
-#   8 GiB M-series  (base M1/M2 Air, base M1 mini) : 4 GiB usually still works,
-#       but if unlock fails or is very slow in the initramfs, drop to 1 GiB:
-#           sudo LUKS_PBKDF_MEMORY=1048576 ./luks-deploy.sh
+# You also pay this cost as unlock latency on EVERY boot. Time scales with
+# memory x iterations -- roughly 250 ms per GiB-iteration at 1 GiB+ on an M2 Max
+# (measure yours: cryptsetup benchmark --pbkdf argon2id --pbkdf-memory 1048576):
+#     1 GiB x  4 iters ~ 1 s
+#     1 GiB x  8 iters ~ 2 s
+#     4 GiB x 10 iters ~ 8-10 s   <- the default
 #
-# Lowering memory cost lowers brute-force resistance; compensate with iterations
-# (e.g. 1 GiB + iterations 16) and a strong passphrase.
+#   16 GiB+ M-series (M1 Pro/Max, M2/M3/M4 and up): the 4 GiB default is fine.
+#   8 GiB M-series  (base M1/M2 Air, base M1 mini) : 1 GiB argon2id is comfortable
+#       and unlocks in ~1-2 s:
+#           sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./luks-deploy.sh
+#
+# ALWAYS stay on argon2id. It is memory-hard, which is what makes GPU/ASIC
+# cracking expensive; never substitute pbkdf2 to save memory or time. argon2id at
+# 1 GiB beats pbkdf2 at any iteration count.
 LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-4194304}"   # KiB (4194304 = 4 GiB)
 LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-10}"            # time cost / iterations
 LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-4}"     # threads

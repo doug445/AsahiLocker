@@ -120,22 +120,51 @@ cost and sha256.
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
 
 The KDF re-runs **in the initramfs at every boot**, so the memory cost must be
-allocatable there. 4 GiB is comfortable on 16 GiB+ machines. On an **8 GiB M1/M2**
-it normally still works, but if unlock is slow or fails you can lower it:
+allocatable there — and you pay its cost as unlock latency on every single boot.
+
+### Unlock cost
+
+argon2id time scales with `memory x iterations`. Measured with
+`cryptsetup benchmark` on an M2 Max, roughly **250 ms per GiB-iteration** at
+1 GiB and above (smaller memory sizes are less efficient per unit):
+
+| Memory | Iterations | Approximate unlock |
+|--------|-----------|--------------------|
+| 1 GiB | 4 | ~1 s |
+| 1 GiB | 8 | ~2 s |
+| 1 GiB | 16 | ~4 s |
+| 4 GiB | 10 (**default**) | ~8-10 s |
+
+Benchmark your own machine before committing to a value:
 
 ```bash
-sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=16 ./bin/luks-deploy.sh   # 1 GiB
+cryptsetup benchmark --pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4
+# reports how many iterations fit in ~2 seconds on this hardware
 ```
 
-Lower memory means less brute-force resistance — compensate with iterations and
-a strong passphrase. Verify what you got afterwards with
-`cryptsetup luksDump /dev/nvme0n1p6`.
+A base M1 has far less memory bandwidth than an M2 Max, so expect it to be
+slower for the same parameters — argon2id is bandwidth-bound.
+
+### Lowering it
+
+1 GiB argon2id is comfortable on an **8 GiB M1** and unlocks in a second or two:
+
+```bash
+sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # 1 GiB, ~2 s
+```
+
+**Stay on argon2id.** It is memory-hard, which is the entire point — that is what
+makes GPU and ASIC cracking expensive. Never substitute pbkdf2 to save memory or
+time; argon2id at 1 GiB is dramatically stronger than pbkdf2 at any iteration
+count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 
 > **Note on GRUB and argon2id:** none of this constrains the root volume, because
 > GRUB never unlocks it — the initramfs does. It only matters if you have some
-> *other* volume that GRUB itself must unlock. GRUB 2.12 (current in Fedora 44)
-> has no argon2 support at all and needs pbkdf2 for such volumes; GRUB ≥ 2.13 does
-> argon2id, capped by GRUB's own heap at roughly 1 GiB memory cost.
+> *other* volume that GRUB itself must unlock: GRUB ≥ 2.13 does argon2id but is
+> capped by its own heap at roughly 1 GiB memory cost, and GRUB 2.12 (current in
+> Fedora 44) has no argon2 support at all. Do not answer that by downgrading the
+> volume to pbkdf2 — argon2id at 1 GiB is memory-hard, pbkdf2 is not, and the gap
+> matters far more than the memory cost does.
 
 ---
 

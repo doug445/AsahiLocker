@@ -154,11 +154,21 @@ sudo mount -o subvol=root /dev/nvme0n1p6 /mnt
 sudo /mnt/home/<user>/asahi-luks-tooling/bin/luks-deploy.sh
 ```
 
-To use a lower KDF memory cost on an 8 GiB machine, prefix the command:
+The KDF cost is paid as unlock latency on **every** boot: the 4 GiB / t=10 default
+takes roughly 8–10 s on an M2 Max. 1 GiB argon2id is comfortable on an 8 GiB M1
+and unlocks in about 1–2 s:
 
 ```bash
-sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=16 /root/asahi-luks-tooling/bin/luks-deploy.sh
+sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 /root/asahi-luks-tooling/bin/luks-deploy.sh
 ```
+
+Check your own hardware first:
+
+```bash
+cryptsetup benchmark --pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4
+```
+
+Keep argon2id either way — never swap in pbkdf2 to save memory or time.
 
 ### What it will ask you
 

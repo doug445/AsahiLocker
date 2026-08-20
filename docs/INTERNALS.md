@@ -134,10 +134,16 @@ encrypted root is unlocked by the *initramfs*, using `rd.luks.uuid` from the BLS
 entry.
 
 Encrypting `/boot` too is a separate and much harder problem: GRUB itself would
-have to unlock the container. GRUB 2.12 — current in Fedora 44 — has no argon2
-support at all, so a GRUB-unlocked volume would have to drop to pbkdf2. GRUB ≥ 2.13
-does support argon2id, but is capped by its own heap allocation at roughly 1 GiB
-memory cost, well below the 4 GiB used here.
+have to unlock the container, and GRUB is far more KDF-constrained than the
+initramfs. GRUB ≥ 2.13 supports argon2id but is capped by its own heap allocation
+at roughly 1 GiB memory cost; GRUB 2.12 — current in Fedora 44 — has no argon2
+support at all.
+
+The answer to that is **not** to weaken the KDF. Dropping a volume to pbkdf2 to
+satisfy an old GRUB trades a memory-hard KDF for one that GPUs and ASICs chew
+through cheaply, which is a far worse outcome than leaving `/boot` unencrypted.
+Keeping `/boot` out of GRUB's unlock path entirely — what this tooling does — lets
+the root volume keep full-strength argon2id.
 
 Attempting to combine the two on GRUB 2.12 reliably produces boot loops. It is
 deliberately out of scope for this tooling.
