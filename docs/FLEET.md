@@ -85,12 +85,17 @@ sha256 and a *time-benchmarked* memory cost that varies with how fast the machin
 happens to be that day — so two identical Macs would end up with different
 security parameters.
 
-If you deliberately vary it for smaller-RAM boxes, record which box got what.
-Vary the *memory cost* only — every box stays on argon2id, never pbkdf2:
+For unattended fleet runs, select the profile non-interactively so no box waits
+at the menu — and record which box got which profile:
 
 ```bash
-sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # ~2 s unlock
+sudo LUKS_PROFILE=aggressive ./bin/luks-deploy.sh   # 4 GiB, t=10
+sudo LUKS_PROFILE=moderate   ./bin/luks-deploy.sh   # 2 GiB, t=8
+sudo LUKS_PROFILE=fast       ./bin/luks-deploy.sh   # 1 GiB, t=4
 ```
+
+Every profile is argon2id; none is pbkdf2. Pick one and keep the fleet on it
+unless a box's hardware genuinely warrants otherwise.
 
 Audit any box afterwards:
 

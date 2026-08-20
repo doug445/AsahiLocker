@@ -113,45 +113,54 @@ cost and sha256.
 | Parameter | Value |
 |-----------|-------|
 | Cipher | `aes-xts-plain64`, 512-bit key (AES-256-XTS) |
-| KDF | argon2id |
-| Memory cost | 4 GiB (`4194304` KiB) |
-| Iterations (time cost) | 10 |
+| KDF | argon2id (always — no profile selects pbkdf2) |
+| Memory cost | 4 / 2 / 1 GiB, by profile |
+| Iterations (time cost) | 10 / 8 / 4, by profile |
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
 
 The KDF re-runs **in the initramfs at every boot**, so the memory cost must be
 allocatable there — and you pay its cost as unlock latency on every single boot.
 
-### Unlock cost
+### Choosing a profile
 
-argon2id time scales with `memory x iterations`. Measured with
-`cryptsetup benchmark` on an M2 Max, roughly **250 ms per GiB-iteration** at
-1 GiB and above (smaller memory sizes are less efficient per unit):
+You pay the KDF cost as unlock latency on **every** boot, so the installer asks
+you to pick one of three profiles. It **benchmarks your machine first** and shows
+a real measured estimate for each — not numbers from someone else's hardware:
 
-| Memory | Iterations | Approximate unlock |
-|--------|-----------|--------------------|
-| 1 GiB | 4 | ~1 s |
-| 1 GiB | 8 | ~2 s |
-| 1 GiB | 16 | ~4 s |
-| 4 GiB | 10 (**default**) | ~8-10 s |
+```
+   1) aggressive    4 GiB, 10 iterations    unlock ~8.5 s
+      Strongest. Best if you rarely reboot.
 
-Benchmark your own machine before committing to a value:
+   2) moderate      2 GiB,  8 iterations    unlock ~4.0 s
+      Balanced. Still strongly memory-hard.
 
-```bash
-cryptsetup benchmark --pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4
-# reports how many iterations fit in ~2 seconds on this hardware
+   3) fast          1 GiB,  4 iterations    unlock ~2.0 s
+      Snappy. Comfortable even on an 8 GiB M1.
 ```
 
-A base M1 has far less memory bandwidth than an M2 Max, so expect it to be
-slower for the same parameters — argon2id is bandwidth-bound.
+| Profile | Memory | Iterations | Threads |
+|---------|--------|-----------|---------|
+| `aggressive` (default) | 4 GiB | 10 | 4 |
+| `moderate` | 2 GiB | 8 | 4 |
+| `fast` | 1 GiB | 4 | 4 |
 
-### Lowering it
+**All three are argon2id — none uses pbkdf2.** Memory cost only has to be
+allocatable in the initramfs, which has the machine to itself, so any profile is
+safe on any Asahi-supported Mac including an 8 GiB M1.
 
-1 GiB argon2id is comfortable on an **8 GiB M1** and unlocks in a second or two:
+The times above were measured on an M2 Max. argon2id is memory-bandwidth-bound,
+so a base M1 will be slower for the same parameters — which is exactly why the
+installer measures rather than assumes.
+
+Non-interactive selection, for scripted or fleet deployments:
 
 ```bash
-sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # 1 GiB, ~2 s
+sudo LUKS_PROFILE=fast ./bin/luks-deploy.sh                     # a named profile
+sudo LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./bin/luks-deploy.sh   # fully custom
 ```
+
+Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
 
 **Stay on argon2id.** It is memory-hard, which is the entire point — that is what
 makes GPU and ASIC cracking expensive. Never substitute pbkdf2 to save memory or

@@ -44,32 +44,85 @@ fatal() { err "$@"; exit 1; }
 # Safe increment that doesn't trigger set -e (bash ((x++)) returns 1 when x==0)
 incr() { eval "$1=\$(( ${!1} + 1 ))"; }
 
-# ─── Tunable LUKS2 KDF parameters ────────────────────────────────────────────
-# Defaults are the fleet-pinned values; override by exporting before running.
-# The KDF is re-run in the INITRAMFS at every boot, so the memory cost must be
-# allocatable there — not just on the running system.
+# ─── LUKS2 KDF profiles ──────────────────────────────────────────────────────
+# Three presets, chosen interactively before encryption starts. The KDF is
+# re-run in the INITRAMFS at every boot, so its memory cost must be allocatable
+# there — and you pay its full cost as unlock latency on EVERY boot.
 #
-# You also pay this cost as unlock latency on EVERY boot. Time scales with
-# memory x iterations -- roughly 250 ms per GiB-iteration at 1 GiB+ on an M2 Max
-# (measure yours: cryptsetup benchmark --pbkdf argon2id --pbkdf-memory 1048576):
-#     1 GiB x  4 iters ~ 1 s
-#     1 GiB x  8 iters ~ 2 s
-#     4 GiB x 10 iters ~ 8-10 s   <- the default
+# argon2id cost is ~proportional to (memory x iterations). The script benchmarks
+# THIS machine and shows a real estimated unlock time for each profile, rather
+# than quoting numbers from someone else's hardware.
 #
-#   16 GiB+ M-series (M1 Pro/Max, M2/M3/M4 and up): the 4 GiB default is fine.
-#   8 GiB M-series  (base M1/M2 Air, base M1 mini) : 1 GiB argon2id is comfortable
-#       and unlocks in ~1-2 s:
-#           sudo LUKS_PBKDF_MEMORY=1048576 LUKS_PBKDF_ITER=8 ./luks-deploy.sh
+#   aggressive  4 GiB  t=10   strongest; the fleet-pinned default
+#   moderate    2 GiB  t=8    balanced
+#   fast        1 GiB  t=4    ~1 s unlock; comfortable even on an 8 GiB M1
 #
-# ALWAYS stay on argon2id. It is memory-hard, which is what makes GPU/ASIC
-# cracking expensive; never substitute pbkdf2 to save memory or time. argon2id at
-# 1 GiB beats pbkdf2 at any iteration count.
-LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-4194304}"   # KiB (4194304 = 4 GiB)
-LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-10}"            # time cost / iterations
-LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-4}"     # threads
+# ALWAYS argon2id. It is memory-hard, which is what makes GPU/ASIC cracking
+# expensive; never substitute pbkdf2 to save memory or time — argon2id at 1 GiB
+# beats pbkdf2 at any iteration count. There is no profile that selects pbkdf2.
+#
+# Non-interactive use:
+#   LUKS_PROFILE=fast ./luks-deploy.sh                       # pick a preset
+#   LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./luks-deploy.sh   # fully custom
+# Setting any LUKS_PBKDF_* variable pins the parameters and skips the menu.
+
+KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=10
+KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=8
+KDF_PROFILE_FAST_MEM=1048576;        KDF_PROFILE_FAST_ITER=4
+KDF_DEFAULT_PARALLEL=4
+
+# Did the caller pin anything explicitly? (checked before defaults are applied)
+KDF_PINNED_BY_ENV=0
+if [ -n "${LUKS_PBKDF_MEMORY:-}" ] || [ -n "${LUKS_PBKDF_ITER:-}" ] || [ -n "${LUKS_PBKDF_PARALLEL:-}" ]; then
+    KDF_PINNED_BY_ENV=1
+fi
+
+# Defaults = the aggressive profile; the menu (or LUKS_PROFILE) may replace them.
+LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_AGGRESSIVE_MEM}"
+LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_AGGRESSIVE_ITER}"
+LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-$KDF_DEFAULT_PARALLEL}"
+KDF_PROFILE_NAME="aggressive"
+
 case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
 case "$LUKS_PBKDF_PARALLEL" in ''|*[!0-9]*) echo "LUKS_PBKDF_PARALLEL must be an integer" >&2; exit 1;; esac
+
+# Apply a named profile requested via the environment.
+apply_kdf_profile() {
+    case "$1" in
+        aggressive) LUKS_PBKDF_MEMORY=$KDF_PROFILE_AGGRESSIVE_MEM; LUKS_PBKDF_ITER=$KDF_PROFILE_AGGRESSIVE_ITER ;;
+        moderate)   LUKS_PBKDF_MEMORY=$KDF_PROFILE_MODERATE_MEM;   LUKS_PBKDF_ITER=$KDF_PROFILE_MODERATE_ITER ;;
+        fast)       LUKS_PBKDF_MEMORY=$KDF_PROFILE_FAST_MEM;       LUKS_PBKDF_ITER=$KDF_PROFILE_FAST_ITER ;;
+        *) return 1 ;;
+    esac
+    LUKS_PBKDF_PARALLEL=$KDF_DEFAULT_PARALLEL
+    KDF_PROFILE_NAME="$1"
+}
+
+# Estimate unlock time for (mem_kib, iters, parallel) by calibrating against
+# cryptsetup's own benchmark on THIS machine. benchmark reports how many
+# iterations fit in ~2000 ms and CLAMPS requested memory to what it can
+# allocate (roughly half of available RAM), so scale from the memory it
+# actually used rather than the memory we asked for.
+kdf_estimate_ms() {
+    local mem_kib="$1" iters="$2" par="$3" out b_iters b_mem
+    out=$(cryptsetup benchmark --pbkdf argon2id --pbkdf-memory "$mem_kib" \
+              --pbkdf-parallel "$par" 2>/dev/null | grep -m1 'argon2id') || return 1
+    b_iters=$(echo "$out" | awk '{print $2}')
+    b_mem=$(echo "$out"   | awk '{print $4}')
+    case "$b_iters" in ''|*[!0-9]*) return 1;; esac
+    case "$b_mem"   in ''|*[!0-9]*) return 1;; esac
+    [ "$b_iters" -gt 0 ] && [ "$b_mem" -gt 0 ] || return 1
+    awk -v ti="$iters" -v tm="$mem_kib" -v bi="$b_iters" -v bm="$b_mem" \
+        'BEGIN{ printf "%.0f", 2000.0 * (ti*tm) / (bi*bm) }'
+}
+
+kdf_fmt_ms() {
+    local ms="$1"
+    case "$ms" in ''|*[!0-9]*) echo "?"; return;; esac
+    if [ "$ms" -lt 1000 ]; then echo "${ms} ms"
+    else awk -v m="$ms" 'BEGIN{ printf "%.1f s", m/1000 }'; fi
+}
 
 # ─── Cleanup Trap ────────────────────────────────────────────────────────────
 LUKS_OPENED=false
@@ -463,6 +516,55 @@ else
     warn "  Skipping btrfs check."
 fi
 
+# ─── KDF Profile Selection ──────────────────────────────────────────────────
+# Done here, just before the point of no return, so the estimates reflect the
+# machine as it will actually be. Skipped when parameters are pinned by env.
+if [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
+    KDF_PROFILE_NAME="custom (pinned by environment)"
+    log "KDF pinned via environment: mem=$((LUKS_PBKDF_MEMORY / 1024)) MiB iters=$LUKS_PBKDF_ITER parallel=$LUKS_PBKDF_PARALLEL"
+elif [ -n "${LUKS_PROFILE:-}" ]; then
+    apply_kdf_profile "$LUKS_PROFILE" \
+        || fatal "Unknown LUKS_PROFILE '$LUKS_PROFILE' (expected: aggressive, moderate, or fast)"
+    log "KDF profile from environment: $KDF_PROFILE_NAME"
+else
+    echo ""
+    log "Benchmarking argon2id on this machine to estimate unlock times..."
+    EST_AGG=$(kdf_estimate_ms "$KDF_PROFILE_AGGRESSIVE_MEM" "$KDF_PROFILE_AGGRESSIVE_ITER" "$KDF_DEFAULT_PARALLEL" || echo "")
+    EST_MOD=$(kdf_estimate_ms "$KDF_PROFILE_MODERATE_MEM"   "$KDF_PROFILE_MODERATE_ITER"   "$KDF_DEFAULT_PARALLEL" || echo "")
+    EST_FAST=$(kdf_estimate_ms "$KDF_PROFILE_FAST_MEM"      "$KDF_PROFILE_FAST_ITER"       "$KDF_DEFAULT_PARALLEL" || echo "")
+    [ -n "$EST_AGG$EST_MOD$EST_FAST" ] || warn "  Benchmark unavailable — showing profiles without time estimates."
+
+    echo ""
+    echo "  ════════════════════════════════════════════════════════════"
+    echo "   LUKS2 KDF PROFILE"
+    echo "   All three are argon2id. None uses pbkdf2."
+    echo "  ════════════════════════════════════════════════════════════"
+    echo ""
+    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
+    echo   "      Strongest. Best if you rarely reboot."
+    echo ""
+    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
+    echo   "      Balanced. Still strongly memory-hard."
+    echo ""
+    printf "   3) fast          1 GiB,  4 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
+    echo   "      Snappy. Comfortable even on an 8 GiB M1."
+    echo ""
+    echo "  ════════════════════════════════════════════════════════════"
+    echo "   Estimates are measured on THIS machine and are approximate;"
+    echo "   they shift with system load. You wait this long at EVERY boot."
+    echo "   All three fit in the initramfs, which has the machine to"
+    echo "   itself — so any of them is safe on any Asahi-supported Mac."
+    echo ""
+    read -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
+    case "${KDF_CHOICE:-1}" in
+        1|"") apply_kdf_profile aggressive ;;
+        2)    apply_kdf_profile moderate ;;
+        3)    apply_kdf_profile fast ;;
+        *)    fatal "Invalid selection '$KDF_CHOICE' — expected 1, 2 or 3." ;;
+    esac
+    log "  Selected: $KDF_PROFILE_NAME ($((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations)"
+fi
+
 # ─── Pre-Flight Summary ─────────────────────────────────────────────────────
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
@@ -475,6 +577,7 @@ echo "  Subvols : root=$ROOT_SUBVOL, home=$HOME_SUBVOL"
 echo "  Free    : ${FS_AVAIL_MB} MiB"
 echo "  Arch    : $(uname -m)"
 echo "  Crypto  : cryptsetup $CRYPTSETUP_VER"
+echo "  KDF     : argon2id $KDF_PROFILE_NAME — $((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations, ${LUKS_PBKDF_PARALLEL} threads"
 [ -n "$BLS_ROOT_SUBVOL" ] && echo "  BLS boot: subvol=$BLS_ROOT_SUBVOL"
 echo ""
 echo -e "  ${RED}${BOLD}WARNING: This will perform IRREVERSIBLE in-place encryption.${NC}"
