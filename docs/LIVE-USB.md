@@ -109,7 +109,7 @@ While the drive is still mounted on your build machine:
 
 ```bash
 sudo ./build.sh mount
-sudo /usr/bin/cp -a /path/to/asahi-luks-tooling mnt_usb/root/
+sudo /usr/bin/cp -a /path/to/asahi-LUKS2-encrypter mnt_usb/root/
 sudo sync
 sudo ./build.sh umount
 ```
@@ -206,5 +206,5 @@ Log in as `root` / `fedora`, then continue with
 **[INSTALL.md → Step 3](INSTALL.md#step-3--run-the-encryption)**:
 
 ```bash
-sudo /root/asahi-luks-tooling/bin/luks-deploy.sh
+sudo /root/asahi-LUKS2-encrypter/bin/luks-deploy.sh
 ```

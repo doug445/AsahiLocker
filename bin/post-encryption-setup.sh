@@ -23,7 +23,7 @@
 # ============================================================================
 set -uo pipefail
 
-CP=/usr/bin/cp; MKDIR=/usr/bin/mkdir; CHMOD=/usr/bin/chmod; CHOWN=/usr/bin/chown
+CHMOD=/usr/bin/chmod; CHOWN=/usr/bin/chown
 GREP=/usr/bin/grep; SED=/usr/bin/sed; BTRFS=/usr/bin/btrfs
 SYSTEMCTL=/usr/bin/systemctl; RESTORECON=/usr/sbin/restorecon
 LSBLK=/usr/bin/lsblk; WC=/usr/bin/wc; DIRNAME=/usr/bin/dirname; READLINK=/usr/bin/readlink
@@ -77,6 +77,23 @@ if [ "$ENABLE_SNAPPER" != 1 ]; then
 elif ! command -v snapper >/dev/null 2>&1; then
     warn "snapper not installed — skipping (dnf install snapper if you want it)"
 else
+    # Register the configs with snapper itself FIRST. `snapper create-config`
+    # writes /etc/snapper/configs/<name>, adds it to SNAPPER_CONFIGS, and
+    # creates the .snapshots subvolume itself (and refuses if one already
+    # exists) — so configs come before any manual subvolume creation.
+    for cfg in $SNAPPER_CONFIGS; do
+        subject="/"; [ "$cfg" != "root" ] && subject="/$cfg"
+        if [ -f "/etc/snapper/configs/$cfg" ]; then
+            ok "snapper config exists: $cfg"
+        elif cc_out=$(/usr/bin/snapper -c "$cfg" create-config "$subject" 2>&1); then
+            ok "created snapper config: $cfg → $subject"
+        else
+            err "snapper create-config failed for $cfg ($subject): $cc_out"
+            FAILS=$((FAILS+1))
+        fi
+    done
+    # Ensure the snapshot subvolumes exist (covers pre-existing configs whose
+    # .snapshots subvolume was lost, e.g. not carried over by a restore).
     for sv in "${SNAPPER_SUBVOLS[@]}"; do
         if "$BTRFS" subvolume show "$sv" >/dev/null 2>&1; then
             ok "subvolume exists: $sv"
@@ -165,4 +182,6 @@ if [ "$FAILS" -eq 0 ]; then
 else
     echo -e "${Y}${B}Completed with $FAILS issue(s) — review the [warn]/[fail] lines above.${N}"
 fi
-exit 0
+# Nonzero on failure so fleet automation can detect problems.
+[ "$FAILS" -eq 0 ]
+exit $?

@@ -89,7 +89,7 @@ The root password on the resulting USB is **`fedora`**.
 
 ```bash
 sudo ./build.sh mount
-sudo /usr/bin/cp -a /path/to/asahi-luks-tooling mnt_usb/root/
+sudo /usr/bin/cp -a /path/to/asahi-LUKS2-encrypter mnt_usb/root/
 sudo sync
 sudo ./build.sh umount
 ```
@@ -144,21 +144,21 @@ Log in as `root` with password `fedora`.
 From the live environment:
 
 ```bash
-sudo /root/asahi-luks-tooling/bin/luks-deploy.sh
+sudo /root/asahi-LUKS2-encrypter/bin/luks-deploy.sh
 ```
 
 Or, if you did not copy it to the USB, mount the target and run it from there:
 
 ```bash
 sudo mount -o subvol=root /dev/nvme0n1p6 /mnt
-sudo /mnt/home/<user>/asahi-luks-tooling/bin/luks-deploy.sh
+sudo /mnt/home/<user>/asahi-LUKS2-encrypter/bin/luks-deploy.sh
 ```
 
 The script will ask you to choose a KDF profile (see the prompt table below); no
 flags are needed. To pick one non-interactively instead:
 
 ```bash
-sudo LUKS_PROFILE=fast /root/asahi-luks-tooling/bin/luks-deploy.sh
+sudo LUKS_PROFILE=fast /root/asahi-LUKS2-encrypter/bin/luks-deploy.sh
 ```
 
 ### What it will ask you
@@ -243,7 +243,7 @@ If it does not boot, do not panic — nothing is lost yet. Go to
 Once booted encrypted, run:
 
 ```bash
-sudo ./asahi-luks-tooling/bin/post-encryption-setup.sh
+sudo ./asahi-LUKS2-encrypter/bin/post-encryption-setup.sh
 ```
 
 This saves a labeled recovery bundle, creates the snapper snapshot subvolumes
@@ -261,7 +261,7 @@ cp bin/post-encryption.conf.example bin/post-encryption.conf
 ### Install the boot guards
 
 ```bash
-sudo ./asahi-luks-tooling/boot-guards/install.sh
+sudo ./asahi-LUKS2-encrypter/boot-guards/install.sh
 ```
 
 Two guards, both worth having on an encrypted Asahi box:
@@ -281,7 +281,7 @@ Two guards, both worth having on an encrypted Asahi box:
 ### Optional: encryption status readout
 
 ```bash
-sudo ./asahi-luks-tooling/extras/install.sh
+sudo ./asahi-LUKS2-encrypter/extras/install.sh
 ```
 
 Adds `luks-fetch-cache` for fastfetch — an aligned per-volume summary of LUKS and

@@ -19,7 +19,7 @@ set -uo pipefail
 CRYPTSETUP=/usr/sbin/cryptsetup; [ -x "$CRYPTSETUP" ] || CRYPTSETUP=/usr/bin/cryptsetup
 LSBLK=/usr/bin/lsblk; BLKID=/usr/sbin/blkid; [ -x "$BLKID" ] || BLKID=/usr/bin/blkid
 CP=/usr/bin/cp; MKDIR=/usr/bin/mkdir; CHMOD=/usr/bin/chmod; GREP=/usr/bin/grep
-AWK=/usr/bin/awk; DATE=/usr/bin/date; HOSTN=/usr/bin/hostname; SYNC=/usr/bin/sync
+DATE=/usr/bin/date; HOSTN=/usr/bin/hostname; SYNC=/usr/bin/sync
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 ok(){ echo -e "  ${G}✅${N} $*"; }; warn(){ echo -e "  ${Y}⚠️ ${N} $*"; }; err(){ echo -e "  ${R}❌${N} $*"; }
 [ "$(id -u)" -eq 0 ] || { err "run as root (sudo)"; exit 1; }
@@ -37,7 +37,14 @@ fi
 
 # --- Resolve the RAW backing device + LUKS UUID -----------------------------
 RAW=$("$CRYPTSETUP" status fedora_crypt 2>/dev/null | "$GREP" -oE '/dev/[a-z0-9]+' | "$GREP" -vi mapper | /usr/bin/head -1)
-[ -n "$RAW" ] || RAW=$("$GREP" -E '^\s*fedora_crypt' "$PREFIX/etc/crypttab" 2>/dev/null | "$GREP" -oE 'UUID=[0-9a-f-]+' | /usr/bin/head -1)
+if [ -z "$RAW" ]; then
+  # Fallback: resolve the crypttab UUID to a real device path (a bare
+  # "UUID=xxxx" string is NOT usable as a device argument to cryptsetup/blkid)
+  CT_UUID=$("$GREP" -E '^\s*fedora_crypt' "$PREFIX/etc/crypttab" 2>/dev/null \
+      | "$GREP" -oE 'UUID=[0-9a-fA-F-]+' | /usr/bin/head -1 | /usr/bin/sed 's/^UUID=//')
+  [ -n "$CT_UUID" ] && RAW=$(/usr/bin/readlink -f "/dev/disk/by-uuid/$CT_UUID" 2>/dev/null || true)
+fi
+[ -n "$RAW" ] && [ -b "$RAW" ] || { err "cannot determine the raw LUKS backing device"; exit 1; }
 LUKS_UUID=$("$CRYPTSETUP" luksUUID "$RAW" 2>/dev/null || true)
 [ -n "$LUKS_UUID" ] || LUKS_UUID=$("$BLKID" -s UUID -o value "$RAW" 2>/dev/null || echo unknown)
 BTRFS_UUID=$("$BLKID" -s UUID -o value "$MAPPER" 2>/dev/null || echo unknown)
