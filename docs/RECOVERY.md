@@ -23,6 +23,7 @@ sudo cryptsetup luksDump /dev/nvme0n1p6 | head -20
 | Root partition still `btrfs`, no LUKS header | Encryption never started | [Undo the shrink](#encryption-never-started--undo-the-btrfs-shrink) |
 | `luksDump` shows a LUKS2 header **and** "online reencryption in progress" | Interrupted mid-encryption | [Resume](#encryption-was-interrupted) |
 | Valid LUKS2 header, container opens fine, but the box will not boot | Encryption fine, boot config wrong | [Repair boot config](#encrypted-fine-but-it-will-not-boot) |
+| Passphrase accepted, root mounts, then services fail en masse | SELinux mislabels | [Relabel](#first-boot-fails-with-selinux-denials) |
 | `luksDump` fails / "device is not a valid LUKS device" | Header damaged | [Restore the header](#corrupt-or-missing-luks-header) |
 | Boots to a GRUB `rescue>` prompt | ESP stub was overwritten | [Restore the ESP stub](#grub-rescue-prompt--the-esp-stub-was-overwritten) |
 
@@ -47,17 +48,19 @@ The system boots normally again. Nothing was lost.
 ## Encryption was interrupted
 
 Power loss, a closed lid, a killed terminal. LUKS2 re-encryption is journaled
-with checksum resilience precisely for this — it can pick up where it stopped:
+with checksum resilience precisely for this — it can pick up where it stopped.
+
+**The easy way: just re-run `luks-deploy.sh`.** It reads the LUKS2
+`online-reencrypt` requirement flag from the header, offers to resume, finishes
+the encryption with `cryptsetup reencrypt --resume-only`, and then runs the
+whole configuration + verification phase as if nothing had happened. You will
+be asked for the passphrase you set.
+
+By hand, the resume step alone is:
 
 ```bash
 sudo cryptsetup reencrypt --resume-only /dev/nvme0n1p6
 ```
-
-You will be asked for the passphrase you set. Let it run to completion.
-
-**Do not** run `luks-deploy.sh` again on a partially-encrypted partition. Resume
-first, then re-run the script — it detects the finished container and skips
-straight to configuration.
 
 If resume reports no re-encryption in progress but the header is valid, the data
 phase finished and only the config steps are missing → next section.
@@ -66,8 +69,15 @@ phase finished and only the config steps are missing → next section.
 
 ## Encrypted fine, but it will not boot
 
-The container is good; something in the boot chain does not know about it. Open,
-mount, chroot, and repair.
+The container is good; something in the boot chain does not know about it.
+
+**The easy way: just re-run `luks-deploy.sh`.** When it finds a complete LUKS
+header on the selected root, it offers a **configuration-only mode**: it unlocks
+the container, redoes every config step (crypttab, fstab, kernel cmdline, GRUB
+defaults, BLS entries, dracut config, all initramfs images — all idempotent) and
+re-runs the full verification gate. No data is touched.
+
+To do the same by hand instead: open, mount, chroot, and repair.
 
 ```bash
 # 1. Open the container
@@ -141,6 +151,28 @@ sudo reboot
 2. **BLS entries not updated.** Fedora uses Boot Loader Specification entries.
    Editing `/etc/default/grub` and running `grub2-mkconfig` does **not** touch
    `/boot/loader/entries/*.conf`. Use `grubby --update-kernel=ALL`.
+
+---
+
+## First boot fails with SELinux denials
+
+Files written from the live environment (crypttab, the dracut conf, edited
+fstab) can end up mislabeled — the live system's policy did the labeling, not
+the target's. `luks-deploy.sh` runs `restorecon` on everything it touched from
+inside the chroot, but if you edited files by hand during a manual repair, the
+boot can still die on denials (root mounts, then systemd units fail en masse,
+or the boot hangs after the passphrase).
+
+Fix: at the GRUB menu, press `e`, append `enforcing=0` to the `linux` line, and
+boot once. Then relabel and re-enable:
+
+```bash
+sudo restorecon -RFv /etc /boot
+sudo setenforce 1
+```
+
+Then reboot normally. (For a full relabel instead: `sudo touch /.autorelabel &&
+sudo reboot` — takes a few minutes on first boot.)
 
 ---
 
