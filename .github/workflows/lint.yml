@@ -28,7 +28,7 @@ jobs:
 
   loopback:
     # Real cryptsetup reencrypt + hard-kill/repair/resume against a throwaway
-    # file-backed loop device — no real disk is ever touched.
+    # file-backed loop device — no real disk is ever touched or modified.
     strategy:
       fail-fast: false
       matrix:
