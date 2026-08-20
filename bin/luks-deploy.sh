@@ -53,8 +53,8 @@ incr() { eval "$1=\$(( ${!1} + 1 ))"; }
 # THIS machine and shows a real estimated unlock time for each profile, rather
 # than quoting numbers from someone else's hardware.
 #
-#   aggressive  4 GiB  t=10   strongest; the fleet-pinned default
-#   moderate    2 GiB  t=8    balanced
+#   aggressive  4 GiB  t=10   strongest
+#   moderate    2 GiB  t=8    balanced; the default
 #   fast        1 GiB  t=4    ~1 s unlock; comfortable even on an 8 GiB M1
 #
 # ALWAYS argon2id. It is memory-hard, which is what makes GPU/ASIC cracking
@@ -77,11 +77,11 @@ if [ -n "${LUKS_PBKDF_MEMORY:-}" ] || [ -n "${LUKS_PBKDF_ITER:-}" ] || [ -n "${L
     KDF_PINNED_BY_ENV=1
 fi
 
-# Defaults = the aggressive profile; the menu (or LUKS_PROFILE) may replace them.
-LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_AGGRESSIVE_MEM}"
-LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_AGGRESSIVE_ITER}"
+# Defaults = the moderate profile; the menu (or LUKS_PROFILE) may replace them.
+LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_MODERATE_MEM}"
+LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_MODERATE_ITER}"
 LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-$KDF_DEFAULT_PARALLEL}"
-KDF_PROFILE_NAME="aggressive"
+KDF_PROFILE_NAME="moderate"
 
 case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
@@ -543,7 +543,7 @@ else
     printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
     echo   "      Strongest. Best if you rarely reboot."
     echo ""
-    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
+    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
     echo   "      Balanced. Still strongly memory-hard."
     echo ""
     printf "   3) fast          1 GiB,  4 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
@@ -555,12 +555,12 @@ else
     echo "   All three fit in the initramfs, which has the machine to"
     echo "   itself — so any of them is safe on any Asahi-supported Mac."
     echo ""
-    read -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
-    case "${KDF_CHOICE:-1}" in
-        1|"") apply_kdf_profile aggressive ;;
-        2)    apply_kdf_profile moderate ;;
-        3)    apply_kdf_profile fast ;;
-        *)    fatal "Invalid selection '$KDF_CHOICE' — expected 1, 2 or 3." ;;
+    read -p "  Select KDF profile [1-3, default 2=moderate]: " KDF_CHOICE
+    case "${KDF_CHOICE:-2}" in
+        1) apply_kdf_profile aggressive ;;
+        2) apply_kdf_profile moderate ;;
+        3) apply_kdf_profile fast ;;
+        *) fatal "Invalid selection '$KDF_CHOICE' — expected 1, 2 or 3." ;;
     esac
     log "  Selected: $KDF_PROFILE_NAME ($((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations)"
 fi
