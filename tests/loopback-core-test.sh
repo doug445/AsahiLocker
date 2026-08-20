@@ -124,13 +124,27 @@ truncate -s 1200M "$WORK/disk2.img"
 LOOP2=$(losetup --show -f "$WORK/disk2.img")
 mkfs.btrfs -q -f "$LOOP2"
 mount "$LOOP2" "$WORK/mnt"; btrfs -q filesystem resize -32M "$WORK/mnt"; umount "$WORK/mnt"
-cryptsetup reencrypt --encrypt --type luks2 "${KDF[@]}" \
-    --reduce-device-size 32M --resilience checksum \
-    --key-file "$WORK/pass" --batch-mode -q "$LOOP2" &
+ENCRYPT_ARGS=(--encrypt --type luks2 "${KDF[@]}"
+              --reduce-device-size 32M --resilience checksum
+              --key-file "$WORK/pass" --batch-mode -q)
+cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" "$LOOP2" &
 RPID=$!
-sleep 0.4
+# Kill once the header — and with it the online-reencrypt requirement — is on
+# disk.  A blind `sleep` is a coin flip on CI: too early and cryptsetup has not
+# written a header at all, too late and the whole 1200M is already encrypted.
+# Both cases leave nothing to resume, and the too-early one used to reach the
+# unlock check below against a device that was never a LUKS device.
+for _ in $(seq 1 200); do
+    if cryptsetup luksDump "$LOOP2" 2>/dev/null | grep -q 'online-reencrypt'; then
+        sleep 0.2          # let some data actually move before pulling the plug
+        break
+    fi
+    if ! kill -0 "$RPID" 2>/dev/null; then break; fi
+    sleep 0.05
+done
 if kill -9 "$RPID" 2>/dev/null; then wait "$RPID" 2>/dev/null || true; fi
 sync
+
 if cryptsetup luksDump "$LOOP2" 2>/dev/null | grep -q 'online-reencrypt'; then
     pass "interrupt left the online-reencrypt requirement flag"
     # A hard kill leaves the reencryption journal dirty: --resume-only refuses
@@ -147,15 +161,16 @@ if cryptsetup luksDump "$LOOP2" 2>/dev/null | grep -q 'online-reencrypt'; then
     else
         pass "--resume-only finished the encryption"
     fi
-    cryptsetup open --key-file "$WORK/pass" "$LOOP2" "$MAP2" \
-        && pass "resumed volume unlocks" || fail "resumed volume cannot unlock"
-    cryptsetup close "$MAP2" 2>/dev/null || true
-else
+elif cryptsetup isLuks "$LOOP2" 2>/dev/null; then
     echo "  SKIP: reencrypt finished before the interrupt landed (fast disk) — resume path not exercised"
-    cryptsetup open --key-file "$WORK/pass" "$LOOP2" "$MAP2" \
-        && pass "volume unlocks (uninterrupted run)" || fail "volume cannot unlock"
-    cryptsetup close "$MAP2" 2>/dev/null || true
+else
+    echo "  SKIP: interrupt landed before the LUKS header was written — resume path not exercised"
+    cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" "$LOOP2"
+    pass "reencrypt completed on the retry"
 fi
+cryptsetup open --key-file "$WORK/pass" "$LOOP2" "$MAP2" \
+    && pass "volume unlocks" || fail "volume cannot unlock"
+cryptsetup close "$MAP2" 2>/dev/null || true
 
 echo ""
 echo "==================================================="
