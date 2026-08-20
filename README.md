@@ -1,4 +1,4 @@
-# asahi-luks-tooling
+# asahi-LUKS2-encrypter
 
 Encrypt the root filesystem of an **already-installed Fedora Asahi Remix** system
 on Apple Silicon — in place, without reinstalling, without wiping macOS, and
@@ -27,18 +27,18 @@ partitions, subvolumes and boot layout are all auto-detected at runtime.
 ```bash
 # 1. On the installed system: get the kit, and build a Fedora Asahi live USB
 #    to run it from  (see docs/LIVE-USB.md — a stock Fedora ISO will NOT boot)
-git clone https://github.com/doug445/asahi-luks-tooling.git
+git clone https://github.com/doug445/asahi-LUKS2-encrypter.git
 
 # 2. Boot the live USB. Easiest route, with the USB plugged in:
 #      sudo grub2-mkconfig -o /boot/grub2/grub.cfg    # adds it to your GRUB menu
 #    then reboot and select it.  (see docs/LIVE-USB.md for the U-Boot routes)
 
 # 3. From the live environment, encrypt the installed root:
-sudo ./asahi-luks-tooling/bin/luks-deploy.sh
+sudo ./asahi-LUKS2-encrypter/bin/luks-deploy.sh
 
 # 4. Reboot, enter your passphrase, then finish up on the encrypted system:
-sudo ./asahi-luks-tooling/bin/post-encryption-setup.sh
-sudo ./asahi-luks-tooling/boot-guards/install.sh
+sudo ./asahi-LUKS2-encrypter/bin/post-encryption-setup.sh
+sudo ./asahi-LUKS2-encrypter/boot-guards/install.sh
 ```
 
 The deploy script auto-detects your disk layout and shows you what it found. You
@@ -155,6 +155,28 @@ sudo LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./bin/luks-deploy.sh   # fully 
 ```
 
 Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
+Custom parameters below half the `fast` profile (512 MiB / 4 iterations) are
+refused unless you also set `LUKS_PBKDF_ACK_WEAK=1` — a typo in the memory
+figure should not silently produce a worthless KDF.
+
+The partition menus can be pinned the same way (each pinned device is still
+fstype-checked and cross-checked against the target's own fstab, and the typed
+`ENCRYPT` confirmation still applies):
+
+```bash
+sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
+     LUKS_TARGET_EFI=/dev/nvme0n1p4 ./bin/luks-deploy.sh
+```
+
+### Recovery key
+
+During deployment the script offers to enroll a **recovery key**: 64 random hex
+characters in a second LUKS keyslot, saved to the deployment drive (pin the
+choice with `LUKS_RECOVERY_KEY=yes|no`). If the passphrase is ever forgotten,
+the recovery key still unlocks the volume — type it at the boot prompt, or use
+it as a `--key-file` from a live USB. It is enrolled *before* the header backup
+is taken, so the backup contains the slot. **Move it to secure offline storage
+after deployment** — anyone holding it can unlock the disk.
 
 **Stay on argon2id.** It is memory-hard, which is the entire point — that is what
 makes GPU and ASIC cracking expensive. Never substitute pbkdf2 to save memory or
@@ -175,8 +197,9 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 
 - **No TPM on Apple Silicon.** There is nowhere to seal a key, so you type the
   passphrase at *every* boot. That is by design, not a limitation of this tooling.
-- **Forget the passphrase and the data is gone.** There is no recovery key and no
-  backdoor. Back up the recovery bundle *and* remember the passphrase.
+- **Forget the passphrase and the data is gone** — unless you enrolled the
+  optional recovery key and can still find it. There is no backdoor. Back up the
+  recovery bundle, keep the recovery key offline, and remember the passphrase.
 - **Have a verified backup before you start.** Not "a backup" — one you have
   actually restored from or browsed. In-place re-encryption rewrites every sector
   of the root partition.
