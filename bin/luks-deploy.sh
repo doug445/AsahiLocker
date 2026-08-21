@@ -1670,8 +1670,8 @@ else
     fi
     [ -f /etc/kernel/cmdline ]  && strip_splash_tokens /etc/kernel/cmdline ''
     [ -f /etc/default/grub ]    && strip_splash_tokens /etc/default/grub '/^GRUB_CMDLINE_LINUX/'
-    mkdir -p /var/lib/asahi-luks2-encrypter
-    echo "rhgb quiet" > /var/lib/asahi-luks2-encrypter/restore-splash
+    mkdir -p /var/lib/asahilocker
+    echo "rhgb quiet" > /var/lib/asahilocker/restore-splash
     echo "[CHROOT] Splash stripped; marker written for post-encryption-setup.sh."
 fi
 
@@ -1741,7 +1741,7 @@ if command -v restorecon &>/dev/null && [ -f /etc/selinux/config ]; then
     # wrote) were created from a chroot with no SELinux policy loaded — sweep
     # all of /boot and the marker dir so nothing is left unlabeled.
     restorecon -RF /boot 2>/dev/null || true
-    restorecon -RF /var/lib/asahi-luks2-encrypter 2>/dev/null || true
+    restorecon -RF /var/lib/asahilocker 2>/dev/null || true
     # -n -v lists anything STILL mislabeled; empty output means all clean
     RELABEL_LEFT=$(restorecon -n -v /etc/crypttab /etc/fstab /etc/default/grub \
         /etc/kernel/cmdline /etc/dracut.conf.d/99-luks.conf 2>/dev/null || true)

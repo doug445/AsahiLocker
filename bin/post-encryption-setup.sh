@@ -154,7 +154,13 @@ hdr "3b. Restore boot splash (rhgb quiet) if luks-deploy stripped it"
 # luks-deploy.sh strips 'rhgb quiet' so the first LUKS passphrase prompt is
 # visible instead of hiding behind the splash, and leaves this marker so the
 # tokens come back once the encrypted system is up. Idempotent.
-SPLASH_MARKER=/var/lib/asahi-luks2-encrypter/restore-splash
+SPLASH_MARKER=/var/lib/asahilocker/restore-splash
+# Before the AsahiLocker rename (<= v1.2.0) the marker lived under the old
+# project name; honour it so a mixed-version deploy still gets its splash back.
+LEGACY_SPLASH_MARKER=/var/lib/asahi-luks2-encrypter/restore-splash
+if [ ! -f "$SPLASH_MARKER" ] && [ -f "$LEGACY_SPLASH_MARKER" ]; then
+    SPLASH_MARKER=$LEGACY_SPLASH_MARKER
+fi
 GRUBBY=/usr/sbin/grubby; [ -x "$GRUBBY" ] || GRUBBY=/usr/bin/grubby
 if [ -f "$SPLASH_MARKER" ]; then
     TOKENS=$(/usr/bin/cat "$SPLASH_MARKER" 2>/dev/null)
