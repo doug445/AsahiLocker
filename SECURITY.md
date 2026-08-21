@@ -19,7 +19,7 @@ We take the security of AsahiLocker seriously. If you discover a security vulner
 Instead, please report it privately by emailing the name and email address listed in AsahiLocker's **LICENSE** file. 
 
 **What to expect:**
-* **Acknowledgment:** You will receive an initial response to your report within 48 hours.
+* **Acknowledgment:** You will receive an initial response to your report within 72 hours.
 * **Updates:** We will keep you informed of our progress as we investigate the issue and develop a fix.
 * **Resolution:** If the vulnerability is accepted, we will address it promptly in a new release and notify you. If declined, we will provide a clear explanation of our reasoning.
 
