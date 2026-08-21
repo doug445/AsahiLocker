@@ -61,7 +61,7 @@ env save                            # persist to U-Boot env
 => bootflow select <N>       # the usb0 entry
 => bootflow info             # sanity check: it's the USB, not the NVMe
 => bootflow boot
-   # → boots Fedora Asahi live → sudo /root/asahi-LUKS2-encrypter/bin/luks-deploy.sh
+   # → boots Fedora Asahi live → sudo /root/AsahiLocker/bin/luks-deploy.sh
 ```
 
 ## Notes / gotchas
