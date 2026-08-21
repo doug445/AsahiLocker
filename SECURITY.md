@@ -16,7 +16,7 @@ Please refer to the [AsahiLocker Releases](https://github.com/doug445/AsahiLocke
 
 I take the security of AsahiLocker seriously. If you discover a security vulnerability, please do not open a public issue. 
 
-Instead, please report it privately by emailing the name and email address listed in AsahiLocker's **LICENSE** file. 
+Instead, please report it privately by emailing the report to: spilled-bowline0j@icloud.com
 
 **What to expect:**
 * **Acknowledgment:** You will receive an initial response to your report within 72 hours.
