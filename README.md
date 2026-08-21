@@ -1,4 +1,4 @@
-# asahi-LUKS2-encrypter
+# AsahiLocker
 
 Encrypt the root filesystem of an **already-installed Fedora Asahi Remix** system
 on Apple Silicon — in place, without reinstalling, without wiping macOS, and
@@ -27,18 +27,18 @@ partitions, subvolumes and boot layout are all auto-detected at runtime.
 ```bash
 # 1. On the installed system: get the kit, and build a Fedora Asahi live USB
 #    to run it from  (see docs/LIVE-USB.md — a stock Fedora ISO will NOT boot)
-git clone https://github.com/doug445/asahi-LUKS2-encrypter.git
+git clone https://github.com/doug445/AsahiLocker.git
 
 # 2. Boot the live USB. Easiest route, with the USB plugged in:
 #      sudo grub2-mkconfig -o /boot/grub2/grub.cfg    # adds it to your GRUB menu
 #    then reboot and select it.  (see docs/LIVE-USB.md for the U-Boot routes)
 
 # 3. From the live environment, encrypt the installed root:
-sudo ./asahi-LUKS2-encrypter/bin/luks-deploy.sh
+sudo ./AsahiLocker/bin/luks-deploy.sh
 
 # 4. Reboot, enter your passphrase, then finish up on the encrypted system:
-sudo ./asahi-LUKS2-encrypter/bin/post-encryption-setup.sh
-sudo ./asahi-LUKS2-encrypter/boot-guards/install.sh
+sudo ./AsahiLocker/bin/post-encryption-setup.sh
+sudo ./AsahiLocker/boot-guards/install.sh
 ```
 
 The deploy script auto-detects your disk layout and shows you what it found. You
@@ -193,7 +193,7 @@ Nothing on the target is modified.
 The deploy strips `rhgb quiet` from the boot args, because with the splash
 active the first LUKS passphrase prompt hides behind it and the boot looks
 hung. `post-encryption-setup.sh` restores both tokens after the first
-encrypted boot (via a marker in `/var/lib/asahi-luks2-encrypter/`). Opt out
+encrypted boot (via a marker in `/var/lib/asahilocker/`). Opt out
 with `LUKS_KEEP_SPLASH=1`.
 
 ### Recovery key
