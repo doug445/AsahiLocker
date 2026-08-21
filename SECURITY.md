@@ -20,7 +20,7 @@ Instead, please report it privately by emailing the name and email address liste
 
 **What to expect:**
 * **Acknowledgment:** You will receive an initial response to your report within 72 hours.
-* **Updates:** I will keep you informed of our progress as we investigate the issue and develop a fix.
+* **Updates:** I will keep you informed of my progress as I investigate the issue and develop a fix.
 * **Resolution:** If the vulnerability is accepted, I will address it promptly in a new release and notify you. If declined, I will provide a clear explanation of my reasoning.
 
 Please include as much detail as possible in your email, including steps to reproduce the vulnerability. Thank you for helping keep this project secure!
