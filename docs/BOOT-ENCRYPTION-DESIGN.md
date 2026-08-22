@@ -6,6 +6,30 @@
 > decisions are reviewable before any of it ships. Do not read any statement
 > below as a description of working behaviour.
 
+## The objective
+
+Everything encrypted except `/boot/efi` — parity with what UKI + Secure Boot
+tooling achieves on x86. `/boot/efi` is the irreducible remainder: firmware has
+to read it before anything can be unlocked, on any platform.
+
+**What this reaches, and what it does not.** Encrypting `/boot` closes the
+confidentiality gap completely — kernels, initramfs images and their embedded
+keyfile all come off the disk unreadable. It does **not** buy the integrity half
+of the x86 arrangement, and that difference is the platform's, not this
+tooling's.
+
+On x86, an unencrypted ESP is safe because the firmware refuses to execute a
+UKI that is not validly signed. Asahi verifies only m1n1 stage 1; Secure Boot is
+disabled and the platform sits in Setup Mode, so `grubaa64.efi` and the ESP stub
+remain modifiable by anyone with physical access to the machine. An attacker who
+can write to the ESP can capture the `/boot` passphrase on the next boot, and no
+KDF cost anywhere in the chain affects that. The ESP stub guard raises the noise
+floor; it is not a substitute for signature verification.
+
+So the honest statement of the goal is *full confidentiality, with boot
+integrity still bounded by what Asahi verifies*. Anything stronger waits on the
+platform.
+
 ## Why this is hard on Fedora Asahi
 
 Fedora's `grub2-efi-aa64-2.12` builds **no `argon2.mod`** for `arm64-efi`. It
