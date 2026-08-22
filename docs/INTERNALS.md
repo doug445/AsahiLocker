@@ -169,8 +169,20 @@ through cheaply, which is a far worse outcome than leaving `/boot` unencrypted.
 Keeping `/boot` out of GRUB's unlock path entirely — what this tooling does — lets
 the root volume keep full-strength argon2id.
 
-Attempting to combine the two on GRUB 2.12 reliably produces boot loops. It is
-deliberately out of scope for this tooling.
+On Fedora Asahi Remix today the combination is not merely discouraged, it is
+impossible: `grub2-efi-aa64-2.12` builds no `argon2.mod` for `arm64-efi` at all.
+`/usr/lib/grub/arm64-efi/` ships `cryptodisk.mod`, `luks.mod`, `luks2.mod` and
+`pbkdf2.mod`, and the installed `grubaa64.efi` has `cryptodisk`, `luks2` and
+`pbkdf2` baked in — so GRUB 2.12 can open a LUKS2 volume whose keyslot uses
+pbkdf2, and cannot open an argon2id one under any configuration. Upstream added
+argon2 in **2.14** (`grub-core/lib/argon2.c`; `luks2.c` parses `argon2i` and
+`argon2id`), which Fedora does not yet package.
+
+Encrypted `/boot` is therefore out of scope for the current release **as
+unsupported**, not as a known-failing configuration — no failure mode is claimed
+here, because on stock Fedora the argon2id path cannot be exercised at all until
+a GRUB carrying `argon2.mod` is in place. That is the work the note above refers
+to.
 
 What this means for your threat model: an attacker with repeated physical access
 could modify the unencrypted kernel or initramfs. LUKS here protects **data at
