@@ -187,6 +187,18 @@ ls -la ~/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
 
 - **Shell only.** Every script must pass `bash -n` and `shellcheck -S warning`;
   CI enforces both on x86_64 and aarch64.
+- **Every script carries the MIT header**, immediately after the shebang. These
+  scripts get copied onto live USBs and pulled out of the repo individually, so
+  a bare "see LICENSE" would leave a standalone copy with no terms attached.
+  Copy the block verbatim from any existing script. Check yours before opening a
+  PR:
+
+  ```bash
+  for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline \
+    extras/bin/luks-fetch-cache; do \
+    grep -q 'SPDX-License-Identifier: MIT' "$f" || echo "MISSING LICENSE: $f"; \
+  done && echo "all scripts licensed"
+  ```
 - **Match the surrounding style.** The existing scripts use explicit stage
   banners, `set -euo pipefail`, and cleanup traps that print a recovery command
   list on failure. Keep that.

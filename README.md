@@ -425,8 +425,8 @@ argon2 into a local prefix, for anyone working on the `/boot` question.
 
 MIT — see [LICENSE](LICENSE).
 
-- **Author:** [doug445](https://github.com/doug445)
+- **Author:** William MacKinnon ([doug445](https://github.com/doug445))
 - **Email:** spilled-bowline0j@icloud.com
 - **Repository:** https://github.com/doug445/AsahiLocker
 
-Copyright (c) 2026 https://github.com/doug445 [spilled-bowline0j@icloud.com]
+Copyright (c) 2026 William MacKinnon <spilled-bowline0j@icloud.com>
