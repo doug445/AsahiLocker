@@ -85,6 +85,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 |------|------------|
 | `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 12 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
 | `bin/post-encryption-setup.sh` | Run once on the newly-encrypted system. Saves a recovery bundle, creates snapper subvolumes on the encrypted volume, enables the boot guards, verifies the result. Idempotent. |
+| `bin/luks-tune.sh` | An ncurses front-end (`dialog`, falling back to `whiptail`) for inspecting and re-costing the argon2id parameters of keyslots on volumes that already exist. Shows the measured unlock time and what the cost buys against a GPU fleet before you commit, backs the header up first, and hands the passphrase prompt to `cryptsetup` rather than reading it. Never creates or destroys a keyslot, never changes a passphrase, never touches data. `--dry-run` prints the command and changes nothing. |
 | `bin/save-luks-recovery-bundle.sh` | Assembles a labeled recovery bundle (LUKS header + `crypttab`/`fstab`/`cmdline`/BLS entries + a plain-English recovery README) so you are not dependent on a second USB. |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers). |
@@ -156,8 +157,11 @@ allocatable there — and you pay its full cost as unlock latency on every boot.
 ### Choosing an argon2id profile
 
 Because you wait for it every time you start the machine, the installer asks you
-to pick one of three profiles. It **benchmarks your machine first** and shows a
-real measured estimate for each — not numbers from someone else's hardware:
+to pick one of three profiles. It **benchmarks your machine first** and shows an
+estimate for each from your own hardware, not someone else's. Above the memory
+`cryptsetup benchmark` can allocate on the spot, the figure is scaled from a
+smaller measurement rather than measured outright, and every figure shifts with
+system load — at boot the machine is idle, so real unlocks land at the fast end:
 
 ![The luks-deploy.sh KDF profile prompt, showing three argon2id profiles with unlock times benchmarked on the running machine](docs/images/kdf-profile-menu.png)
 
@@ -166,8 +170,8 @@ numbers you see will be your own.*
 
 | Profile | Memory | Iterations | Threads |
 |---------|--------|-----------|---------|
-| `aggressive` | 4 GiB | 10 | 4 |
-| `moderate` (default) | 2 GiB | 8 | 4 |
+| `aggressive` | 4 GiB | 12 | 4 |
+| `moderate` (default) | 2 GiB | 6 | 4 |
 | `fast` | 1 GiB | 4 | 4 |
 
 **All three are argon2id — none uses pbkdf2.** Memory cost only has to be
@@ -189,6 +193,231 @@ Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
 Custom parameters below half the `fast` profile (512 MiB / 4 iterations) are
 refused unless you also set `LUKS_PBKDF_ACK_WEAK=1` — a typo in the memory
 figure should not silently produce a worthless KDF.
+
+### Changing the KDF on a volume that already exists
+
+Profiles apply at **format time only**. A header keeps whatever it was built
+with, so changing a profile does nothing to a disk you already encrypted. Read
+what a volume actually uses first:
+
+```bash
+sudo cryptsetup luksDump /dev/nvme0n1p6
+```
+
+Under each keyslot you get `PBKDF:`, `Memory:` (in KiB), `Time cost:` (the
+iteration count) and `Threads:`. Every keyslot carries its own parameters — a
+passphrase slot and a keyfile slot on the same volume are commonly different.
+
+There is an ncurses front-end for all of this if you would rather not hand-type
+the parameters — it shows the measured unlock time and the strength table below
+for whatever you pick, before you commit to anything:
+
+```bash
+sudo ./bin/luks-tune.sh              # interactive
+sudo ./bin/luks-tune.sh --dry-run    # show the command, change nothing
+```
+
+To do it by hand instead, re-cost a keyslot in place **without changing the
+passphrase**:
+
+```bash
+sudo cryptsetup luksHeaderBackup /dev/nvme0n1p6 \
+     --header-backup-file ~/luks-header-before.bin
+
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+```
+
+That converts the slot your passphrase opens. Add `-S <n>` to target a specific
+slot, and repeat per slot you want re-costed. Take the header backup first and
+keep it until the new parameters are confirmed by a successful boot — a keyslot
+is the only copy of your key, wrapped.
+
+Two things that trip people up:
+
+- **`--pbkdf-force-iterations` disables cryptsetup's time benchmarking.** Left
+  off, cryptsetup auto-tunes the iteration count to land near `--iter-time`
+  (2000 ms by default). That is why a stock 4 GiB volume unlocks in about two
+  seconds while these profiles take longer — the memory figure is the same, the
+  iteration count is not.
+- **`--pbkdf-memory` is in KiB**, not MiB or GiB. 4 GiB is `4194304`.
+
+### Never use pbkdf2
+
+Not as a fallback. Not to save memory. Not to shave a second off your boot.
+`luksFormat` still accepts it and LUKS1 defaulted to it, so it is easy to end up
+with by accident — treat that as a defect to fix, not a setting to keep.
+
+pbkdf2 is not broken. It is **obsolete**, which is worse, because broken things
+get ripped out and obsolete things linger in defaults for twenty-six years.
+
+Understand what it actually is. pbkdf2 is a `for` loop. That is the entire idea:
+take something cheap, do it a great many times, and hope the attacker finds the
+repetition as tedious as you do. It was standardised in **RFC 2898, in the year
+2000**, when the threat model was a person with a computer roughly like yours.
+That assumption died the day general-purpose GPUs shipped, and pbkdf2 has had no
+answer since, because it has nothing to spend except time — and time is the one
+resource an attacker buys at a bulk discount and you pay for at retail.
+
+It has **no memory requirement at all**. None. That single omission is the whole
+catastrophe. Memory is what makes an attacker's silicon expensive; a KDF that
+asks for none is a KDF that fits thousands of copies of itself onto one graphics
+card, and asks each one for nothing but arithmetic — the exact thing that card
+was built to do ten thousand times over. argon2id at 4 GiB tells a 24 GB GPU it
+may run six guesses. pbkdf2 tells it to help itself.
+
+So you are on a treadmill, and it is rigged. Every iteration you add costs you,
+personally, at every single boot, on the hardware you already own. It costs your
+attacker nothing they cannot buy back with next year's card — and they will,
+while your boot time stays exactly where it is. You are the only participant in
+this arrangement who pays more over time. Raising pbkdf2's iteration count is
+not a defence; it is a subscription.
+
+The cryptographic community reached this conclusion publicly and unanimously
+over a decade ago. The **Password Hashing Competition ran from 2013 to 2015 for
+precisely this reason** — that what everyone was using had aged out — and
+Argon2 won it. That was eleven years ago. Every argument for pbkdf2 on a new
+volume in 2026 is an argument that has already been had, in public, and lost.
+
+Concretely, at the parameters below and against a human-chosen password: 32
+years with argon2id, **twelve days** with pbkdf2. That is not a tuning
+preference. That is the difference between a stolen laptop that keeps your life
+private and one that hands it over inside a fortnight.
+
+This tool selects argon2id and only argon2id. No profile offers pbkdf2, no
+environment variable exposes it, no menu hides it behind an "advanced" tab, and
+there is no supported configuration in which it is the right answer. If
+`luksDump` shows `PBKDF: pbkdf2` on a volume you care about, that volume is
+running on a twenty-six-year-old assumption about who is attacking it. Re-cost
+that keyslot with the `luksConvertKey` command above, today.
+
+### Your passphrase is the other half
+
+The KDF sets the price of a single guess. Your passphrase sets how many guesses
+are needed. Neither one carries the volume alone — a 4 GiB argon2id keyslot
+protecting `hunter2` falls in an afternoon, and a magnificent passphrase behind
+a cheap KDF is a lot cheaper to attack than you would like.
+
+The numbers below assume the `aggressive` profile (4 GiB, 12 iterations) and a
+well-funded attacker: **1,000 top-end GPUs, 24 GiB of VRAM each**, each running
+as many concurrent guesses as 4 GiB per guess leaves room for — about six — at
+the same per-guess cost this tool measures on your own machine. That is roughly
+550 guesses per second for the whole fleet. Times are to search half the
+keyspace, and they are orders of magnitude, not predictions.
+
+| Passphrase | Entropy | Time to break | What has happened by then |
+|---|---|---|---|
+| 6 diceware words | 77 bits | ~10^13 years | A thousand times the present age of the universe. The last red dwarfs are still burning — just. |
+| 7 diceware words | 90 bits | ~10^17 years | Star formation ended long ago. Nothing is left but cooling remnants. |
+| 8 diceware words | 103 bits | ~10^21 years | Galaxies have dynamically evaporated; the remnants drift alone in the dark. |
+| 10 diceware words | 129 bits | ~10^28 years | Approaching the era in which protons themselves may decay. |
+| 11 diceware words | 142 bits | ~10^32 years | Ordinary matter is dissolving, if protons decay at all. |
+
+For scale, the universe is about **1.4 × 10^10 years** old. Even the weakest row
+here outlives it by a factor of a thousand. This is why the argument is over
+*passphrase generation*, never over adding another symbol to a short one.
+
+#### What a weak KDF costs you — the pbkdf2 column
+
+Same fleet, same passphrases, but with the keyslot wrapped in pbkdf2 instead.
+pbkdf2 needs essentially no memory per guess, so VRAM stops limiting how many
+guesses run at once and the attacker's rate is bounded only by raw arithmetic.
+The column below assumes they get **1000× the guess rate** — deliberately
+conservative for a GPU fleet, since the real gap grows with every new card:
+
+| Passphrase | Bits | argon2id 4 GiB | pbkdf2 |
+|---|---|---|---|
+| a human-chosen password | 40 | 32 years | **12 days** |
+| a good non-diceware passphrase | 60 | 10^8 years | 10^5 years |
+| 6 diceware words | 77 | 10^13 years | 10^10 years |
+| 8 diceware words | 103 | 10^20 years | 10^17 years |
+| 10 diceware words | 129 | 10^28 years | 10^25 years |
+
+Read the bottom rows and the top row differently, because they say different
+things. At high entropy both are past cosmic time — argon2id is not what saves
+you there, your passphrase is. The KDF decides the outcome in the **top row**,
+where most real passphrases actually live: thirty-two years versus twelve days
+is the difference between a laptop that stays private and one that does not.
+
+A 1000× cheaper KDF is exactly equivalent to deleting `log2(1000) ≈ 10 bits`
+from your passphrase — near enough one whole diceware word, silently, after you
+chose it. That is the entire argument, and it is why there is no pbkdf2 option
+in this tool.
+
+#### Quantum computing
+
+Two algorithms matter, and only one of them applies here.
+
+**Shor's algorithm does not touch this.** It breaks RSA and elliptic-curve
+cryptography by exploiting their algebraic structure. LUKS uses none of that —
+AES-XTS with a 512-bit key and argon2id have no structure for Shor to attack.
+Nothing in this tool is on the "harvest now, decrypt later" list in the way a
+TLS session key or an encrypted email is.
+
+**Grover's algorithm does apply, and it halves your effective entropy.** It
+searches an unstructured keyspace in √N instead of N, so a 103-bit passphrase
+behaves like a 51-bit one against an idealised quantum attacker. Applying that
+worst case to the table above:
+
+| Passphrase | Bits | Effective vs. Grover | Time at 4 GiB argon2id |
+|---|---|---|---|
+| 6 diceware words | 77 | 38 | **11 years** |
+| 8 diceware words | 103 | 51 | 10^5 years |
+| 10 diceware words | 129 | 64 | 10^9 years |
+
+That is the case for eight words as a floor and ten or eleven for anything you
+expect to matter in thirty years. Six words is comfortable today and thin under
+a machine that does not exist yet.
+
+Two honest caveats, because this table is a ceiling and not a forecast. Grover
+requires evaluating the *entire KDF in superposition* — a fault-tolerant quantum
+computer would have to run argon2id at 4 GiB coherently, and memory-hard
+functions are about the most hostile possible target for that; nothing close to
+it is on any roadmap. Grover also parallelises badly: its speedup is sequential,
+so a thousand quantum computers do not give you a thousandfold gain the way a
+thousand GPUs do. Treat the middle column as a reason to buy entropy headroom
+while it costs you two extra words, not as a prediction that anyone will do this.
+
+**Use diceware, and generate it randomly.** The EFF long wordlist holds 7,776
+words — exactly five six-sided dice per word, `log2(7776) = 12.92` bits each.
+Roll real dice if you have them; five rolls select one word by lookup.
+
+Without dice, use a CSPRNG explicitly — do not let a shell pick for you:
+
+```bash
+# EFF long wordlist: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+shuf --random-source=/dev/urandom -n 8 eff_large_wordlist.txt | cut -f2 | paste -sd' '
+```
+
+Eight words is a sound default for a machine you use daily. Ten or eleven is
+appropriate for a volume you expect to outlive the hardware.
+
+**The rules that actually matter:**
+
+- **Generated, not chosen.** Entropy counts only if the selection was random.
+  Words you picked yourself because they were memorable carry a small fraction
+  of the bits their length suggests, because an attacker models the same
+  preferences you have.
+- **Never reused.** Not your login password, not your password manager's master
+  passphrase, not a variation on either. A keyslot passphrase that appears in
+  any breach corpus is worth zero bits regardless of its length.
+- **Length beats complexity.** `correct horse battery staple` style beats
+  `Xk7$q!2` — more entropy, and vastly easier to type correctly.
+- **Stay in plain ASCII.** You type this at a bare console before any keymap is
+  loaded, so a layout-dependent or non-ASCII character may be impossible to
+  enter at the boot prompt even though it worked when you set it. Lowercase
+  words and spaces are safe everywhere, which is a real practical argument for
+  diceware over symbol soup on a boot passphrase specifically.
+- **Watch Caps Lock.** `cryptsetup` confirms a new passphrase by asking twice,
+  so an inverted one verifies happily and fails only at the next boot. The
+  deploy script warns when the kernel reports Caps Lock on at the confirmation
+  gate.
+- **Write it down until it is memorised.** The realistic way to lose a
+  correctly-configured encrypted volume is forgetting the passphrase, not
+  someone breaking it. Paper in a safe beats a fifth backup of the header.
+  Enrol a recovery key in a second keyslot as well — see
+  [save-luks-recovery-bundle.sh](bin/save-luks-recovery-bundle.sh).
 
 The partition menus can be pinned the same way (each pinned device is still
 fstype-checked and cross-checked against the target's own fstab, and the typed
@@ -339,12 +568,14 @@ Secure Enclave, so there is nowhere to store an auto-unlock key that would still
 be safe. The KDF re-runs in the initramfs on every boot and you type the
 passphrase. That is a platform constraint, not a shortcoming of this kit.
 
-### argon2id or pbkdf2 for LUKS2?
+### Which KDF does this use, and can I change it?
 
-argon2id, always. It is *memory-hard*: cracking it requires gigabytes of RAM per
-guess, which is what makes GPU and ASIC attacks expensive. pbkdf2 is not, so it
-parallelises cheaply on a GPU. argon2id at 1 GiB is dramatically stronger than
-pbkdf2 at any iteration count. No profile here selects pbkdf2.
+argon2id, always — it is *memory-hard*, and that memory requirement is what caps
+how many guesses a GPU or ASIC can run at once. You can tune its memory,
+iteration and thread costs freely, at deploy time or on an existing volume; see
+[Changing the KDF on a volume that already exists](#changing-the-kdf-on-a-volume-that-already-exists).
+What you cannot sensibly do is swap the algorithm out — see
+[Never use pbkdf2](#never-use-pbkdf2).
 
 ### Why is `/boot` left unencrypted?
 
