@@ -1,4 +1,4 @@
-# AsahiLocker — in-place LUKS2 full-disk encryption for Fedora Asahi Remix on Apple Silicon
+# AsahiLocker — in-place LUKS2 disk encryption for Fedora Asahi Remix on Apple Silicon
 
 [![CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml/badge.svg)](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
