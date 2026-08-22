@@ -155,9 +155,12 @@ entry.
 
 Encrypting `/boot` too is a separate and much harder problem: GRUB itself would
 have to unlock the container, and GRUB is far more KDF-constrained than the
-initramfs. GRUB ≥ 2.13 supports argon2id but is capped by its own heap allocation
-at roughly 1 GiB memory cost; GRUB 2.12 — current in Fedora 44 — has no argon2
+initramfs. GRUB ≥ 2.14 supports argon2id but is capped by its own heap allocation
+at 1 GiB memory cost; GRUB 2.12 — current in Fedora 44 — has no argon2
 support at all.
+*** Note: Development is on-going to encrypt /boot partition at the max of 1GB
+argon2id memory cost. It is possible with GRUB >=2.14, but testing continues 
+presently due to the Asashi Fedora Remix complex boot operation.
 
 The answer to that is **not** to weaken the KDF. Dropping a volume to pbkdf2 to
 satisfy an old GRUB trades a memory-hard KDF for one that GPUs and ASICs chew
