@@ -121,9 +121,9 @@ fatal() { err "$@"; exit 1; }
 # THIS machine and shows a real estimated unlock time for each profile, rather
 # than quoting numbers from someone else's hardware.
 #
-#   aggressive  4 GiB  t=12   paranoid; 4 GiB is the memory ceiling an 8 GiB
-#                              Mac can hold, so the extra cost goes into
-#                              iterations rather than more memory
+#   aggressive  4 GiB  t=10   paranoid; 4 GiB is argon2id's maximum memory
+#                              cost - cryptsetup refuses anything above
+#                              4194304 KiB - so cost above it buys iterations
 #   moderate    2 GiB  t=6    balanced; the default
 #   fast        1 GiB  t=4    comfortable even on an 8 GiB M1
 #
@@ -157,7 +157,7 @@ fatal() { err "$@"; exit 1; }
 #                                       changes to the target, exit before
 #                                       the point of no return
 
-KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=12
+KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=10
 KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=6
 KDF_PROFILE_FAST_MEM=1048576;        KDF_PROFILE_FAST_ITER=4
 KDF_DEFAULT_PARALLEL=4
@@ -877,10 +877,10 @@ else
     echo "   All three are argon2id. None uses pbkdf2."
     echo "  ════════════════════════════════════════════════════════════"
     echo ""
-    printf "   1) aggressive    4 GiB, 12 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
+    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
     echo   "      Strongest. A 24 GB GPU fits only ~6 guesses at once"
-    echo   "      against this. 4 GiB is the ceiling an 8 GiB Mac can"
-    echo   "      hold, so the extra cost goes into iterations."
+    echo   "      against this. 4 GiB is argon2id's maximum memory cost,"
+    echo   "      so anything beyond it has to buy iterations instead."
     echo ""
     printf "   2) moderate      2 GiB,  6 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
     echo   "      Strong. ~12 concurrent guesses on that same GPU."
