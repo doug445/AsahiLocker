@@ -46,7 +46,7 @@ of encrypted volumes you expect.
 - `GRUB_UUIDS` tags volumes that GRUB itself must unlock (as opposed to the
   initramfs) with `(GRUB boot)`. Empty by default:
   `GRUB_UUIDS=" <uuid> " luks-fetch-cache`. Such volumes are KDF-constrained:
-  GRUB ≥ 2.13 caps argon2id memory at roughly 1 GiB, and GRUB 2.12 has no argon2
+  GRUB ≥ 2.14 caps argon2id memory at exactly 1 GiB, and GRUB 2.12 has no argon2
   support at all. Neither is a reason to drop a volume to pbkdf2 — upgrade GRUB,
   or keep the volume off GRUB's unlock path. The root volume encrypted by this
   repo is unlocked by the initramfs, so it is unaffected either way.
