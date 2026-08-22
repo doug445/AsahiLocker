@@ -323,7 +323,8 @@ systemctl --failed
 ```
 
 Then take a fresh backup, so the encrypted box has its own first snapshot with
-the new `crypttab`/`fstab`.
+the new `crypttab`/`fstab`. You have successfully installed LUKS2 root drive 
+encryption on your system. 
 
 ---
 
