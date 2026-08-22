@@ -411,10 +411,15 @@ the memory and iteration figures from the profile you chose.
 ## Contributing
 
 Bug reports and patches are welcome — open an
-[issue](https://github.com/doug445/AsahiLocker/issues) or a pull request. If you
-are reporting a failed deployment, the output of `sudo ./bin/luks-deploy.sh
---dry-run` and `sudo cryptsetup luksDump <device>` is the most useful thing to
-include. Shell changes should pass `shellcheck -S warning`, which CI enforces.
+[issue](https://github.com/doug445/AsahiLocker/issues) or a pull request.
+
+Because this tooling rewrites a live root filesystem and its bootloader, a
+description of what went wrong is rarely enough to act on.
+**[CONTRIBUTING.md](CONTRIBUTING.md)** has copy-pasteable commands for the
+things that are: a read-only diagnostic bundle, running the loopback suite and
+the CI lint checks locally, dry-running the deploy, and verifying the GRUB
+argon2 constraint on your own machine. It also covers building GRUB 2.14 with
+argon2 into a local prefix, for anyone working on the `/boot` question.
 
 ## License and contact
 
