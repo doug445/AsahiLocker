@@ -327,7 +327,7 @@ the new `crypttab`/`fstab`.
 
 ---
 
-## Uninstalling the guards
+## Uninstalling AsahiLocker (Not Recommended)
 
 ```bash
 sudo ./boot-guards/install.sh --uninstall
