@@ -198,7 +198,21 @@ cryptographically verified on Asahi.
   boot. This is a platform fact, not a configuration choice.
 - **The prompt hides behind boot text.** The passphrase prompt is frequently
   scrolled off by kernel messages. A "hung" boot is usually a waiting prompt.
-- **Unlock costs a few seconds.** argon2id at 4 GiB is deliberately expensive.
+- **Unlock time tracks memory x iterations, not memory alone.** Measured from
+  the journal on an M2 Max — the gap between systemd-cryptsetup accepting the
+  passphrase and the volume opening — argon2id at 4 GiB / 10 iterations / 4
+  threads costs **9.5 s**, consistent to +/-0.1 s across three boots. That works
+  out to ~0.24 s per GiB-pass, which puts the shipped profiles at roughly 11 s
+  (aggressive, 4 GiB x 12), 3 s (moderate, 2 GiB x 6) and 1 s (fast, 1 GiB x 4).
+  Memory size alone is cheap on modern hardware: the 4 GiB in that 9.5 s
+  accounts for about 1 s of it, and the rest is the iteration count. Do not read
+  a large `--pbkdf-memory` as a slow boot, or a small one as a speed win.
+- **Why the paranoid tier buys cost in iterations.** Per second of user wait,
+  memory is normally the better buy than iterations — it caps how many hashes an
+  attacker fits in VRAM at once, which iterations do not. But 4 GiB is already
+  half the RAM of an 8 GiB M1, the weakest machine this supports, so memory has
+  nowhere left to go. Above that ceiling iterations are the only remaining lever,
+  which is why `aggressive` is 4 GiB x 12 rather than 8 GiB x 6.
 - **You cannot brick the machine.** DFU and System Recovery always work, and macOS
   sits on separate APFS partitions this tooling never touches.
 - **16 KB pages.** Asahi kernels use a 16 KB page size; this affects nothing in the

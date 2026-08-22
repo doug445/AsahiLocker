@@ -178,7 +178,7 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Type 'MISMATCH' to override` | The BOOT or EFI partition you selected does **not** match the UUID the target's own fstab expects — you probably picked a partition belonging to a different install. | Almost always abort and re-select. Only override if you know the fstab is the thing that is wrong |
 | `Continue anyway? (yes/no)` | The BLS boot entries disagree with `/etc/fstab` about which subvolume is root. | `no` — investigate first; see [RECOVERY.md](RECOVERY.md) |
 | `Run btrfs integrity check?` | A read-only `btrfs check`. Takes 5–30 min. | **`Y`** — this is your last chance to find pre-existing corruption |
-| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and shows a measured estimate for each. All three are argon2id. | `1` aggressive (4 GiB, ~8 s), `2` moderate (2 GiB, ~4 s), `3` fast (1 GiB, ~2 s). Default is `2` |
+| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 12 iters), `2` moderate (2 GiB, 6 iters), `3` fast (1 GiB, 4 iters). Default is `2` |
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
 | `Press Enter once Caps Lock is OFF` | Only shown when the kernel reports Caps Lock on at the `ENCRYPT` gate — which is exactly what happens if you switched it on to type that all-caps word. | Turn Caps Lock off, then Enter. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt |
@@ -203,7 +203,7 @@ checkpoint:
   Arch    : aarch64
   Crypto  : cryptsetup 2.7.5
   Mode    : encrypt
-  KDF     : argon2id moderate — 2048 MiB, 8 iterations, 4 threads
+  KDF     : argon2id moderate — 2048 MiB, 6 iterations, 4 threads
 ```
 
 Confirm `ROOT` is the partition you expect and the subvolumes match your fstab.
@@ -232,7 +232,11 @@ You will be asked for your passphrase early in boot. **The prompt frequently
 scrolls behind boot log text** — if the screen looks frozen shortly after GRUB,
 it is almost certainly waiting for you. Type the passphrase and press Enter.
 
-Unlock takes a few seconds: argon2id at 4 GiB is deliberately expensive.
+How long unlock takes depends on the profile you chose, and it tracks memory
+*times* iterations — not memory alone. On an M2 Max the three profiles measure
+roughly 1 s (fast), 3 s (moderate) and 11 s (aggressive). A 1 GiB argon2id unlock
+is not a slow unlock on any machine you would still boot; the multi-second
+figures come mostly from the stacked iteration count, not the gigabytes.
 
 If it does not boot, do not panic — nothing is lost yet. Go to
 **[RECOVERY.md](RECOVERY.md)**.
