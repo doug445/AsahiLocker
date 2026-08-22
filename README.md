@@ -1,4 +1,9 @@
-# AsahiLocker
+# AsahiLocker — in-place LUKS2 full-disk encryption for Fedora Asahi Remix on Apple Silicon
+
+[![CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml/badge.svg)](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon%20(M1--M4)-lightgrey.svg)](#requirements)
+[![KDF: argon2id](https://img.shields.io/badge/KDF-argon2id-blue.svg)](#crypto-parameters--aes-256-xts-and-argon2id)
 
 Encrypt the root filesystem of an **already-installed Fedora Asahi Remix** system
 on Apple Silicon — in place, without reinstalling, without wiping macOS, and
@@ -18,7 +23,7 @@ partitions, subvolumes and boot layout are all auto-detected at runtime.
 
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
-> verified backup. See [Risks](#risks-read-this).
+> verified backup. See [Risks](#risks--read-this).
 
 ---
 
@@ -49,6 +54,31 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 ---
 
+## What you get
+
+- **In-place btrfs → LUKS2 conversion.** No reinstall, no backup-and-restore
+  round trip, no second disk. Subvolumes, snapshots and the btrfs UUID survive.
+- **Pinned argon2id, never pbkdf2.** AES-256-XTS with argon2id at 4 / 2 / 1 GiB
+  memory cost — memory-hard by design, so GPU and ASIC cracking stays expensive.
+- **Benchmarked on *your* machine.** The installer measures your hardware and
+  shows real unlock-latency estimates before you pick a KDF profile.
+- **Every boot file rewritten, then verified.** `crypttab`, `fstab`,
+  `/etc/kernel/cmdline`, GRUB defaults, all BLS entries, dracut config and all
+  initramfs images — behind a 12-point gate that refuses to let you reboot into
+  a broken system.
+- **Resumable after any interruption.** LUKS2 re-encryption is journaled with
+  checksum resilience; re-run the script and it detects the interrupted state
+  and finishes it.
+- **A `--dry-run` that really is dry.** The entire read-only half, including the
+  exact `cryptsetup reencrypt` invocation it would issue, with nothing modified.
+- **Recovery you can actually use.** Optional 64-hex recovery key in a second
+  keyslot, plus a labeled bundle with the LUKS header and every changed config.
+- **Asahi-specific boot guards.** Stops a stray `grub2-mkconfig` from bricking
+  an encrypted boot, and clears U-Boot's stale EFI entries.
+- **Tested in CI on every push**, x86_64 and aarch64, against a real loop device.
+
+---
+
 ## What's in here
 
 | Path | What it is |
@@ -64,7 +94,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 ---
 
-## How the encrypted boot actually works
+## How the encrypted boot actually works on Apple Silicon
 
 ```
 iBoot → m1n1 stage 1 → m1n1 stage 2 → U-Boot → shim → GRUB → Linux
@@ -88,7 +118,7 @@ initramfs images. The encrypted root is unlocked by the *initramfs*, not by
 GRUB. `/boot` encryption is deliberately out of scope — see
 [docs/INTERNALS.md](docs/INTERNALS.md#why-boot-stays-unencrypted).
 
-### Layout, before and after
+### Partition layout, before and after
 
 ```
 nvme0n1
@@ -105,7 +135,7 @@ Partition *numbers* are auto-detected; this is just the common Asahi shape.
 
 ---
 
-## Crypto parameters
+## Crypto parameters — AES-256-XTS and argon2id
 
 Pinned explicitly rather than left to `cryptsetup`'s auto-benchmark, so every box
 you deploy to ends up identical instead of picking a machine-dependent memory
@@ -123,7 +153,7 @@ cost and sha256.
 The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
 allocatable there — and you pay its full cost as unlock latency on every boot.
 
-### Choosing a profile
+### Choosing an argon2id profile
 
 Because you wait for it every time you start the machine, the installer asks you
 to pick one of three profiles. It **benchmarks your machine first** and shows a
@@ -221,6 +251,29 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 
 ---
 
+## How this differs from encrypting by hand
+
+The manual route — `cryptsetup reencrypt` followed by editing `crypttab`,
+`fstab`, the kernel cmdline, GRUB defaults and the BLS entries yourself — works,
+and there are guides for it. What this kit adds is the part those guides leave
+to you:
+
+| | Manual `cryptsetup reencrypt` | AsahiLocker |
+|---|---|---|
+| Partition selection | You identify root/boot/EFI yourself | Auto-detected, fstype-checked, and cross-checked against the target's own fstab |
+| KDF parameters | `cryptsetup` auto-benchmarks — machine-dependent, and picks sha256 | Pinned argon2id + sha512, identical on every box, chosen from a menu benchmarked on your hardware |
+| Boot config | You edit `crypttab`, `fstab`, cmdline, GRUB defaults and every BLS entry by hand | All rewritten, including *every* BLS entry and *every* initramfs image |
+| Did it work? | You find out at reboot | 12-point verification gate refuses the reboot until it passes |
+| Interrupted run | You debug the header state yourself | Detected and resumed automatically; `cryptsetup repair` path handled |
+| SELinux | Relabel it yourself or boot to AVC denials | Relabelled and verified |
+| Undo / recovery | Whatever you thought to save | Header backups plus a labeled bundle of every changed file |
+| The Asahi footguns | `grub2-mkconfig` clobbering the ESP stub; stale U-Boot EFI entries | Boot guards install to prevent both |
+
+If you want to understand what it changes before trusting it, `--dry-run` prints
+every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
+
+---
+
 ## Risks — read this
 
 - **No TPM on Apple Silicon.** There is nowhere to seal a key, so you type the
@@ -264,6 +317,84 @@ the boot guards and U-Boot documentation are Asahi-specific.
 
 ---
 
+## Frequently asked questions
+
+### Can I encrypt Fedora Asahi Remix *after* installing it?
+
+Yes — that is exactly what this is for. The Asahi installer has no full-disk
+encryption option, so encrypting normally means starting over. `luks-deploy.sh`
+converts the existing btrfs root in place instead, so your installed system,
+subvolumes, snapshots and btrfs UUID all survive.
+
+### Does this touch or wipe macOS?
+
+No. macOS lives on separate APFS partitions that this tooling never reads or
+writes. Only the btrfs Linux root partition is converted. Apple Silicon DFU and
+System Recovery remain available regardless.
+
+### Why do I have to type a passphrase at every boot? Can't it use the Secure Enclave?
+
+There is no TPM on Apple Silicon, and Asahi has no interface to seal a key in the
+Secure Enclave, so there is nowhere to store an auto-unlock key that would still
+be safe. The KDF re-runs in the initramfs on every boot and you type the
+passphrase. That is a platform constraint, not a shortcoming of this kit.
+
+### argon2id or pbkdf2 for LUKS2?
+
+argon2id, always. It is *memory-hard*: cracking it requires gigabytes of RAM per
+guess, which is what makes GPU and ASIC attacks expensive. pbkdf2 is not, so it
+parallelises cheaply on a GPU. argon2id at 1 GiB is dramatically stronger than
+pbkdf2 at any iteration count. No profile here selects pbkdf2.
+
+### Why is `/boot` left unencrypted?
+
+GRUB has to read the kernel and initramfs before anything is unlocked. The
+encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
+plain avoids putting GRUB on the unlock path at all — where it would be capped
+by its own heap (roughly 1 GiB argon2id memory cost on GRUB ≥ 2.13, and no
+argon2 support at all in GRUB 2.12, which is current in Fedora 44). The trade-off
+is that `/boot` is unsigned; see [Risks](#risks--read-this).
+
+### What happens if the encryption is interrupted — power loss, a crash, a closed lid?
+
+Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run
+`luks-deploy.sh` and it detects the interrupted state and resumes it
+(`--resume-only`), running `cryptsetup repair` first if the journal is dirty.
+That exact sequence — including a hard kill mid-reencrypt — is what the CI
+loopback test exercises on every push.
+
+### Can I run it unattended across several machines?
+
+Yes. `LUKS_PROFILE` or the `LUKS_PBKDF_*` variables pin the KDF,
+`LUKS_TARGET_ROOT` / `_BOOT` / `_EFI` pin the partitions, and
+`LUKS_PASSPHRASE_FILE` supplies the passphrase, so no menu appears. Read
+[docs/FLEET.md](docs/FLEET.md) first — there is a real UUID-uniqueness footgun
+when imaging several boxes from one source.
+
+### Will this work on an M1 with only 8 GB of RAM?
+
+Yes, on any profile including `aggressive` at 4 GiB. The memory cost only has to
+be allocatable in the initramfs, which has the machine entirely to itself. A base
+M1 is slower than an M2 Max at identical parameters because argon2id is
+memory-bandwidth-bound — which is why the installer benchmarks your machine
+instead of quoting someone else's numbers.
+
+### Does it work on anything other than Asahi?
+
+The core script also runs on Fedora x86_64, Arch and Manjaro with btrfs roots.
+The boot guards and the U-Boot documentation are Apple-Silicon-specific.
+
+### How do I check what I actually ended up with?
+
+```bash
+sudo cryptsetup luksDump /dev/nvme0n1p6
+```
+
+Look for `Cipher: aes-xts-plain64`, a 512-bit key, and `PBKDF: argon2id` with
+the memory and iteration figures from the profile you chose.
+
+---
+
 ## Documentation
 
 | Doc | Covers |
@@ -275,6 +406,22 @@ the boot guards and U-Boot documentation are Asahi-specific.
 | [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 12-point gate, self-repair, why `/boot` stays plain |
 | [FLEET.md](docs/FLEET.md) | Deploying across several M-series boxes, and the UUID-uniqueness footgun |
 
-## License
+---
+
+## Contributing
+
+Bug reports and patches are welcome — open an
+[issue](https://github.com/doug445/AsahiLocker/issues) or a pull request. If you
+are reporting a failed deployment, the output of `sudo ./bin/luks-deploy.sh
+--dry-run` and `sudo cryptsetup luksDump <device>` is the most useful thing to
+include. Shell changes should pass `shellcheck -S warning`, which CI enforces.
+
+## License and contact
 
 MIT — see [LICENSE](LICENSE).
+
+- **Author:** [doug445](https://github.com/doug445)
+- **Email:** spilled-bowline0j@icloud.com
+- **Repository:** https://github.com/doug445/AsahiLocker
+
+Copyright (c) 2026 https://github.com/doug445 [spilled-bowline0j@icloud.com]
