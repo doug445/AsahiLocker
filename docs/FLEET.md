@@ -89,7 +89,7 @@ For unattended fleet runs, select the profile non-interactively so no box waits
 at the menu — and record which box got which profile:
 
 ```bash
-sudo LUKS_PROFILE=aggressive ./bin/luks-deploy.sh   # 4 GiB, t=12
+sudo LUKS_PROFILE=aggressive ./bin/luks-deploy.sh   # 4 GiB, t=10
 sudo LUKS_PROFILE=moderate   ./bin/luks-deploy.sh   # 2 GiB, t=6
 sudo LUKS_PROFILE=fast       ./bin/luks-deploy.sh   # 1 GiB, t=4
 ```
