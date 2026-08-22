@@ -7,14 +7,15 @@ Please refer to the [AsahiLocker Releases](https://github.com/doug445/AsahiLocke
 | Version | Supported          |
 | ------- | ------------------ |
 | 1.2.x   | :white_check_mark: |
-| < 1.1.4 | :x:                |
-| < 0.9.9 | :x:                |
+| 1.1.x   | :x:                |
+| 1.0.x   | :x:                |
 
-*(Note: Adjust the version numbers in the table above to match your actual repository tags.)*
+Only the latest release receives fixes. If you are running an older tag, update
+before reporting — the issue may already be fixed.
 
 ## Reporting a Vulnerability
 
-I take the security of AsahiLocker seriously. If you discover a security vulnerability, please do not open a public issue. 
+I take the security of AsahiLocker seriously. If you discover a security vulnerability, please do not open a public issue.
 
 Instead, please report it privately by emailing the report to: spilled-bowline0j@icloud.com
 
