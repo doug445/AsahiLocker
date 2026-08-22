@@ -61,7 +61,7 @@ FLOOR_MEM_KIB=524288    # 512 MiB
 FLOOR_ITER=4
 
 # ─── Profiles (mirrors luks-deploy.sh; memory in KiB) ────────────────────────
-P_AGGRESSIVE_MEM=4194304; P_AGGRESSIVE_ITER=12
+P_AGGRESSIVE_MEM=4194304; P_AGGRESSIVE_ITER=10
 P_MODERATE_MEM=2097152;   P_MODERATE_ITER=6
 P_FAST_MEM=1048576;       P_FAST_ITER=4
 P_PARALLEL=4
@@ -156,9 +156,9 @@ CHOICE=$(ui --title "New argon2id cost for slot $SLOT" --menu \
 "Memory cost is the thing an attacker cannot buy their way around.
 argon2id needs its full memory for EVERY guess, so a 24 GB GPU that
 would run thousands of guesses at once against a weak KDF gets ~6
-against 4 GiB. More memory is strictly stronger. Iterations raise
-the price further once memory hits your hardware ceiling." 20 74 5 \
-    aggressive "4 GiB x 12  strongest — ~6 guesses at once on a 24 GB GPU" \
+against 4 GiB. More memory is strictly stronger, but 4 GiB is
+argon2id's maximum, so past it only iterations raise the price." 20 74 5 \
+    aggressive "4 GiB x 10  strongest — ~6 guesses at once on a 24 GB GPU" \
     moderate   "2 GiB x  6  strong    — ~12 at once on that same GPU" \
     fast       "1 GiB x  4  still memory-hard — ~24 at once" \
     custom     "set memory / iterations / threads yourself" \

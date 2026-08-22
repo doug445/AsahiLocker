@@ -170,7 +170,7 @@ numbers you see will be your own.*
 
 | Profile | Memory | Iterations | Threads |
 |---------|--------|-----------|---------|
-| `aggressive` | 4 GiB | 12 | 4 |
+| `aggressive` | 4 GiB | 10 | 4 |
 | `moderate` (default) | 2 GiB | 6 | 4 |
 | `fast` | 1 GiB | 4 | 4 |
 
@@ -299,18 +299,18 @@ are needed. Neither one carries the volume alone — a 4 GiB argon2id keyslot
 protecting `hunter2` falls in an afternoon, and a magnificent passphrase behind
 a cheap KDF is a lot cheaper to attack than you would like.
 
-The numbers below assume the `aggressive` profile (4 GiB, 12 iterations) and a
+The numbers below assume the `aggressive` profile (4 GiB, 10 iterations) and a
 well-funded attacker: **1,000 top-end GPUs, 24 GiB of VRAM each**, each running
 as many concurrent guesses as 4 GiB per guess leaves room for — about six — at
 the same per-guess cost this tool measures on your own machine. That is roughly
-550 guesses per second for the whole fleet. Times are to search half the
+630 guesses per second for the whole fleet. Times are to search half the
 keyspace, and they are orders of magnitude, not predictions.
 
 | Passphrase | Entropy | Time to break | What has happened by then |
 |---|---|---|---|
 | 6 diceware words | 77 bits | ~10^13 years | A thousand times the present age of the universe. The last red dwarfs are still burning — just. |
-| 7 diceware words | 90 bits | ~10^17 years | Star formation ended long ago. Nothing is left but cooling remnants. |
-| 8 diceware words | 103 bits | ~10^21 years | Galaxies have dynamically evaporated; the remnants drift alone in the dark. |
+| 7 diceware words | 90 bits | ~10^16 years | Star formation ended long ago. Nothing is left but cooling remnants. |
+| 8 diceware words | 103 bits | ~10^20 years | Galaxies have dynamically evaporated; the remnants drift alone in the dark. |
 | 10 diceware words | 129 bits | ~10^28 years | Approaching the era in which protons themselves may decay. |
 | 11 diceware words | 142 bits | ~10^32 years | Ordinary matter is dissolving, if protons decay at all. |
 
@@ -328,8 +328,8 @@ conservative for a GPU fleet, since the real gap grows with every new card:
 
 | Passphrase | Bits | argon2id 4 GiB | pbkdf2 |
 |---|---|---|---|
-| a human-chosen password | 40 | 32 years | **12 days** |
-| a good non-diceware passphrase | 60 | 10^8 years | 10^5 years |
+| a human-chosen password | 40 | 28 years | **10 days** |
+| a good non-diceware passphrase | 60 | 10^7 years | 10^4 years |
 | 6 diceware words | 77 | 10^13 years | 10^10 years |
 | 8 diceware words | 103 | 10^20 years | 10^17 years |
 | 10 diceware words | 129 | 10^28 years | 10^25 years |
@@ -337,7 +337,7 @@ conservative for a GPU fleet, since the real gap grows with every new card:
 Read the bottom rows and the top row differently, because they say different
 things. At high entropy both are past cosmic time — argon2id is not what saves
 you there, your passphrase is. The KDF decides the outcome in the **top row**,
-where most real passphrases actually live: thirty-two years versus twelve days
+where most real passphrases actually live: twenty-eight years versus ten days
 is the difference between a laptop that stays private and one that does not.
 
 A 1000× cheaper KDF is exactly equivalent to deleting `log2(1000) ≈ 10 bits`
@@ -362,7 +362,7 @@ worst case to the table above:
 
 | Passphrase | Bits | Effective vs. Grover | Time at 4 GiB argon2id |
 |---|---|---|---|
-| 6 diceware words | 77 | 38 | **11 years** |
+| 6 diceware words | 77 | 38 | **10 years** |
 | 8 diceware words | 103 | 51 | 10^5 years |
 | 10 diceware words | 129 | 64 | 10^9 years |
 
