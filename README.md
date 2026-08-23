@@ -721,8 +721,8 @@ to change it, moving up to `paranoid` buys you the largest factor still
 available, though the row above shows how little that is compared with simply
 adding words.
 
-Prefer a menu to typing parameters? [`bin/luks-tune.sh`](bin/luks-tune.sh) does
-all of the above interactively, shows the measured unlock time and this same
+Prefer a menu to typing parameters? [`bin/luks-tune.sh`](bin/luks-tune.sh)
+offers all four tiers above plus a custom option, interactively. It shows the measured unlock time and this same
 strength table for whatever you pick before you commit, and takes the header
 backup for you.
 
