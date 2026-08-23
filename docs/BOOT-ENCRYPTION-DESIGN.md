@@ -42,31 +42,72 @@ Dropping `/boot` to pbkdf2 to satisfy the stock GRUB is not an acceptable
 answer here; see [INTERNALS.md](INTERNALS.md). So encrypted `/boot` requires
 shipping a GRUB that the distro does not yet provide.
 
-## KDF ceiling for `/boot`
+## KDF ceiling for `/boot` — 1 GiB, absolutely
 
-**`/boot` gets argon2id at 1 GiB.** That is GRUB's ceiling, confirmed in
-production on Manjaro, Linux Mint and Fedora x86 — GRUB will not go above it.
+> ### THE RULE
+>
+> **A GRUB-unlocked volume gets argon2id at 1 GiB. Never more. Not "prefer
+> less", not "1 GiB is recommended" — 1 GiB is the hard ceiling and there is
+> no configuration in which exceeding it is correct.**
+>
+> This applies to `/boot` and to any other volume GRUB itself must open. It
+> does **not** apply to root, which is opened by the initramfs.
 
-This is a *different figure from the root volume's* and the two do not transfer.
-Root runs argon2id at up to 4 GiB because the **initramfs** derives that key, in
-full userspace with no such constraint, and it is fast on Apple Silicon. `/boot`
-is derived by **GRUB**, which is a far more limited environment.
+1 GiB is confirmed in production on Manjaro, Linux Mint and Fedora x86. GRUB
+will not go above it.
 
-Two things remain to confirm on this platform specifically, because the x86
-systems above run standard UEFI firmware while Asahi runs U-Boot's EFI
-implementation:
+### Why nothing above 1 GiB is acceptable
 
-1. Whether 1 GiB is reachable under U-Boot at all. GRUB's EFI heap starts at
-   32 MiB (`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand via
-   `grub_efi_mm_add_regions`; nobody has measured whether it gets to 1 GiB here.
-2. Whether a failure is clean. A hang at the passphrase prompt is a much worse
-   user experience than an error, and would force a more conservative default.
+Two separate failure modes, and both land at the worst possible moment — at the
+boot prompt, on the volume that holds your kernel, before any recovery tooling
+exists.
 
-**Never configure a GRUB-unlocked volume at or near 4 GiB.** In `argon2_init`
-(`grub-core/lib/libgcrypt-grub/cipher/kdf.c`), `xtrymalloc (1024 * memory_blocks)`
-computes in 32-bit unsigned arithmetic, so at exactly 4 GiB the product is 2^32
-and wraps to **0** — an integer overflow that yields `xtrymalloc(0)` rather than
-a clean rejection.
+**1. Integer overflow at exactly 4 GiB.** In `argon2_init`
+(`grub-core/lib/libgcrypt-grub/cipher/kdf.c`), the allocation is
+
+```c
+xtrymalloc (1024 * memory_blocks)
+```
+
+`memory_blocks` is `unsigned int`, so this is 32-bit unsigned arithmetic. At
+exactly 4 GiB, `1024 * 4194304 == 2^32`, which wraps to **0**. GRUB then calls
+`xtrymalloc(0)` — it does not reject the parameters, it does not report that the
+memory cost is unsupported, it asks the allocator for nothing and proceeds from
+there. A clean rejection would be recoverable. This is not a clean rejection.
+
+**2. Allocation failure anywhere above 1 GiB.** GRUB is a memory-constrained
+environment: its EFI heap starts at 32 MiB (`DEFAULT_HEAP_SIZE 0x2000000`) and
+grows on demand through `grub_efi_mm_add_regions`. Asking it for more than
+1 GiB is, at best, untested; realistically it fails to allocate, and a failure
+here means **the device does not boot**. Whether the failure is a clean error or
+a silent hang at the passphrase prompt is itself unverified — a hang is a far
+worse outcome than an error, and there is no reason to find out on a real
+machine.
+
+Note the practical consequence: a volume configured this way is not merely slow
+or weakly protected. It is a volume GRUB cannot open, holding the kernel needed
+to boot the system, and the only way back in is external recovery media.
+
+### Why root is different
+
+Root runs argon2id at up to 4 GiB because the **initramfs** derives that key —
+full userspace, no allocator constraint, and fast on Apple Silicon. These two
+figures are not interchangeable and must never be copied from one volume to the
+other. `/boot` is derived by GRUB. GRUB is not userspace.
+
+### Still to confirm on this platform
+
+The x86 systems above run standard UEFI firmware; Asahi runs U-Boot's EFI
+implementation. So even the 1 GiB figure needs confirming here:
+
+1. Whether 1 GiB is reachable under U-Boot at all. Nobody has measured whether
+   GRUB's heap gets there on this hardware.
+2. Whether a failure is clean. A hang at the passphrase prompt would force a
+   more conservative default than 1 GiB — never a more generous one.
+
+The allocation probe exists to answer exactly these two questions, and it
+deliberately tests 512 MiB and 1024 MiB only. **It must never be pointed at
+4096**: per the overflow above, that path does not produce a usable answer.
 
 ## Unlock architecture — decided
 
