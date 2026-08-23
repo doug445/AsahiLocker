@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="docs/images/asahilocker-logo.jpg"
+       alt="AsahiLocker logo: a faceted pink and silver polyhedron bearing the Fedora mark and the Asahi Linux 'A', standing on a dark angular platform lit with magenta and blue neon"
+       width="820">
+</p>
+
 # AsahiLocker — in-place LUKS2 disk encryption for Fedora Asahi Remix on Apple Silicon
 
 [![CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml/badge.svg)](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)
