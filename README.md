@@ -624,6 +624,108 @@ sudo cryptsetup luksDump /dev/nvme0n1p6
 Look for `Cipher: aes-xts-plain64`, a 512-bit key, and `PBKDF: argon2id` with
 the memory and iteration figures from the profile you chose.
 
+### Changing your KDF after installation
+
+You are not stuck with the profile you picked. `luksConvertKey` re-wraps a
+keyslot's key under new argon2id parameters **in place** — it does not change
+your passphrase, does not re-encrypt anything, and does not touch a single byte
+of filesystem data. It takes seconds.
+
+Back the header up first, and keep the backup until a successful boot confirms
+the new parameters:
+
+```bash
+sudo cryptsetup luksHeaderBackup /dev/nvme0n1p6 \
+     --header-backup-file ~/luks-header-before.bin
+```
+
+Then pick a tier. Each command converts the keyslot your passphrase opens; add
+`-S <n>` to target a specific slot, and repeat per slot you want re-costed.
+
+```bash
+# fast — 1 GiB, 4 iterations          (~1 s unlock on an M2 Max)
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 1048576 --pbkdf-force-iterations 4 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# moderate — 2 GiB, 6 iterations      (~3 s)   ← the shipped default
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 2097152 --pbkdf-force-iterations 6 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# paranoid — 4 GiB, 12 iterations     (~11.4 s)
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+```
+
+`--pbkdf-memory` is in **KiB**, and 4194304 is the hard maximum — `cryptsetup`
+refuses anything above it. Past that ceiling only the iteration count can raise
+the cost, which is the entire difference between `aggressive` and `paranoid`.
+
+#### What `paranoid` actually buys you
+
+Paired with a properly generated passphrase, it takes offline brute force off
+the table completely — not "makes it hard", removes it as an avenue. Against a
+fleet of a thousand top-end GPUs, each running the six concurrent guesses that
+4 GiB per guess allows, at the per-guess cost measured on real hardware:
+
+```
+                                  time to search half the keyspace
+                                  (log scale — each block ≈ 1.5 orders of magnitude)
+
+ weak / reused password  ~30 bit  ▏                          12 days
+ human-chosen "strong"   ~40 bit  █                          33 years
+ 6 diceware words         77 bit  ████████                   10^13 years
+ 8 diceware words        103 bit  ██████████████             10^20 years
+ 10 diceware words       129 bit  ███████████████████        10^28 years
+ 12 diceware words       155 bit  ████████████████████████   10^36 years
+
+ the universe is         ~10^10 years old  ────────┤ everything below this line
+                                                     already outlives it
+```
+
+No budget closes that gap. Money buys an attacker hardware, and hardware scales
+the cost *linearly* while your passphrase scales the keyspace *exponentially* —
+adding two diceware words costs you four seconds of typing and multiplies their
+work by roughly seven million. A national intelligence service with an unlimited
+budget is in exactly the same position as a laptop thief, several dozen orders
+of magnitude short, and no appropriation changes the arithmetic.
+
+**Which is precisely why nobody capable would try.** An adversary at that level
+does not brute-force argon2id; they go around it. They take the passphrase from
+you, or from a keylogger, or from a camera above your desk. They image the
+machine while it is running, where the key sits in RAM. They find the backup you
+made to an unencrypted disk. Set your KDF so that brute force is hopeless — it
+already is, at every tier here — and then spend your remaining attention on the
+attacks that actually work. See [Risks](#risks--read-this).
+
+That top row is the one to look at twice. At ~30 bits, `paranoid` buys you
+twelve days. **The KDF cannot rescue a weak passphrase, and no tier on this page
+tries to pretend otherwise** — see
+[Your passphrase is the other half](#your-passphrase-is-the-other-half).
+
+#### Using the graph to choose
+
+Read it in both directions. If your passphrase is 8 diceware words or better,
+every tier already puts you past 10^13 years, so dropping to `fast` costs you
+nothing that matters and saves eight seconds at every single boot — a real,
+daily saving against a difference measured in orders of magnitude you will never
+reach. If your passphrase is shorter than you would like and you are not ready
+to change it, moving up to `paranoid` buys you the largest factor still
+available, though the row above shows how little that is compared with simply
+adding words.
+
+Prefer a menu to typing parameters? [`bin/luks-tune.sh`](bin/luks-tune.sh) does
+all of the above interactively, shows the measured unlock time and this same
+strength table for whatever you pick before you commit, and takes the header
+backup for you.
+
 ---
 
 ## Documentation
