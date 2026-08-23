@@ -54,12 +54,34 @@
 # Usage:
 #   sudo ./bin/luks-tune.sh              # interactive
 #   sudo ./bin/luks-tune.sh --dry-run    # show the command, change nothing
+#   ./bin/luks-tune.sh --help            # this text; needs no root, no dialog
+#
+# There are no other options. An unrecognised one is rejected rather than
+# ignored: silently dropping a mistyped --dry-run would convert a keyslot for
+# real while you believed nothing was being written.
 # ============================================================================
 
 set -euo pipefail
 
+# ─── Argument guard ──────────────────────────────────────────────────────────
+# Parsed before everything else so --help works without root, without dialog
+# installed, and without probing any device. Unknown options are refused: the
+# dangerous case is a mistyped --dry-run being ignored, which would re-cost a
+# keyslot for real while the caller believed it was a rehearsal.
+usage() { sed -n '/^# An ncurses front-end/,/^# =\{20,\}/p' "$0" | sed -e '$d' -e 's/^# \?//'; }
+
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            printf 'luks-tune.sh: unknown option: %s\n' "$arg" >&2
+            printf 'Try: luks-tune.sh --help\n' >&2
+            exit 2
+            ;;
+    esac
+done
 
 # ─── Safety floor (mirrors luks-deploy.sh) ───────────────────────────────────
 FLOOR_MEM_KIB=524288    # 512 MiB
