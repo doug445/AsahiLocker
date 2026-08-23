@@ -472,11 +472,18 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 
 > **Note on GRUB and argon2id:** none of this constrains the root volume, because
 > GRUB never unlocks it — the initramfs does. It only matters if you have some
-> *other* volume that GRUB itself must unlock: GRUB ≥ 2.14 does argon2id but is
-> capped by its own heap at 1 GiB memory cost, and GRUB 2.12 (current in
-> Fedora 44) has no argon2 support at all. Do not answer that by downgrading the
-> volume to pbkdf2 — argon2id at 1 GiB is memory-hard, pbkdf2 is not, and the gap
-> matters far more than the memory cost does.
+> *other* volume that GRUB itself must unlock.
+>
+> For those volumes: **1 GiB of argon2id memory is a hard ceiling — never
+> exceed it.** GRUB ≥ 2.14 does argon2id, but GRUB is a memory-constrained
+> environment and an allocation failure there means the machine does not boot.
+> At exactly 4 GiB it is worse: a 32-bit overflow in GRUB's `argon2_init` wraps
+> the allocation size to zero, so it proceeds instead of rejecting the
+> parameters. GRUB 2.12 (current in Fedora 44) has no argon2 support at all.
+>
+> Do not answer any of that by downgrading the volume to pbkdf2 — argon2id at
+> 1 GiB is memory-hard, pbkdf2 is not, and the gap matters far more than the
+> memory cost does.
 
 ---
 
@@ -581,10 +588,14 @@ What you cannot sensibly do is swap the algorithm out — see
 
 GRUB has to read the kernel and initramfs before anything is unlocked. The
 encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
-plain avoids putting GRUB on the unlock path at all — where it would be capped
-by its own heap (1 GiB argon2id memory cost on GRUB ≥ 2.14, and no
-argon2 support at all in GRUB 2.12, which is current in Fedora 44). The trade-off
-is that `/boot` is unsigned; see [Risks](#risks--read-this).
+plain avoids putting GRUB on the unlock path at all — where it is limited by its
+own heap to **1 GiB of argon2id memory, a hard ceiling that must never be
+exceeded**, and where GRUB 2.12 (current in Fedora 44) has no argon2 support
+whatsoever. Going above 1 GiB there does not mean a slow boot, it means no boot:
+GRUB fails to allocate, and at exactly 4 GiB a 32-bit overflow in its
+`argon2_init` wraps the allocation to zero so it proceeds instead of rejecting
+the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
+see [Risks](#risks--read-this).
 
 ### What happens if the encryption is interrupted — power loss, a crash, a closed lid?
 

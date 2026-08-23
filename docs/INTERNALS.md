@@ -155,13 +155,32 @@ entry.
 
 Encrypting `/boot` too is a separate and much harder problem: GRUB itself would
 have to unlock the container, and GRUB is far more KDF-constrained than the
-initramfs. GRUB ≥ 2.14 supports argon2id but is capped by its own heap allocation
-at 1 GiB memory cost; GRUB 2.12 — current in Fedora 44 — has no argon2
-support at all.
+initramfs. GRUB ≥ 2.14 supports argon2id; GRUB 2.12 — current in Fedora 44 —
+has no argon2 support at all.
 
-> **Note:** work is on-going to encrypt `/boot` at GRUB's 1 GiB argon2id ceiling.
-> It is possible with GRUB ≥ 2.14, but testing continues because of the
-> complexity of the Fedora Asahi Remix boot chain.
+> ### 1 GiB is a hard ceiling for any GRUB-unlocked volume
+>
+> **Never configure a volume GRUB must open with more than 1 GiB of argon2id
+> memory. Ever.** This is not a performance recommendation, it is a
+> do-not-cross line, and it applies only to volumes GRUB unlocks — never to
+> root, which the initramfs opens at up to 4 GiB.
+>
+> GRUB is memory-constrained: its EFI heap starts at 32 MiB
+> (`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand. Above 1 GiB the
+> allocation is untested at best and fails in practice, and the failure lands
+> at the boot prompt on the volume holding your kernel — the device does not
+> boot, and the way back in is external recovery media.
+>
+> At **exactly 4 GiB it is worse than a failure**. In `argon2_init`
+> (`grub-core/lib/libgcrypt-grub/cipher/kdf.c`), `xtrymalloc (1024 *
+> memory_blocks)` is 32-bit unsigned arithmetic; `1024 * 4194304 == 2^32`
+> wraps to **0**, so GRUB calls `xtrymalloc(0)` and carries on rather than
+> rejecting the parameters cleanly. Copying the root volume's 4 GiB figure
+> onto a GRUB-unlocked volume walks directly into this.
+
+> **Note:** work is on-going to encrypt `/boot` at that 1 GiB ceiling. It is
+> possible with GRUB ≥ 2.14, but testing continues because of the complexity of
+> the Fedora Asahi Remix boot chain.
 
 The answer to that is **not** to weaken the KDF. Dropping a volume to pbkdf2 to
 satisfy an old GRUB trades a memory-hard KDF for one that GPUs and ASICs chew
