@@ -244,7 +244,7 @@ Two things that trip people up:
 
 - **`--pbkdf-force-iterations` disables cryptsetup's time benchmarking.** Left
   off, cryptsetup auto-tunes the iteration count to land near `--iter-time`
-  (2000 ms by default). That is why a stock 4 GiB volume unlocks in about two
+  (2000 ms by default). That is why a stock 1 GiB volume unlocks in about two
   seconds while these profiles take longer — the memory figure is the same, the
   iteration count is not.
 - **`--pbkdf-memory` is in KiB**, not MiB or GiB. 4 GiB is `4194304`.
