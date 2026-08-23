@@ -109,61 +109,126 @@ The allocation probe exists to answer exactly these two questions, and it
 deliberately tests 512 MiB and 1024 MiB only. **It must never be pointed at
 4096**: per the overflow above, that path does not produce a usable answer.
 
-## Unlock architecture — decided
+## Unlock architecture — two options, user's choice
 
-**One passphrase.** The user types it once, at the GRUB prompt, to open `/boot`.
-The initramfs — which now lives inside that encrypted `/boot` — carries a random
-keyfile that opens root with no second prompt.
+`/boot` is opened by GRUB at argon2id **1 GiB / 10 iterations / 4 threads**.
+That figure is fixed by the ceiling above and by one measurement: `cryptsetup`'s
+own defaults on this hardware are argon2id at **1 GiB / t=8**, so 1 GiB with
+fewer than 8 iterations would ship a `/boot` weaker than what a plain
+`luksFormat` gives you for free. Ten iterations clears that bar deliberately.
+
+What differs between the options is how **root** is opened once `/boot` is
+readable.
+
+### Option 1 — one unlock (quick access)
 
 ```
-GRUB      -> passphrase        -> unlocks /boot   argon2id 1 GiB
-initramfs -> keyfile (no prompt) -> unlocks /      argon2id 4 GiB
+GRUB      -> passphrase          -> unlocks /boot   argon2id 1 GiB / t=10
+initramfs -> keyfile, no prompt  -> unlocks /       root's own KDF, unchanged
 ```
 
-**What this costs, stated plainly.** The cheapest attack is no longer root's
-4 GiB keyslot — it is the `/boot` passphrase at 1 GiB, because breaking that
-yields the keyfile and the keyfile opens root. Root's own keyfile keyslot is
-64 random bytes and is not attackable, so the passphrase is the only way in
-either way.
+You type one passphrase per boot. The initramfs — which now lives inside the
+encrypted `/boot` — carries a random 64-byte keyfile that opens root silently.
 
-Be precise about what the drop from 4 GiB to 1 GiB actually buys an attacker:
-memory cost is a *linear* factor on how many guesses they can run at once, not
-a wall. A 24 GB GPU fits 24 concurrent 1 GiB hashes where it fit 6 at 4 GiB — a
-4x parallelism gain, real but modest. What resists an offline attack is
-passphrase entropy; the KDF only sets the per-guess price. Do not describe
-1 GiB argon2id as "expensive" or lean on it to excuse a weak passphrase.
+**What it costs, stated exactly.** Root's keyslot parameters are untouched, but
+they stop being what stands between an attacker and your data, because breaking
+the `/boot` passphrase yields the keyfile and the keyfile opens root. The
+cheapest path in becomes the 1 GiB `/boot` keyslot.
 
-Note also that unlock latency is not what caps this at 1 GiB — the ceiling is
-GRUB's allocator, not the CPU. Memory-hard KDFs at these sizes are fast on any
-machine anyone still boots: 2 GiB argon2id unlocks with no discernible delay on
-a mid-2012 MacBook Pro, and 4 GiB does the same on 2017 x86. Measured from the
-journal on this M2 Max, 4 GiB / 10 iterations costs 9.5 s — of which the 4 GiB
-is about 1 s and the iteration count is the rest. Wall clock tracks memory
-*times* iterations, so the gigabytes are never the expensive half. The 1 GiB figure here is a GRUB constraint being worked
-around, not a performance tuning choice, and it must not be presented to users
-as the fast option.
+Two things make that far less alarming than it first sounds:
 
-This must be documented rather than glossed, because the deploy menu advertises
-a 4 GiB root profile and a user could reasonably assume that figure is what
-stands between an attacker and their data.
+- **If root is already at 1 GiB, there is no reduction at all.** The chain is
+  1 GiB either way, and this option is strictly free. Anyone running the `fast`
+  profile is in exactly this position.
+- **Even against a 4 GiB root, the result is not a weak configuration.** 1 GiB
+  argon2id at 10 iterations is *more* work per guess than `cryptsetup`'s own
+  measured default, and the difference from 4 GiB is a 4x factor on attacker
+  parallelism — real, but linear, and dwarfed by passphrase entropy. See
+  [Your passphrase is the other half](../README.md#your-passphrase-is-the-other-half).
 
-**Runtime detail that is easy to miss.** The running system needs `/boot`
-mounted for kernel and initramfs updates, so `/boot` needs its own `crypttab`
-entry with a keyfile stored on root. That is not circular: by the time systemd
-processes it, root is already open. It does mean a keyfile exists on root that
-opens `/boot`, and one exists in `/boot`'s initramfs that opens root — losing
-either volume entirely still leaves the other recoverable only via the
-passphrase, which is why the recovery bundle must capture both headers.
+Choose this if you want the convenience and your passphrase is strong.
 
-**Keyfile hygiene, non-negotiable:**
-- The root keyfile is generated at deploy time, never reused across machines.
+**Keyfile hygiene, non-negotiable when this option is taken:**
+
+- Generated at deploy time from `/dev/urandom`, 64 bytes, never reused across
+  machines.
 - It exists only inside the encrypted `/boot` initramfs and in the recovery
   bundle. It must never land on the ESP, in an unencrypted initramfs, or in a
   backup that is not itself encrypted.
-- Every dracut regeneration must reproduce it. A kernel update that rebuilds the
-  initramfs without the keyfile turns the next boot into a second passphrase
-  prompt at best, and an unbootable system at worst. The boot guards need a
-  check for this.
+- **Every dracut regeneration must reproduce it.** A kernel update that rebuilds
+  the initramfs without the keyfile turns the next boot into an unexpected
+  second passphrase prompt at best, and an unbootable system at worst. This
+  needs a boot-guard check, not a note in the documentation.
+- The recovery bundle must capture *both* headers. A keyfile on root opens
+  `/boot`, and a keyfile in `/boot` opens root; losing either volume entirely
+  leaves the other recoverable only via the passphrase.
+
+### Option 2 — two unlocks (root's KDF stays the barrier)
+
+```
+GRUB      -> passphrase  -> unlocks /boot   argon2id 1 GiB / t=10
+initramfs -> passphrase  -> unlocks /       root's own KDF, up to 4 GiB / t=12
+```
+
+You type twice per boot. **No keyfile is generated and none exists anywhere**,
+so root's full KDF is genuinely what an attacker has to break. Nothing about
+`/boot` weakens it.
+
+> **This only works with a *different* passphrase for root.**
+>
+> If you use the same passphrase for both volumes, an attacker who breaks the
+> 1 GiB `/boot` keyslot has your passphrase — and therefore has root as well,
+> at which point option 2 has cost you a second prompt at every boot and bought
+> you nothing. The whole point of this option is that root's 4 GiB keyslot is
+> the cheapest way in, and that is only true if `/boot` does not hand over the
+> secret that opens it.
+>
+> The installer must state this at the point of choosing, and must not let
+> someone pick option 2 believing it is stronger while reusing one passphrase.
+
+Choose this if you want the strongest configuration available and accept two
+prompts.
+
+### What the installer will ask
+
+Wording is fixed here so the implementation is unambiguous:
+
+```
+  ════════════════════════════════════════════════════════════
+   /boot IS ENCRYPTED. HOW SHOULD ROOT BE UNLOCKED?
+  ════════════════════════════════════════════════════════════
+
+   1) One unlock   — type your passphrase once, at the GRUB prompt.
+      A keyfile inside the encrypted /boot opens root with no
+      second prompt. Convenient. Because that keyfile opens root,
+      the 1 GiB /boot keyslot becomes the cheapest way in — still
+      stronger per guess than cryptsetup's own default, and no
+      reduction at all if root is also at 1 GiB.
+
+   2) Two unlocks  — type a passphrase at GRUB for /boot, and a
+      SECOND, DIFFERENT one for root. No keyfile is created, so
+      root's full KDF stays the barrier. Strongest available.
+      Using the same passphrase twice defeats the entire point.
+
+  ════════════════════════════════════════════════════════════
+   Select [1-2, default 1]:
+```
+
+Neither option changes root's stored KDF parameters. Option 1 changes what those
+parameters are worth; option 2 leaves them load-bearing.
+
+### Implementation status
+
+**Not implemented.** The script half of this waits on the allocation probe: if
+1 GiB turns out to be unreachable under U-Boot's EFI, there is no encrypted
+`/boot` to offer either option for, and the whole prompt is moot. Building the
+menu before that answer exists would be building on an unverified assumption.
+
+Runtime detail that applies to both options: the running system needs `/boot`
+mounted for kernel and initramfs updates, so `/boot` needs its own `crypttab`
+entry with a keyfile stored on root. That is not circular — root is already open
+by the time systemd processes it — and it is required under option 2 as well,
+where it is the *only* keyfile in the design.
 
 ## Detached headers — the stronger option
 
@@ -257,7 +322,11 @@ boot path as soon as the distro makes us unnecessary.
 2. **Does the allocation fail cleanly or hang?** A clean failure is recoverable;
    a hang at the passphrase prompt is a much worse user experience and changes
    how conservative the default must be.
-3. ~~One passphrase or two?~~ **Decided: one.** See "Unlock architecture" above.
+3. ~~One passphrase or two?~~ **Resolved: offer both**, one unlock as the
+   default and two unlocks for anyone who wants root's KDF to stay the barrier.
+   See "Unlock architecture" above. What remains open is only the wording of the
+   warning that option 2 is pointless with a reused passphrase — it must be
+   impossible to miss at the point of choosing.
 4. **What does encrypted `/boot` actually buy on Asahi?** It does **not** close
    the evil-maid hole: `grubaa64.efi` and the ESP stub stay on plain vfat and
    remain modifiable, and LUKS provides confidentiality, not integrity. The real
