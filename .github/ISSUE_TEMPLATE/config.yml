@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: The machine will not boot
+    url: https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md
+    about: Interrupted encryption, corrupt headers, unbootable systems. Most cases are already documented here — read this first.
+  - name: Security vulnerability
+    url: https://github.com/doug445/AsahiLocker/blob/main/SECURITY.md
+    about: Do not open a public issue. Report privately by email — see SECURITY.md.
+  - name: How to write a report that can be acted on
+    url: https://github.com/doug445/AsahiLocker/blob/main/CONTRIBUTING.md
+    about: The diagnostic bundle, the loopback test harness, and what never to paste.

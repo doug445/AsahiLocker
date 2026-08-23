@@ -1,0 +1,128 @@
+name: Bug report
+description: Something went wrong during deploy, boot, or recovery
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This tooling rewrites a live root filesystem and its bootloader**, so a
+        description of what went wrong is rarely enough to act on. The fields
+        below are what is.
+
+        > ### Never paste key material
+        > **Never post the output of `luksDump --dump-master-key`, and never
+        > upload a header backup image.** Either one hands over your disk. Plain
+        > `cryptsetup luksDump` is safe — cipher, KDF and slot metadata only.
+
+        If the machine will not boot, read
+        [`docs/RECOVERY.md`](https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md)
+        before opening this. Most cases are already covered there.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component
+      options:
+        - bin/luks-deploy.sh
+        - bin/luks-tune.sh
+        - bin/post-encryption-setup.sh
+        - bin/save-luks-recovery-bundle.sh
+        - boot-guards (ESP stub guard, stale EFI entry cleanup)
+        - extras/luks-fetch-cache
+        - tests/loopback-core-test.sh
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Did it fail before or after the point of no return?
+      description: >
+        `luks-deploy.sh` prints stage numbers, and refuses to encrypt the
+        filesystem it is booted from.
+      options:
+        - Before — detection, menus, fstab checks, KDF benchmark, --dry-run
+        - During the reencrypt itself
+        - After reencrypt, during boot configuration
+        - At boot, after a completed deploy
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: stage_number
+    attributes:
+      label: Stage number it stopped at
+      description: The script prints these. If it printed a recovery command list on exit, include it below.
+      placeholder: "stage 7"
+
+  - type: input
+    id: version
+    attributes:
+      label: AsahiLocker version
+      description: A release tag, or `git rev-parse --short HEAD`. Only the latest release receives fixes.
+      placeholder: "v1.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Machine and OS
+      placeholder: "MacBook Pro M2 Max, Fedora Asahi Remix 42, kernel 6.15.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command you ran
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: >
+        Paste output verbatim. If the machine would not boot, say what the screen
+        showed and at which stage of
+        [`docs/UBOOT-BOOTFLOW.md`](https://github.com/doug445/AsahiLocker/blob/main/docs/UBOOT-BOOTFLOW.md)
+        it stopped.
+    validations:
+      required: true
+
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostic bundle
+      description: >
+        Run the read-only bundle from CONTRIBUTING.md and attach the file, or
+        paste it here. It collects state and changes nothing.
+      render: text
+
+  - type: textarea
+    id: luksdump
+    attributes:
+      label: "cryptsetup luksDump (optional)"
+      description: >
+        Plain `luksDump` only — it shows cipher, KDF and slot metadata, no key
+        material. **Not `--dump-master-key`.**
+      render: text
+
+  - type: checkboxes
+    id: confirms
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have not pasted `--dump-master-key` output or uploaded a header backup image.
+          required: true
+        - label: I am on the latest release, or I have said which commit above.
+          required: true
+        - label: If this is a boot failure, I have read `docs/RECOVERY.md` and it is not covered there.
+          required: true
+        - label: This is not a security vulnerability. Those go to the address in SECURITY.md.
+          required: true
