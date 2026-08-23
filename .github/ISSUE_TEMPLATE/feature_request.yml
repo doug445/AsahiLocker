@@ -1,0 +1,51 @@
+name: Feature request
+description: Something the tooling should do and does not
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The constraints below are deliberate, and documented in
+        [`docs/INTERNALS.md`](https://github.com/doug445/AsahiLocker/blob/main/docs/INTERNALS.md).
+        A request that works around one of them by weakening the crypto is not
+        going to land — say why the constraint should change instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you trying to do, and what stopped you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want it to do
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area
+      options:
+        - Deploy / reencrypt path
+        - Boot guards and ESP handling
+        - Recovery bundle and recovery keys
+        - Fleet deployment
+        - Test harness
+        - Documentation
+        - New area
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this project holds to
+      description: Confirm the request fits these, or argue above why one should change.
+      options:
+        - label: It does not weaken the KDF. Substituting pbkdf2 to satisfy an old GRUB is not an acceptable fix here.
+        - label: It does not require encrypting `/boot`, which Fedora's aarch64 GRUB cannot open on an argon2id volume.
+        - label: Anything touching the encrypt path can be tested in `tests/loopback-core-test.sh`.

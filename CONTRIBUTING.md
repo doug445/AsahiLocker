@@ -221,3 +221,8 @@ ls -la ~/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
 ## Security issues
 
 Do not open a public issue. See [`SECURITY.md`](SECURITY.md).
+
+## Conduct
+
+Technical disagreement is welcome — say why something is wrong and what you
+tested, on what hardware. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
