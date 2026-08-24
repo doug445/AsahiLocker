@@ -6,12 +6,8 @@ Please refer to the [AsahiLocker Releases](https://github.com/doug445/AsahiLocke
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.6.x   | :white_check_mark: |
-| 1.5.x   | :x:                |
-| 1.4.x   | :x:                |
-| 1.3.x   | :x:                |
-| 1.2.x   | :x:                |
-| <=1.1.x | :x:                |
+| main    | :white_check_mark: |
+| any older checkout   | :x:                |
 
 Only the latest release receives fixes. If you are running an older tag, update
 before reporting — the issue may already be fixed.
