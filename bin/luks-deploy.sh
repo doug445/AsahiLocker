@@ -124,8 +124,13 @@ fatal() { err "$@"; exit 1; }
 #   aggressive  4 GiB  t=10   paranoid; 4 GiB is argon2id's maximum memory
 #                              cost - cryptsetup refuses anything above
 #                              4194304 KiB - so cost above it buys iterations
-#   moderate    2 GiB  t=6    balanced; the default
-#   fast        1 GiB  t=4    comfortable even on an 8 GiB M1
+#   moderate    2 GiB  t=8    balanced; the default
+#   fast        1 GiB  t=9    the FLOOR, not a discount. cryptsetup's own
+#                              default is argon2id at 1 GiB with iterations
+#                              auto-tuned to ~2000 ms -- t=8 on an M2 Max.
+#                              t=9 stays above stock on this class of
+#                              machine. (<= v1.3.0 shipped t=4, which was
+#                              HALF the cost of a plain luksFormat.)
 #
 # ALWAYS argon2id. It is memory-hard, which is what makes GPU/ASIC cracking
 # expensive; never substitute pbkdf2 to save memory or time — argon2id at 1 GiB
@@ -133,7 +138,7 @@ fatal() { err "$@"; exit 1; }
 #
 # Non-interactive use:
 #   LUKS_PROFILE=fast ./luks-deploy.sh                       # pick a preset
-#   LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./luks-deploy.sh   # fully custom
+#   LUKS_PBKDF_MEMORY=3145728 LUKS_PBKDF_ITER=8 ./luks-deploy.sh   # fully custom
 # Setting any LUKS_PBKDF_* variable pins the parameters and skips the menu.
 #
 # Partition pinning (skips the selection menus — for fleet/scripted use):
@@ -158,8 +163,8 @@ fatal() { err "$@"; exit 1; }
 #                                       the point of no return
 
 KDF_PROFILE_AGGRESSIVE_MEM=4194304;  KDF_PROFILE_AGGRESSIVE_ITER=10
-KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=6
-KDF_PROFILE_FAST_MEM=1048576;        KDF_PROFILE_FAST_ITER=4
+KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=8
+KDF_PROFILE_FAST_MEM=1048576;        KDF_PROFILE_FAST_ITER=9
 KDF_DEFAULT_PARALLEL=4
 
 # Did the caller pin anything explicitly? (checked before defaults are applied)
@@ -178,15 +183,32 @@ case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an int
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
 case "$LUKS_PBKDF_PARALLEL" in ''|*[!0-9]*) echo "LUKS_PBKDF_PARALLEL must be an integer" >&2; exit 1;; esac
 
-# Refuse accidentally-weak pinned parameters. Floor = half the 'fast' profile.
-# A typo like LUKS_PBKDF_MEMORY=1048 (meant 1048576) would otherwise silently
-# produce a near-worthless KDF. Set LUKS_PBKDF_ACK_WEAK=1 to proceed anyway.
-if [ "$KDF_PINNED_BY_ENV" -eq 1 ] \
-   && { [ "$LUKS_PBKDF_MEMORY" -lt 524288 ] || [ "$LUKS_PBKDF_ITER" -lt 4 ]; }; then
-    if [ "${LUKS_PBKDF_ACK_WEAK:-0}" = "1" ]; then
-        warn "Pinned KDF parameters are BELOW the safety floor (mem=${LUKS_PBKDF_MEMORY} KiB, iters=${LUKS_PBKDF_ITER}) — proceeding because LUKS_PBKDF_ACK_WEAK=1."
-    else
-        fatal "Pinned KDF parameters too weak: mem=${LUKS_PBKDF_MEMORY} KiB, iters=${LUKS_PBKDF_ITER} (floor: 524288 KiB / 4 iterations). If this is intentional, set LUKS_PBKDF_ACK_WEAK=1."
+# ─── The 'fast' profile IS the floor ────────────────────────────────────────
+# Nothing below it is accepted, and there is deliberately NO acknowledgement
+# flag. cryptsetup's own default is argon2id at 1 GiB with iterations tuned to
+# ~2000 ms, so anything cheaper than 'fast' would ship a volume weaker than a
+# plain `luksFormat` with no arguments — which this tool exists to beat, not to
+# offer as a setting. It also catches the classic typo (LUKS_PBKDF_MEMORY=1048
+# for 1048576). If you genuinely want a cheaper KDF, run cryptsetup's
+# luksConvertKey yourself; this script will not do it for you.
+#
+# Two conditions, because they fail differently: memory below 1 GiB loses the
+# memory-hardness that is the entire point, and total work below 'fast' is
+# cheaper per guess however the two factors are traded off.
+KDF_FLOOR_MEM=$KDF_PROFILE_FAST_MEM
+KDF_FLOOR_WORK=$((KDF_PROFILE_FAST_MEM * KDF_PROFILE_FAST_ITER))
+
+if [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
+    if [ -n "${LUKS_PBKDF_ACK_WEAK:-}" ]; then
+        warn "LUKS_PBKDF_ACK_WEAK is no longer honoured — the 'fast' profile is a hard floor."
+    fi
+    if [ "$LUKS_PBKDF_MEMORY" -lt "$KDF_FLOOR_MEM" ] \
+       || [ $((LUKS_PBKDF_MEMORY * LUKS_PBKDF_ITER)) -lt "$KDF_FLOOR_WORK" ]; then
+        fatal "Pinned KDF parameters are below the 'fast' floor.
+       requested : $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} iterations
+       floor     : $((KDF_FLOOR_MEM / 1024)) MiB x ${KDF_PROFILE_FAST_ITER} iterations (the 'fast' profile)
+     There is no override. cryptsetup's own default is ~1 GiB with iterations
+     tuned to 2000 ms, so this would be weaker than luksFormat with no flags."
     fi
 fi
 
@@ -219,6 +241,79 @@ kdf_estimate_ms() {
     [ "$b_iters" -gt 0 ] && [ "$b_mem" -gt 0 ] || return 1
     awk -v ti="$iters" -v tm="$mem_kib" -v bi="$b_iters" -v bm="$b_mem" \
         'BEGIN{ printf "%.0f", 2000.0 * (ti*tm) / (bi*bm) }'
+}
+
+# Read cryptsetup's OWN default parameters for this machine: argon2id at its
+# default memory with the iteration count auto-tuned to --iter-time (2000 ms).
+# Sets STOCK_ITER / STOCK_MEM. Returns non-zero if the benchmark is unusable.
+#
+# Sampled, and the LOWEST reading wins. This benchmark is load-sensitive --
+# measured at 8 iterations idle and 4 (libcryptsetup's minimum) on the same
+# machine under load, for the same 1 GiB. Bias matters here because the two
+# errors are not symmetric: reading stock too LOW only makes the guard a no-op,
+# while reading it too HIGH inflates the iteration count permanently and you
+# pay that as unlock latency at EVERY boot. The static 'fast' floor is what
+# guarantees the baseline; this guard only has to catch hardware faster than
+# the profiles assume.
+KDF_STOCK_SAMPLES=3
+kdf_stock_params() {
+    local out i it mem best_it="" best_mem=""
+    for i in $(seq 1 "$KDF_STOCK_SAMPLES"); do
+        out=$(cryptsetup benchmark --pbkdf argon2id 2>/dev/null | grep -m1 'argon2id') || continue
+        it=$(echo "$out"  | awk '{print $2}')
+        mem=$(echo "$out" | awk '{print $4}')
+        case "$it"  in ''|*[!0-9]*) continue;; esac
+        case "$mem" in ''|*[!0-9]*) continue;; esac
+        [ "$it" -gt 0 ] && [ "$mem" -gt 0 ] || continue
+        if [ -z "$best_it" ] || [ $((it * mem)) -lt $((best_it * best_mem)) ]; then
+            best_it=$it; best_mem=$mem
+        fi
+    done
+    [ -n "$best_it" ] || return 1
+    STOCK_ITER=$best_it
+    STOCK_MEM=$best_mem
+}
+
+# Never ship a KDF weaker than what a bare `luksFormat` would have produced on
+# THIS machine. The profiles are fixed numbers; stock is a fixed *time*, so on
+# faster hardware stock climbs and a fixed profile can fall behind it.
+#
+#   named profile  -> raise the iteration count past stock, and say so
+#   pinned numbers -> fatal; the operator chose exact values, so silently
+#                     changing them would break the fleet reproducibility that
+#                     pinning exists to provide
+#
+# The boost overshoots by KDF_STOCK_MARGIN_PCT rather than landing exactly on
+# stock: matching it would only tie with a plain luksFormat, and the benchmark
+# jitters run to run, so an exact match can read as 'weaker' on the next boot.
+KDF_STOCK_MARGIN_PCT=25
+kdf_enforce_stock_floor() {
+    local stock_work sel_work target_work need
+    if ! kdf_stock_params; then
+        warn "Could not read cryptsetup's default KDF parameters — skipping the stock-strength check."
+        return 0
+    fi
+    stock_work=$((STOCK_MEM * STOCK_ITER))
+    sel_work=$((LUKS_PBKDF_MEMORY * LUKS_PBKDF_ITER))
+    [ "$sel_work" -ge "$stock_work" ] && return 0
+
+    if [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
+        fatal "Pinned KDF parameters are weaker than cryptsetup's own default on this machine.
+       requested : $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} iterations
+       stock     : $((STOCK_MEM / 1024)) MiB x ${STOCK_ITER} iterations (argon2id tuned to 2000 ms)
+     Raise the iteration count and re-run. There is no override."
+    fi
+
+    target_work=$(( stock_work * (100 + KDF_STOCK_MARGIN_PCT) / 100 ))
+    need=$(( (target_work + LUKS_PBKDF_MEMORY - 1) / LUKS_PBKDF_MEMORY ))
+    # ceil() can still tie when the division is exact; never come back equal.
+    [ $((need * LUKS_PBKDF_MEMORY)) -gt "$stock_work" ] || need=$((need + 1))
+    warn "Profile '$KDF_PROFILE_NAME' ($((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER}) is weaker than cryptsetup's"
+    warn "  own default on this machine ($((STOCK_MEM / 1024)) MiB x ${STOCK_ITER}). Raising iterations ${LUKS_PBKDF_ITER} -> ${need}"
+    warn "  — ${KDF_STOCK_MARGIN_PCT}% past stock, so the volume is never cheaper to attack than a"
+    warn "  plain luksFormat with no arguments."
+    LUKS_PBKDF_ITER=$need
+    KDF_PROFILE_NAME="$KDF_PROFILE_NAME (boosted past stock)"
 }
 
 kdf_fmt_ms() {
@@ -882,10 +977,10 @@ else
     echo   "      against this. 4 GiB is argon2id's maximum memory cost,"
     echo   "      so anything beyond it has to buy iterations instead."
     echo ""
-    printf "   2) moderate      2 GiB,  6 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
+    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
     echo   "      Strong. ~12 concurrent guesses on that same GPU."
     echo ""
-    printf "   3) fast          1 GiB,  4 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
+    printf "   3) fast          1 GiB,  9 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
     echo   "      Still memory-hard: ~24 at once. Comfortable on an M1."
     echo ""
     echo "  ════════════════════════════════════════════════════════════"
@@ -914,6 +1009,13 @@ else
     log "  Selected: $KDF_PROFILE_NAME ($((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations)"
 fi
 
+# Applies to EVERY path that formats a new header — the menu, LUKS_PROFILE, and
+# pinned LUKS_PBKDF_* alike. config-only is exempt: that header already exists
+# and its KDF cannot be changed from here (use luks-tune.sh).
+if [ "$DEPLOY_MODE" != "config-only" ]; then
+    kdf_enforce_stock_floor
+fi
+
 # ─── Pre-Flight Summary ─────────────────────────────────────────────────────
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
@@ -931,6 +1033,14 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
     echo "  KDF     : (existing LUKS header — unchanged)"
 else
     echo "  KDF     : argon2id $KDF_PROFILE_NAME — $((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations, ${LUKS_PBKDF_PARALLEL} threads"
+    # State the strength claim as a number measured on THIS machine, at the
+    # moment of decision — not as a promise from the README.
+    if [ -n "${STOCK_ITER:-}" ] && [ -n "${STOCK_MEM:-}" ]; then
+        printf "            = %s the work of cryptsetup's own default here (%s MiB x %s)\n" \
+            "$(awk -v a="$((LUKS_PBKDF_MEMORY * LUKS_PBKDF_ITER))" \
+                   -v b="$((STOCK_MEM * STOCK_ITER))" 'BEGIN{printf "%.4gx", a/b}')" \
+            "$((STOCK_MEM / 1024))" "$STOCK_ITER"
+    fi
 fi
 [ -n "$BLS_ROOT_SUBVOL" ] && echo "  BLS boot: subvol=$BLS_ROOT_SUBVOL"
 echo ""
