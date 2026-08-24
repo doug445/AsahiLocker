@@ -229,9 +229,8 @@ sudo LUKS_PBKDF_MEMORY=3145728 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # fully 
 Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
 **The `fast` profile is a hard floor.** Custom parameters below it — less
 than 1 GiB of memory, or less total work (memory x iterations) than
-1 GiB x 9 — are refused outright. There is no acknowledgement flag; the old
-`LUKS_PBKDF_ACK_WEAK` escape was removed. It also catches the classic typo
-(`LUKS_PBKDF_MEMORY=1048` for `1048576`).
+1 GiB x 9 — are refused outright. There is no acknowledgement flag; It also 
+catches the classic typo (`LUKS_PBKDF_MEMORY=1048` for `1048576`).
 
 The two conditions are separate because they fail differently: dropping below
 1 GiB loses the memory-hardness that is the entire point, and dropping total
