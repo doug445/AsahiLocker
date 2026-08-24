@@ -66,6 +66,33 @@ At exactly 4 GiB, `1024 * 4194304 == 2^32`, which wraps to **0**. GRUB then
 calls `xtrymalloc(0)` and carries on instead of rejecting the parameters. Never
 configure a GRUB-unlocked volume at 4 GiB.
 
+### Where the 1 GiB figure came from, and why it was wrong *here*
+
+Worth being precise about, because it was this project's own reasoning and it
+shaped the design until the probe contradicted it.
+
+**On x86, 1 GiB is not folklore — it is a fact.** More than 1 GiB genuinely
+never worked, verified in production across Manjaro, Linux Mint and Fedora on
+vendor UEFI. That measurement was correct, and it still is.
+
+**The error was one of scope, not of fact.** A limit measured on one firmware
+was carried to a different firmware as though it were a property of GRUB. It is
+not. GRUB asks the *firmware* for memory; how much it gets back is the
+firmware's answer. x86 vendor UEFI answers with roughly 1 GiB. U-Boot on Apple
+Silicon answers with at least 2 GiB. Same GRUB, same code, different number.
+
+The whole point of the probe was to test the inherited assumption rather than
+keep building on it — and that is why this project now documents a *measured*
+ceiling for this platform instead of a borrowed one. Four places in the docs
+had stated 1 GiB as a "hard ceiling" that GRUB "will not go above"; all four
+were corrected once the measurement came in.
+
+> **Lesson for anyone extending this:** any GRUB limit that arises from
+> *allocation* is a firmware property, not a GRUB property. Measure it on the
+> platform in front of you; never inherit it from another one. The limits that
+> genuinely do belong to GRUB — like the 4 GiB overflow above — are the ones
+> visible in GRUB's own source.
+
 ---
 
 ## Result 2 — timing: GRUB is 8.5× slower than the kernel
