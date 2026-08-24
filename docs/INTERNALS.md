@@ -158,18 +158,29 @@ have to unlock the container, and GRUB is far more KDF-constrained than the
 initramfs. GRUB ≥ 2.14 supports argon2id; GRUB 2.12 — current in Fedora 44 —
 has no argon2 support at all.
 
-> ### 1 GiB is a hard ceiling for any GRUB-unlocked volume
+> ### The KDF limit for a GRUB-unlocked volume is set by the firmware
 >
-> **Never configure a volume GRUB must open with more than 1 GiB of argon2id
-> memory. Ever.** This is not a performance recommendation, it is a
-> do-not-cross line, and it applies only to volumes GRUB unlocks — never to
-> root, which the initramfs opens at up to 4 GiB.
+> **Never configure a volume GRUB must open at 4 GiB of argon2id memory.
+> Ever.** That one is unconditional — see the overflow below. It applies only
+> to volumes GRUB unlocks, never to root, which the initramfs opens at up to
+> 4 GiB quite happily.
 >
-> GRUB is memory-constrained: its EFI heap starts at 32 MiB
-> (`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand. Above 1 GiB the
-> allocation is untested at best and fails in practice, and the failure lands
-> at the boot prompt on the volume holding your kernel — the device does not
-> boot, and the way back in is external recovery media.
+> **Below 4 GiB the usable maximum belongs to the firmware, not to GRUB**, and
+> must be measured per platform. GRUB's EFI heap starts at 32 MiB
+> (`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand through
+> `grub_efi_mm_add_regions`; how far it gets is the firmware's decision.
+>
+> On **x86 vendor UEFI, more than 1 GiB has never worked** — that firmware
+> leaves GRUB too constrained an environment, which is where the widely-quoted
+> "GRUB caps at 1 GiB" comes from. On **Asahi / U-Boot it is not the same
+> number**: this project measured 2 GiB allocating *and* completing a real
+> keyslot decryption on an M2 Max. Treat 1 GiB as the portable default and
+> anything above it as opt-in and measured — an 8 GiB M1 is a different heap
+> from an M2 Max.
+>
+> A request the firmware cannot satisfy lands at the boot prompt on the volume
+> holding your kernel — the device does not boot, and the way back in is
+> external recovery media.
 >
 > At **exactly 4 GiB it is worse than a failure**. In `argon2_init`
 > (`grub-core/lib/libgcrypt-grub/cipher/kdf.c`), `xtrymalloc (1024 *
@@ -222,8 +233,8 @@ cryptographically verified on Asahi.
   passphrase and the volume opening — argon2id at 4 GiB / 10 iterations / 4
   threads costs **9.5 s**, consistent to +/-0.1 s across three boots. That works
   out to ~0.24 s per GiB-pass. The `aggressive` profile IS that measurement
-  (4 GiB x 10); the others scale from it to roughly 3 s (moderate, 2 GiB x 6)
-  and 1 s (fast, 1 GiB x 4).
+  (4 GiB x 10); the others scale from it to roughly 3.8 s (moderate,
+  2 GiB x 8) and 2.1 s (fast, 1 GiB x 9).
   Memory size alone is cheap on modern hardware: the 4 GiB in that 9.5 s
   accounts for about 1 s of it, and the rest is the iteration count. Do not read
   a large `--pbkdf-memory` as a slow boot, or a small one as a speed win.

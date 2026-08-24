@@ -66,6 +66,12 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
   round trip, no second disk. Subvolumes, snapshots and the btrfs UUID survive.
 - **Pinned argon2id, never pbkdf2.** AES-256-XTS with argon2id at 4 / 2 / 1 GiB
   memory cost — memory-hard by design, so GPU and ASIC cracking stays expensive.
+- **Every profile is stronger than `cryptsetup`'s own defaults — enforced, not
+  asserted.** The weakest profile on offer does 1.125x the work of a plain
+  `luksFormat` on the same machine, and the strongest does 5x. Before it writes
+  anything the installer benchmarks what `cryptsetup` would have chosen unaided
+  and refuses to ship weaker: a named profile below that bar is raised past it,
+  pinned parameters below it are fatal. There is no flag to opt out.
 - **Benchmarked on *your* machine.** The installer measures your hardware and
   shows real unlock-latency estimates before you pick a KDF profile.
 - **Every boot file rewritten, then verified.** `crypttab`, `fstab`,
@@ -97,7 +103,8 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
 | `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. Runs in CI on every push (x86_64 + aarch64); safe to run locally with sudo. |
-| `docs/` | [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [RECOVERY](docs/RECOVERY.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) |
+| `docs/` | [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [RECOVERY](docs/RECOVERY.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) |
+| `tools/boot-probe/` | **Research only, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
 
 ---
 
@@ -122,8 +129,16 @@ running on top of it. Both are in the chain on Fedora Asahi Remix.
 
 **`/boot` stays unencrypted** (plain ext4) so GRUB can read kernels and
 initramfs images. The encrypted root is unlocked by the *initramfs*, not by
-GRUB. `/boot` encryption is deliberately out of scope — see
-[docs/INTERNALS.md](docs/INTERNALS.md#why-boot-stays-unencrypted).
+GRUB — see [docs/INTERNALS.md](docs/INTERNALS.md#why-boot-stays-unencrypted).
+
+> Encrypting `/boot` is being **researched**, and the work so far is written up
+> in **[docs/BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md)** —
+> including measurements on real hardware showing GRUB's argon2id is **8.5×
+> slower than the kernel's**, and a reproducible **hard reset** past a certain
+> computation length. It is **not shipped, not enabled, and has no flag**; every
+> released version encrypts root only. Contributions and probe results from
+> other Apple Silicon machines are wanted — the open questions are listed at the
+> end of that document.
 
 ### Partition layout, before and after
 
@@ -153,7 +168,7 @@ cost and sha256.
 | Cipher | `aes-xts-plain64`, 512-bit key (AES-256-XTS) |
 | KDF | argon2id (always — no profile selects pbkdf2) |
 | Memory cost | 4 / 2 / 1 GiB, by profile |
-| Iterations (time cost) | 10 / 8 / 4, by profile |
+| Iterations (time cost) | 10 / 8 / 9 — aggressive / moderate / `fast` |
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
 
@@ -161,6 +176,12 @@ The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
 allocatable there — and you pay its full cost as unlock latency on every boot.
 
 ### Choosing an argon2id profile
+
+**There is no weak choice here.** All three profiles are stronger than what
+`cryptsetup` picks for itself — that is the floor, not the target, and it is
+checked at run time on the machine being encrypted rather than assumed from a
+table. `fast` means *fast relative to the other two*, not "cheap": it is
+deliberately pinned just above stock, never below it.
 
 Because you wait for it every time you start the machine, the installer asks you
 to pick one of three profiles. It **benchmarks your machine first** and shows an
@@ -174,11 +195,21 @@ system load — at boot the machine is idle, so real unlocks land at the fast en
 *Times shown are from an M2 Max. Your machine is benchmarked at run time, so the
 numbers you see will be your own.*
 
-| Profile | Memory | Iterations | Threads |
-|---------|--------|-----------|---------|
-| `aggressive` | 4 GiB | 10 | 4 |
-| `moderate` (default) | 2 GiB | 6 | 4 |
-| `fast` | 1 GiB | 4 | 4 |
+| Profile | Memory | Iterations | Threads | Unlock, M2 Max | vs stock |
+|---------|--------|-----------|---------|----------------|----------|
+| `aggressive` | 4 GiB | 10 | 4 | **9.5 s** (measured) | 5x |
+| `moderate` (default) | 2 GiB | 8 | 4 | ~3.8 s | 2x |
+| `fast` | 1 GiB | 9 | 4 | ~2.1 s | 1.125x |
+
+Only `aggressive` is measured — from the boot journal, the gap between
+systemd-cryptsetup taking the passphrase and the volume opening. The other two
+scale from it at ~0.24 s per GiB-pass. The screenshot above shows a live
+`cryptsetup benchmark` run instead, which is a different basis and jitters with
+load, so its numbers sit slightly higher.
+
+**"vs stock"** is work (memory x iterations) against what `cryptsetup` picks on
+this machine unaided — 1 GiB x 8, its `--iter-time` default of 2000 ms. Every
+profile is above 1.0x by construction, and a runtime guard enforces it (below).
 
 **All three are argon2id — none uses pbkdf2.** Memory cost only has to be
 allocatable in the initramfs, which has the machine to itself, so any profile is
@@ -192,13 +223,50 @@ Non-interactive selection, for scripted or fleet deployments:
 
 ```bash
 sudo LUKS_PROFILE=fast ./bin/luks-deploy.sh                     # a named profile
-sudo LUKS_PBKDF_MEMORY=1572864 LUKS_PBKDF_ITER=6 ./bin/luks-deploy.sh   # fully custom
+sudo LUKS_PBKDF_MEMORY=3145728 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # fully custom (3 GiB x 8)
 ```
 
 Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
-Custom parameters below half the `fast` profile (512 MiB / 4 iterations) are
-refused unless you also set `LUKS_PBKDF_ACK_WEAK=1` — a typo in the memory
-figure should not silently produce a worthless KDF.
+**The `fast` profile is a hard floor.** Custom parameters below it — less
+than 1 GiB of memory, or less total work (memory x iterations) than
+1 GiB x 9 — are refused outright. There is no acknowledgement flag; the old
+`LUKS_PBKDF_ACK_WEAK` escape was removed. It also catches the classic typo
+(`LUKS_PBKDF_MEMORY=1048` for `1048576`).
+
+The two conditions are separate because they fail differently: dropping below
+1 GiB loses the memory-hardness that is the entire point, and dropping total
+work below `fast` is cheaper per guess however you trade the two off.
+
+If you genuinely want a cheaper KDF, run `cryptsetup luksConvertKey` yourself.
+This script will not write one for you.
+
+**And a runtime guard on top of that.** Before formatting, the script reads
+what `cryptsetup` itself would have chosen on this machine (argon2id at its
+default memory with iterations auto-tuned to `--iter-time`, 2000 ms) and
+refuses to ship anything weaker:
+
+- a **named profile** below stock has its iteration count raised to 25% past
+  stock, and says so;
+- **pinned `LUKS_PBKDF_*` numbers** below stock are fatal — the operator chose
+  exact values, and silently changing them would break the fleet
+  reproducibility that pinning exists to provide.
+
+This matters because the profiles are fixed numbers while stock is a fixed
+*time*: on hardware faster than the profiles assume, stock climbs and a fixed
+profile can quietly fall behind it. The benchmark is sampled and the lowest
+reading wins, because reading stock too low only makes the guard a no-op, while
+reading it too high would inflate your unlock latency on every boot forever.
+
+**Why the floor is 1 GiB and not "whatever cryptsetup picks".** cryptsetup sizes
+argon2id memory against the RAM it can allocate *at that moment*. Inside a
+distro installer's live environment that is not much, and the result is a header
+you keep for the life of the machine. Measured across several x86 installs, the
+graphical installers produced argon2id memory costs of roughly **350-600 MiB**
+— and sha256 — which then had to be corrected by hand afterwards with
+`luksConvertKey`. AsahiLocker pins the parameters instead: `--pbkdf argon2id`,
+`--hash sha512`, `--cipher aes-xts-plain64`, `--key-size 512`, and an explicit
+`--pbkdf-memory`/`--pbkdf-force-iterations`, so the header never depends on how
+much RAM happened to be free while it was being written.
 
 ### Changing the KDF on a volume that already exists
 
@@ -480,12 +548,18 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 > GRUB never unlocks it — the initramfs does. It only matters if you have some
 > *other* volume that GRUB itself must unlock.
 >
-> For those volumes: **1 GiB of argon2id memory is a hard ceiling — never
-> exceed it.** GRUB ≥ 2.14 does argon2id, but GRUB is a memory-constrained
-> environment and an allocation failure there means the machine does not boot.
-> At exactly 4 GiB it is worse: a 32-bit overflow in GRUB's `argon2_init` wraps
-> the allocation size to zero, so it proceeds instead of rejecting the
-> parameters. GRUB 2.12 (current in Fedora 44) has no argon2 support at all.
+> For those volumes: **never use 4 GiB** — a 32-bit overflow in GRUB's
+> `argon2_init` wraps the allocation size to zero, so it proceeds instead of
+> rejecting the parameters. That rule is unconditional.
+>
+> Below that, the usable maximum is set by the **firmware**, not by GRUB, and
+> has to be measured per platform. On x86 vendor UEFI more than 1 GiB has never
+> worked — that firmware leaves GRUB too little heap, which is where the usual
+> "GRUB caps at 1 GiB" comes from. Under Asahi's U-Boot it is not the same
+> number: 2 GiB is measured working on an M2 Max. Use 1 GiB as the portable
+> default; treat more as opt-in and measured. An allocation failure here means
+> the machine does not boot. GRUB 2.12 (current in Fedora 44) has no argon2
+> support at all.
 >
 > Do not answer any of that by downgrading the volume to pbkdf2 — argon2id at
 > 1 GiB is memory-hard, pbkdf2 is not, and the gap matters far more than the
@@ -594,13 +668,14 @@ What you cannot sensibly do is swap the algorithm out — see
 
 GRUB has to read the kernel and initramfs before anything is unlocked. The
 encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
-plain avoids putting GRUB on the unlock path at all — where it is limited by its
-own heap to **1 GiB of argon2id memory, a hard ceiling that must never be
-exceeded**, and where GRUB 2.12 (current in Fedora 44) has no argon2 support
-whatsoever. Going above 1 GiB there does not mean a slow boot, it means no boot:
-GRUB fails to allocate, and at exactly 4 GiB a 32-bit overflow in its
-`argon2_init` wraps the allocation to zero so it proceeds instead of rejecting
-the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
+plain avoids putting GRUB on the unlock path at all — where the KDF is limited
+by however much heap the **firmware** grants it, and where GRUB 2.12 (current in
+Fedora 44) has no argon2 support whatsoever. On x86 vendor UEFI that limit has
+always been 1 GiB; under Asahi's U-Boot it is higher, and this project measured
+2 GiB working on an M2 Max. Exceeding whatever the firmware affords does not
+mean a slow boot, it means no boot: GRUB fails to allocate. And at exactly 4 GiB
+it is worse than a failure — a 32-bit overflow in its `argon2_init` wraps the
+allocation to zero, so it proceeds instead of rejecting the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
 see [Risks](#risks--read-this).
 
 ### What happens if the encryption is interrupted — power loss, a crash, a closed lid?
@@ -660,14 +735,16 @@ Then pick a tier. Each command converts the keyslot your passphrase opens; add
 `-S <n>` to target a specific slot, and repeat per slot you want re-costed.
 
 ```bash
-# fast — 1 GiB, 4 iterations          (~1 s unlock on an M2 Max)
+# fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more
+#                                      work than cryptsetup unaided here,
+#                                      which picks 1 GiB x 8)
 sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 1048576 --pbkdf-force-iterations 4 --pbkdf-parallel 4 \
+     --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-# moderate — 2 GiB, 6 iterations      (~3 s)   ← the shipped default
+# moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default
 sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 2097152 --pbkdf-force-iterations 6 --pbkdf-parallel 4 \
+     --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
 # aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
@@ -755,6 +832,7 @@ backup for you.
 | [UBOOT-BOOTFLOW.md](docs/UBOOT-BOOTFLOW.md) | Getting to the U-Boot prompt and booting the live USB |
 | [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 12-point gate, self-repair, why `/boot` stays plain |
 | [FLEET.md](docs/FLEET.md) | Deploying across several M-series boxes, and the UUID-uniqueness footgun |
+| [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md) | **Research, not a feature.** Encrypted `/boot`: what has been measured, what broke, what is still unknown — and where help is wanted |
 
 ---
 

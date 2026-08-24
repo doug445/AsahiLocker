@@ -35,7 +35,7 @@
 # afterwards.
 #
 # Offers four tiers — paranoid (4 GiB x 12), aggressive (4 GiB x 10), moderate
-# (2 GiB x 6), fast (1 GiB x 4) — plus custom. Note the deploy script's menu
+# (2 GiB x 8), fast (1 GiB x 9) — plus custom. Note the deploy script's menu
 # ships only the lower three: paranoid is a deliberate choice made after the
 # fact, not something to land on by accepting a default.
 #
@@ -84,14 +84,18 @@ for arg in "$@"; do
 done
 
 # ─── Safety floor (mirrors luks-deploy.sh) ───────────────────────────────────
-FLOOR_MEM_KIB=524288    # 512 MiB
-FLOOR_ITER=4
 
 # ─── Profiles (mirrors luks-deploy.sh; memory in KiB) ────────────────────────
 P_PARANOID_MEM=4194304;   P_PARANOID_ITER=12
 P_AGGRESSIVE_MEM=4194304; P_AGGRESSIVE_ITER=10
-P_MODERATE_MEM=2097152;   P_MODERATE_ITER=6
-P_FAST_MEM=1048576;       P_FAST_ITER=4
+P_MODERATE_MEM=2097152;   P_MODERATE_ITER=8
+P_FAST_MEM=1048576;       P_FAST_ITER=9
+
+# The 'fast' profile is the floor, matching luks-deploy.sh. No override:
+# below this you are asking for something weaker than cryptsetup's own
+# default, which this tool will not write for you.
+FLOOR_MEM_KIB=$P_FAST_MEM
+FLOOR_ITER=$P_FAST_ITER
 P_PARALLEL=4
 
 CRYPTSETUP=/usr/sbin/cryptsetup
@@ -188,8 +192,8 @@ against 4 GiB. More memory is strictly stronger, but 4 GiB is
 argon2id's maximum, so past it only iterations raise the price." 22 74 6 \
     paranoid   "4 GiB x 12  maximum — same ~6 guesses, each 20% dearer" \
     aggressive "4 GiB x 10  strongest shipped profile — ~6 at once" \
-    moderate   "2 GiB x  6  strong — ~12 at once on that same GPU" \
-    fast       "1 GiB x  4  still memory-hard — ~24 at once" \
+    moderate   "2 GiB x  8  strong — ~12 at once on that same GPU" \
+    fast       "1 GiB x  9  at/above stock cryptsetup — ~24 at once" \
     custom     "set memory / iterations / threads yourself" \
     3>&1 1>&2 2>&3) || { clear; exit 0; }
 
@@ -216,15 +220,22 @@ case "$CHOICE" in
 esac
 
 # ─── Refuse accidentally-weak parameters ─────────────────────────────────────
-if [ "$NEW_MEM" -lt "$FLOOR_MEM_KIB" ] || [ "$NEW_ITER" -lt "$FLOOR_ITER" ]; then
-    ui --title "Below the safety floor" --yesno \
-"$(human_mem "$NEW_MEM") / $NEW_ITER iterations is below this tool's floor of
-$(human_mem "$FLOOR_MEM_KIB") / $FLOOR_ITER iterations.
+if [ "$NEW_MEM" -lt "$FLOOR_MEM_KIB" ] \
+   || [ $((NEW_MEM * NEW_ITER)) -lt $((FLOOR_MEM_KIB * FLOOR_ITER)) ]; then
+    ui --title "Below the floor — refused" --msgbox \
+"$(human_mem "$NEW_MEM") / $NEW_ITER iterations is below the 'fast'
+profile ($(human_mem "$FLOOR_MEM_KIB") / $FLOOR_ITER iterations), which is this
+tool's hard floor.
 
-A slip like 1048 where you meant 1048576 lands here, and would
-leave the keyslot far cheaper to attack than it looks.
+cryptsetup's own default is argon2id at ~1 GiB with iterations
+tuned to 2000 ms. Anything cheaper than 'fast' would leave the
+keyslot weaker than a plain luksFormat with no arguments — so
+there is no 'proceed anyway' here.
 
-Proceed anyway?" 16 70 || { clear; exit 0; }
+A slip like 1048 where you meant 1048576 also lands here.
+
+If you really want this, run cryptsetup luksConvertKey yourself." 18 70
+    clear; exit 1
 fi
 
 # ─── Confirm ─────────────────────────────────────────────────────────────────
