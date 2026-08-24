@@ -116,7 +116,7 @@ keyslot, and the initramfs derives it in **9.5 s** — 0.2375 s per GiB-pass.
 > Initramfs timings do not transfer, and they are not off by a little.
 
 Practical consequence: **encrypted `/boot` costs ~20 s at every boot minimum**,
-on the fastest Apple Silicon Mac currently available.
+on a Apple M2 Max.
 
 ---
 
