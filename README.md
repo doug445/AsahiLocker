@@ -456,12 +456,30 @@ while it costs you two extra words, not as a prediction that anyone will do this
 words — exactly five six-sided dice per word, `log2(7776) = 12.92` bits each.
 Roll real dice if you have them; five rolls select one word by lookup.
 
-Without dice, use a CSPRNG explicitly — do not let a shell pick for you:
+Without dice, use a CSPRNG explicitly — do not let a shell pick for you. Fetch
+the list, check it, then draw from it:
 
 ```bash
-# EFF long wordlist: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
-shuf --random-source=/dev/urandom -n 8 eff_large_wordlist.txt | cut -f2 | paste -sd' '
+# EFF long wordlist: 7,776 lines of "11111<TAB>abacus"
+curl -O https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+
+# Verify it before trusting it for entropy
+echo 'addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e  eff_large_wordlist.txt' \
+    | sha256sum -c
+
+# Eight words, drawn with replacement, from the kernel CSPRNG
+shuf -r -n 8 --random-source=/dev/urandom eff_large_wordlist.txt | cut -f2 | paste -sd' '
 ```
+
+Two details in that command are load-bearing:
+
+- **`-r` draws with replacement.** Diceware specifies independent rolls, so a
+  word may legitimately repeat and each one contributes the full 12.92 bits.
+  Without `-r`, `shuf` samples without replacement — a different model, and one
+  that cannot produce the repeat it sometimes should.
+- **Check the list.** A truncated or substituted wordlist lowers your entropy
+  silently: the passphrase still looks like eight ordinary words. A list cut to
+  its first 100 lines yields 53 bits, not 103, and nothing in the output says so.
 
 Eight words is a sound default for a machine you use daily. Ten or eleven is
 appropriate for a volume you expect to outlive the hardware.
