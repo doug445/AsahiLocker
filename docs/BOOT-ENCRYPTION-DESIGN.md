@@ -308,7 +308,7 @@ the strongest terms — this silently converts Option 2 into a worse Option 1.
   clear. That backup is now equivalent to the disk's key. Either exclude
   `/boot`, or treat the backup repository as exactly as sensitive as the
   passphrase. This surprises people, and it should be stated at the prompt, not
-  in a footnote.
+  in a footnote.Solution: always encrypt your backups.
 - **The keyslot the keyfile occupies does not need an expensive KDF.** The
   keyfile is **4096 random bytes** (owner's choice; cryptsetup accepts up to
   8192 kB, and the 512-character limit in `--help` applies to *interactive*
