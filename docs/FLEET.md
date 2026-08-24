@@ -90,8 +90,8 @@ at the menu — and record which box got which profile:
 
 ```bash
 sudo LUKS_PROFILE=aggressive ./bin/luks-deploy.sh   # 4 GiB, t=10
-sudo LUKS_PROFILE=moderate   ./bin/luks-deploy.sh   # 2 GiB, t=6
-sudo LUKS_PROFILE=fast       ./bin/luks-deploy.sh   # 1 GiB, t=4
+sudo LUKS_PROFILE=moderate   ./bin/luks-deploy.sh   # 2 GiB, t=8
+sudo LUKS_PROFILE=fast       ./bin/luks-deploy.sh   # 1 GiB, t=9
 ```
 
 Every profile is argon2id; none is pbkdf2. Pick one and keep the fleet on it

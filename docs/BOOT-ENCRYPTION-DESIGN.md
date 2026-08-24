@@ -42,24 +42,37 @@ Dropping `/boot` to pbkdf2 to satisfy the stock GRUB is not an acceptable
 answer here; see [INTERNALS.md](INTERNALS.md). So encrypted `/boot` requires
 shipping a GRUB that the distro does not yet provide.
 
-## KDF ceiling for `/boot` — 1 GiB, absolutely
+## KDF ceiling for `/boot`
 
 > ### THE RULE
 >
-> **A GRUB-unlocked volume gets argon2id at 1 GiB. Never more. Not "prefer
-> less", not "1 GiB is recommended" — 1 GiB is the hard ceiling and there is
-> no configuration in which exceeding it is correct.**
+> **Never configure a GRUB-unlocked volume at 4 GiB argon2id memory cost.** That
+> one is absolute and has nothing to do with firmware — it is a 32-bit overflow
+> in GRUB's own arithmetic, and it fails in the worst possible way.
 >
-> This applies to `/boot` and to any other volume GRUB itself must open. It
-> does **not** apply to root, which is opened by the initramfs.
+> **Below 4 GiB, the usable maximum is a property of the firmware, not of GRUB.**
+> It must be *measured* on the platform, never assumed from another one.
+> AsahiLocker ships **1 GiB** for `/boot` — the conservative figure — and treats
+> anything above it as opt-in, and only after measurement on the smallest
+> machine you intend to support.
+>
+> Applies to `/boot` and any other volume GRUB itself must open. Does **not**
+> apply to root, which the initramfs opens.
 
-1 GiB is confirmed in production on Manjaro, Linux Mint and Fedora x86. GRUB
-will not go above it.
+**An earlier version of this section stated 1 GiB as a hard ceiling that "GRUB
+will not go above". That was wrong, and this project's own probe disproved it:**
+2 GiB allocates *and* completes a real keyslot decryption under U-Boot on an
+M2 Max — see the probe result below. The 1 GiB figure is real but it is
+*x86-specific*: it comes from boxes running vendor UEFI, where it reflects how
+much heap that firmware leaves GRUB, not a limit GRUB imposes on itself. It is
+still confirmed in production on Manjaro, Linux Mint and Fedora x86, and it
+remains our shipped default — now for portability and unlock latency rather than
+because the memory is unreachable.
 
-### Why nothing above 1 GiB is acceptable
+### Why 4 GiB specifically is never acceptable
 
-Two separate failure modes, and both land at the worst possible moment — at the
-boot prompt, on the volume that holds your kernel, before any recovery tooling
+Two failure modes, and both land at the worst possible moment — at the boot
+prompt, on the volume that holds your kernel, before any recovery tooling
 exists.
 
 **1. Integer overflow at exactly 4 GiB.** In `argon2_init`
@@ -75,14 +88,18 @@ exactly 4 GiB, `1024 * 4194304 == 2^32`, which wraps to **0**. GRUB then calls
 memory cost is unsupported, it asks the allocator for nothing and proceeds from
 there. A clean rejection would be recoverable. This is not a clean rejection.
 
-**2. Allocation failure anywhere above 1 GiB.** GRUB is a memory-constrained
-environment: its EFI heap starts at 32 MiB (`DEFAULT_HEAP_SIZE 0x2000000`) and
-grows on demand through `grub_efi_mm_add_regions`. Asking it for more than
-1 GiB is, at best, untested; realistically it fails to allocate, and a failure
-here means **the device does not boot**. Whether the failure is a clean error or
-a silent hang at the passphrase prompt is itself unverified — a hang is a far
-worse outcome than an error, and there is no reason to find out on a real
-machine.
+**2. Allocation failure above whatever the firmware actually affords.** GRUB is
+a memory-constrained environment: its EFI heap starts at 32 MiB
+(`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand through
+`grub_efi_mm_add_regions`. How far it grows is the firmware's business, and it
+differs by platform — which is exactly why the figure must be measured rather
+than inherited. A request the firmware cannot satisfy means **the device does
+not boot**, and whether it fails as a clean error or a silent hang at the
+passphrase prompt is unverified on any platform. A hang is far worse than an
+error, and a real machine is the wrong place to find out.
+
+This is why "2 GiB worked on an M2 Max" is a licence to offer 2 GiB *on machines
+where it has been measured*, and nothing more. An 8 GiB M1 is a different heap.
 
 Note the practical consequence: a volume configured this way is not merely slow
 or weakly protected. It is a volume GRUB cannot open, holding the kernel needed
@@ -105,14 +122,250 @@ implementation. So even the 1 GiB figure needs confirming here:
 2. Whether a failure is clean. A hang at the passphrase prompt would force a
    more conservative default than 1 GiB — never a more generous one.
 
-The allocation probe exists to answer exactly these two questions, and it
-deliberately tests 512 MiB and 1024 MiB only. **It must never be pointed at
-4096**: per the overflow above, that path does not produce a usable answer.
+The allocation probe exists to answer exactly these two questions. **It must
+never be pointed at 4096**: per the overflow above, that path does not produce a
+usable answer.
+
+### Probe result — 2026-08-24, M2 Max, GRUB 2.14 under U-Boot
+
+```
+RESULTS: 512M=OK  1024M=OK  2048M=OK   envwrite=OK
+```
+
+Every size allocated *and* completed a real keyslot decryption (`Slot "0"
+opened`) — not merely a successful `malloc`. So:
+
+- **1 GiB is reachable under U-Boot.** Question 1 answered; the conservative
+  fallback is not needed.
+- **The ceiling is higher here than on x86.** The widely-repeated "GRUB caps at
+  1 GiB" figure comes from x86 boxes running vendor UEFI firmware. It is not a
+  property of GRUB — it is a property of how much heap that firmware leaves
+  available. U-Boot's EFI grows GRUB's heap differently, and 2 GiB works.
+- **Question 2 is moot at these sizes** — nothing failed, so nothing had the
+  chance to fail dirty.
+
+**Still unknown, and both matter before this ships:**
+
+1. **Unlock latency was not measured.** The probe deliberately used `t=4`, since
+   it was measuring *memory*, not strength. GRUB's argon2 is not the kernel's:
+   it is unoptimised and its parallelism lanes are not real threads, so a cost
+   that takes 2 s in the initramfs may take far longer at the GRUB prompt. You
+   pay this at every boot, before anything is on screen to explain the wait.
+2. **Smaller machines are untested.** 2 GiB of GRUB heap on an 8 GiB M1 is a
+   very different proposition from an M2 Max. Anything above 1 GiB must stay
+   opt-in until measured on the smallest supported Mac.
+3. **The 2–4 GiB range is untested**, and the overflow at exactly 4 GiB is
+   unconditional regardless.
+
+**Consequence for the design: `/boot` stays at 1 GiB by default.** The probe
+raises the known ceiling; it does not change the recommendation, because the
+binding constraint on `/boot` is now latency and portability, not allocation.
+
+### Timing result — 2026-08-24, M2 Max, GRUB 2.14 under U-Boot
+
+Measured with GRUB's own `time` command. (`date` is useless here: U-Boot
+implements no EFI `GetTime` runtime service. But `grub_get_time_ms()` works —
+which is the clock `sleep` and `time` both use.)
+
+| case | GiB-passes | elapsed |
+|---|---|---|
+| 1 GiB x 4 | 4 | **8.096 s** |
+| 1 GiB x 10 | 10 | **20.224 s** |
+| 2 GiB x 10 | 20 | **39.624 s** |
+| 2 GiB x 20 | 40 | **machine reset — no output, reproduced twice** |
+
+**GRUB's argon2 is linear in memory x iterations**, at **~2.0 s per GiB-pass**
+(2.024 / 2.022 / 1.981 — a 2.1% spread across the three that completed).
+
+**And it is 8.5x slower than the kernel.** Root's keyslot is 4 GiB x 10 — the
+same 40 GiB-passes — and the initramfs derives it in **9.5 s**, or 0.2375 s per
+GiB-pass. This is the concrete form of the warning above: *initramfs timings do
+not transfer to GRUB*, and they are not off by a little.
+
+### There is a wall, and crossing it resets the machine
+
+`2 GiB x 20` never printed a result. The machine rebooted instantly, twice, at
+the same point.
+
+**This is not an allocation failure, and the reasoning is worth keeping:**
+`2 GiB x 20` allocates *exactly the same memory* as `2 GiB x 10`, which had just
+succeeded moments earlier in the same session. The memory footprint is
+identical; only the duration differs. So whatever kills it is a function of
+**time**, not size.
+
+The likely mechanism is a watchdog. GRUB does disable the EFI one —
+`grub_efi_system_table->boot_services->set_watchdog_timer (0, 0, 0, NULL)` in
+`grub-core/kern/efi/init.c` — so the suspect is Apple's hardware watchdog, which
+U-Boot leaves running and which is only serviced when GRUB calls into firmware
+(console output, `stall`). argon2 is a pure compute loop that calls into
+nothing, so a long enough single derivation starves it. That also explains why
+the ~82 s of *cumulative* probe time before this case was survivable while a
+single ~80 s computation was not: every `echo` and `sleep` between cases hands
+the firmware a turn.
+
+**The wall is somewhere between 40 s and 80 s of uninterrupted computation, and
+it is not a graceful failure — it is a hard reset with nothing on screen.**
+
+#### What this constrains
+
+1. **Matching root's KDF inside GRUB is impossible on this machine.** 40
+   GiB-passes is ~80 s, which is past the wall. There is no configuration in
+   which a GRUB-unlocked `/boot` is as expensive to attack as a 4 GiB x 10 root
+   keyslot — 4 GiB is barred by the overflow, and 2 GiB x 20 resets the box.
+2. **Parameters must be chosen against the slowest machine you support, with
+   real margin.** 2 GiB x 10 costs 39.6 s here and is *already* close to the
+   observed-safe boundary. A base M1 has less memory bandwidth, so the same
+   parameters take longer there — potentially past the wall, on a machine that
+   then **cannot boot at all**. This is the strongest argument yet for keeping
+   `/boot` at 1 GiB: 20.2 s here, with roughly 2x headroom.
+3. **Encrypted `/boot` costs ~20 s at every boot, minimum**, on the fastest
+   Apple Silicon Mac available. That is the honest UX figure, and it should be
+   stated before anyone opts in — not discovered afterwards.
+
+### GRUB cannot be trusted to write the ESP
+
+The probe reported `grubenv writable: OK` — `save_env` returned success — but
+**nothing reached the disk**. Confirmed by searching the raw partition: the only
+`probe_started=yes` on the ESP is the literal string inside `grub.cfg`, while
+the grubenv block still reads `probe_started=no`. (`save_env` writes raw blocks
+by block list, so the FAT directory mtime never updates either way — mtime is
+not evidence here.)
+
+Note this is *not* a blanket "GRUB cannot write": Fedora's GRUB 2.12 does
+successfully clear `menu_show_once_timeout` from the grubenv on the **ext4**
+`/boot`, on the same disk, through the same EFI block path. Whatever the cause,
+the operational rule is: **design nothing that depends on GRUB persisting state
+to the ESP, and never treat a `save_env` return value as proof it wrote.**
+Encrypted `/boot` needs no such writes.
+
+## Retrofit: choosing the unlock architecture on an already-encrypted root
+
+Converting `/boot` after the fact is the normal case, not the exception — every
+existing deployment is in it. The choice between the two unlock options is
+**not** a matter of taste there, because root's keyslot cost is already fixed
+and can be read. The converter must compute the trade and state it, rather than
+printing generic advice.
+
+### The rule
+
+Read root's keyslot with `cryptsetup luksDump` and compare **work**
+(memory x iterations) against the `/boot` keyslot about to be written:
+
+| condition | what it means | what to show |
+|---|---|---|
+| `/boot` work >= root work | Option 1 costs nothing. The keyfile is reachable only by breaking a keyslot at least as expensive as root's. | Say so plainly, with both figures. |
+| `/boot` work < root work | Option 1 makes the cheapest way in **N times cheaper than today**, where N is the ratio. Nothing about root's header changed — it simply stopped being the barrier. | State N, and state what `/boot` parameters would bring N to 1. |
+
+**Then ask, with no option pre-selected.** The converter's job is to make the
+consequence impossible to miss, not to choose. Convenience versus a 4x cheaper
+attack is a judgement about the owner's threat model, their physical security,
+and how many times a day they reboot — none of which this script knows. A
+`[1-2, default N]` prompt quietly makes that judgement for them, so the retrofit
+prompt takes no default and accepts no empty answer. For unattended runs the
+choice comes from the environment (e.g. `LUKS_BOOT_UNLOCK=1|2`), which is an
+explicit choice too — just made earlier.
+
+The same comparison should be printed on the fresh-install path, where the
+asymmetry can be identical (root at 4 GiB, `/boot` capped by GRUB). The existing
+fresh-install prompt carries `default 1`; if the retrofit takes no default, that
+one is worth revisiting for consistency.
+
+Worked example, a real machine: root at argon2id **4 GiB x 10** = 40 GiB-passes.
+`/boot` at 1 GiB x 10 is 10 — Option 1 would make the cheapest path in **4x**
+cheaper. Since 4 GiB is unusable in GRUB (the overflow), the only parameters
+that match root are **2 GiB x 20**. Allocation at 2 GiB is proven; whether t=20
+is tolerable at every boot is a latency question, which is what the timing probe
+exists to answer. **On that machine the timing probe does not decide anything by
+itself — it tells the owner what Option 1 would actually cost them, so the
+preference can be an informed one.**
+
+### Option 2 has a failure mode the converter can actually detect
+
+Two passphrases are only two barriers if they are **different**. Reuse the same
+one and an attacker who breaks the cheaper `/boot` keyslot has the root
+passphrase too — you have paid for two prompts and bought one barrier, the
+weaker one.
+
+This is checkable rather than merely advisable: after enrolling the `/boot`
+passphrase, test it against root with
+
+```bash
+cryptsetup open --test-passphrase --key-file - /dev/<root>
+```
+
+If it succeeds, the user has reused the passphrase. Refuse to finish, or warn in
+the strongest terms — this silently converts Option 2 into a worse Option 1.
+
+### Option 1 hazards specific to retrofitting
+
+- **The keyfile ends up in every initramfs**, and initramfs images accumulate in
+  `/boot`. Deleting the key file alone revokes nothing. Backing out means
+  `cryptsetup luksRemoveKey` on that keyslot **and** regenerating every
+  initramfs, in that order.
+- **Backups of `/boot` become secret-bearing.** Once the keyfile is inside the
+  encrypted `/boot`, any tool that reads `/boot` from the *running* system —
+  Borg, Back In Time, rsync, a `tar` snapshot — captures the root keyfile in the
+  clear. That backup is now equivalent to the disk's key. Either exclude
+  `/boot`, or treat the backup repository as exactly as sensitive as the
+  passphrase. This surprises people, and it should be stated at the prompt, not
+  in a footnote.
+- **The keyslot the keyfile occupies does not need an expensive KDF.** The
+  keyfile is **4096 random bytes** (owner's choice; cryptsetup accepts up to
+  8192 kB, and the 512-character limit in `--help` applies to *interactive*
+  passphrases only). 64 bytes would already be 512 bits — unguessable at any
+  iteration count — so 4096 buys nothing cryptographically, but it costs
+  nothing either. Because the entropy makes the KDF irrelevant here,
+  `luksAddKey` cost on this slot is cosmetic; pass the parameters explicitly
+  anyway rather than letting it re-benchmark, so the header stays uniform.
+  Generate it as raw binary (`dd if=/dev/urandom bs=4096 count=1`) and never
+  let a text tool near it — a stray newline changes the secret.
+- **`/boot` must be encrypted before the keyfile-bearing initramfs is written
+  into it.** Getting that order wrong leaves the key in the clear on an
+  unencrypted partition, which is the exact failure the feature exists to
+  prevent.
+
+### What each option costs to undo
+
+Reversibility differs sharply, and it belongs in front of the user at the prompt
+rather than discovered later:
+
+- **Option 2** adds no keyslot and creates no key material at rest. Root's
+  header is never touched. Backing out is decrypting `/boot`, which puts you
+  exactly where you started.
+- **Option 1** adds a keyslot to root and puts a key on disk. Backing out is
+  `cryptsetup luksRemoveKey` **then** regenerating every initramfs — in that
+  order, because the key is baked into each one. It also changes what your
+  backups contain, permanently, for every backup taken while it was in effect.
+
+That asymmetry is a fact about the two designs, not an argument for either. A
+machine that boots twice a year and one that boots twenty times a day are
+answering different questions, and only the owner knows which they have.
+
+## Release plan
+
+Encrypted `/boot` is a **major version bump**, not a point release, and it
+carries a documentation rewrite with it: every place that says "`/boot` is
+deliberately left unencrypted" becomes a description of a choice the installer
+now offers, and the threat-model section changes shape.
+
+The installer must offer **both**, and keep root-only as a first-class option
+rather than a legacy path:
+
+- **root only** — what ships today. `/boot` in the clear, no GRUB argon2
+  dependency, no self-built GRUB. This stays the default until encrypted
+  `/boot` has real mileage on more than one machine.
+- **root + `/boot`** — the new path, gated on the allocation probe below.
+
+Nothing here ships until the probe answers the two questions in the previous
+section. A `/boot` that hangs at the GRUB passphrase prompt is a worse outcome
+than a `/boot` in the clear.
 
 ## Unlock architecture — two options, user's choice
 
 `/boot` is opened by GRUB at argon2id **1 GiB / 10 iterations / 4 threads**.
-That figure is fixed by the ceiling above and by one measurement: `cryptsetup`'s
+The probe shows 2 GiB is also reachable on an M2 Max, but 1 GiB remains the
+default for portability and unlock latency (see the probe result above). The
+figure is fixed by that choice and by one measurement: `cryptsetup`'s
 own defaults on this hardware are argon2id at **1 GiB / t=8**, so 1 GiB with
 fewer than 8 iterations would ship a `/boot` weaker than what a plain
 `luksFormat` gives you for free. Ten iterations clears that bar deliberately.
@@ -128,7 +381,7 @@ initramfs -> keyfile, no prompt  -> unlocks /       root's own KDF, unchanged
 ```
 
 You type one passphrase per boot. The initramfs — which now lives inside the
-encrypted `/boot` — carries a random 64-byte keyfile that opens root silently.
+encrypted `/boot` — carries a random **4096-byte** keyfile that opens root silently.
 
 **What it costs, stated exactly.** Root's keyslot parameters are untouched, but
 they stop being what stands between an attacker and your data, because breaking
