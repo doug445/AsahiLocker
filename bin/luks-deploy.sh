@@ -112,6 +112,36 @@ warn() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}[ERROR]${NC} $*" >&2; }
 fatal() { err "$@"; exit 1; }
 
+# ─── Permissions on the deployment drive ─────────────────────────────────────
+# chmod(2) SUCCEEDS and does nothing on vfat/exfat/ntfs: the mode comes from the
+# mount's fmask/dmask, not from the inode. So `chmod 0400 secret` on a FAT stick
+# reports success and leaves the file world-readable. The recovery key and the
+# LUKS header backup both land on the deployment drive, which is very often
+# exactly such a stick, so a silent no-op here is the dangerous case -- not a
+# hard failure.
+#
+# Set the mode, read it back, and say so ONCE if it did not take. Never returns
+# non-zero: a drive that cannot hold permissions is a reason to warn loudly, not
+# to abort a deployment that is already under way.
+MODE_WARNED=0
+harden_path() {                        # harden_path <octal-mode> <path>
+    local mode="$1" path="$2" got
+    chmod "$mode" "$path" 2>/dev/null || true
+    got="$(stat -c '%a' "$path" 2>/dev/null || true)"
+    if [ "$got" = "${mode#0}" ]; then
+        return 0
+    fi
+    if [ "$MODE_WARNED" -eq 0 ]; then
+        MODE_WARNED=1
+        warn "This drive cannot store Unix permissions (vfat/exfat?)."
+        warn "  Wanted mode $mode on $(basename "$path"); it is ${got:-unknown}."
+        warn "  The recovery key and LUKS header backup written here are readable"
+        warn "  by ANYONE who picks this drive up. Move them to secure offline"
+        warn "  storage as soon as deployment finishes."
+    fi
+    return 0
+}
+
 # ─── LUKS2 KDF profiles ──────────────────────────────────────────────────────
 # Three presets, chosen interactively before encryption starts. The KDF is
 # re-run in the INITRAMFS at every boot, so its memory cost must be allocatable
@@ -872,6 +902,10 @@ cross_check_part "EFI"  "/boot/efi" "$TARGET_EFI"  "$EFI_UUID"
 log "  Saving pre-encryption state to USB drive..."
 STATE_DIR="$SCRIPT_DIR/pre-luks-state-$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$STATE_DIR"
+# Lock the directory before the recovery key or the header backup land in it.
+# This is also the first harden_path call, so an unsuitable deployment drive
+# is reported here -- before encryption starts and while aborting is free.
+harden_path 0700 "$STATE_DIR"
 cp "/mnt_temp/${ROOT_SUBVOL}/etc/fstab" "$STATE_DIR/fstab" 2>/dev/null || true
 cp "/mnt_temp/${ROOT_SUBVOL}/etc/default/grub" "$STATE_DIR/grub-defaults" 2>/dev/null || true
 cp "/mnt_temp/${ROOT_SUBVOL}/etc/kernel/cmdline" "$STATE_DIR/kernel-cmdline" 2>/dev/null || true
@@ -1379,6 +1413,7 @@ case "$RK_CHOICE" in
             # later TYPE at a passphrase prompt.
             install -m 600 /dev/null "$RK_FILE"
             printf '%s' "$RECOVERY_KEY" > "$RK_FILE"
+            harden_path 0600 "$RK_FILE"
             log "  Enrolling recovery key (enter the volume passphrase when asked)..."
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
                    --pbkdf argon2id \
@@ -1399,7 +1434,7 @@ newline). Two ways to use it if the passphrase is ever lost:
 MOVE BOTH FILES TO SECURE OFFLINE STORAGE — anyone holding the key can
 unlock the disk.
 RK_EOF
-                chmod 600 "$STATE_DIR/recovery-key-README.txt"
+                harden_path 0600 "$STATE_DIR/recovery-key-README.txt"
                 log "  Recovery key enrolled. Saved to: $RK_FILE"
             else
                 rm -f "$RK_FILE"
@@ -1416,9 +1451,13 @@ esac
 rm -f /mnt/boot/luks-header-backup.img
 cryptsetup luksHeaderBackup "$TARGET_ROOT" \
     --header-backup-file /mnt/boot/luks-header-backup.img
-chmod 400 /mnt/boot/luks-header-backup.img
-# Also save to USB drive
-cp /mnt/boot/luks-header-backup.img "$STATE_DIR/luks-header-backup.img"
+harden_path 0400 /mnt/boot/luks-header-backup.img
+# Also save to the deployment drive. install(1) rather than cp(1): cp creates
+# the destination at 0666 & ~umask -- 0644 by default -- so the header would sit
+# world-readable for the length of the copy and stay that way if the chmod that
+# follows is a no-op. install sets the mode as it creates the file.
+install -m 0400 /mnt/boot/luks-header-backup.img "$STATE_DIR/luks-header-backup.img"
+harden_path 0400 "$STATE_DIR/luks-header-backup.img"
 log "  Header backup: /boot/luks-header-backup.img"
 log "  Header backup: $STATE_DIR/luks-header-backup.img (USB copy)"
 
