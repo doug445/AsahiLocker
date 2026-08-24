@@ -670,8 +670,9 @@ GRUB has to read the kernel and initramfs before anything is unlocked. The
 encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
 plain avoids putting GRUB on the unlock path at all — where the KDF is limited
 by however much heap the **firmware** grants it, and where GRUB 2.12 (current in
-Fedora 44) has no argon2 support whatsoever. On x86 vendor UEFI that limit has
-always been 1 GiB; under Asahi's U-Boot it is higher, and this project measured
+Fedora 44) has no argon2 support whatsoever. Using GRUB 2.14 (which has argon2id
+support) on x86 vendor UEFI that limit has always been 1 GiB; under Asahi's 
+U-Boot it is higher, and this project using a built GRUB 2.14 measured
 2 GiB working on an M2 Max. Exceeding whatever the firmware affords does not
 mean a slow boot, it means no boot: GRUB fails to allocate. And at exactly 4 GiB
 it is worse than a failure — a 32-bit overflow in its `argon2_init` wraps the
