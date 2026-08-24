@@ -546,7 +546,8 @@ count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
 > **Note on GRUB and argon2id:** none of this constrains the root volume, because
 > GRUB never unlocks it — the initramfs does. It only matters if you have some
 > *other* volume that GRUB itself must unlock.
->
+> 
+> EXPERIMENTAL: Using GRUB 2.14 with argon2id to encrypt /boot partition;
 > For those volumes: **never use 4 GiB** — a 32-bit overflow in GRUB's
 > `argon2_init` wraps the allocation size to zero, so it proceeds instead of
 > rejecting the parameters. That rule is unconditional.
