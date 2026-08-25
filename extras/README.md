@@ -46,11 +46,14 @@ of encrypted volumes you expect.
 - `GRUB_UUIDS` tags volumes that GRUB itself must unlock (as opposed to the
   initramfs) with `(GRUB boot)`. Empty by default:
   `GRUB_UUIDS=" <uuid> " luks-fetch-cache`. Such volumes are KDF-constrained:
-  **1 GiB of argon2id memory is a hard ceiling for them — never exceed it.**
-  GRUB is memory-constrained and an allocation failure there means the machine
-  does not boot; at exactly 4 GiB a 32-bit overflow in GRUB's `argon2_init`
-  wraps the allocation to zero, so it proceeds rather than rejecting the
-  parameters. GRUB 2.12 has no argon2 support at all. None of that is a reason
-  to drop a volume to pbkdf2 — upgrade GRUB, or keep the volume off GRUB's
-  unlock path. The root volume encrypted by this repo is unlocked by the
-  initramfs, so it is unaffected either way.
+  the usable argon2id memory cost is set by the **firmware's** heap and must be
+  measured per platform — ~1 GiB on x86 vendor UEFI, 2 GiB measured working
+  under U-Boot on an M2 Max (see
+  [BOOT-ENCRYPTION-STATUS.md](../docs/BOOT-ENCRYPTION-STATUS.md)). Use 1 GiB as
+  the portable default; an allocation failure there means the machine does not
+  boot. **Never 4 GiB**: a 32-bit overflow in GRUB's `argon2_init` wraps the
+  allocation to zero, so it proceeds rather than rejecting the parameters. GRUB
+  2.12 has no argon2 support at all. None of that is a reason to drop a volume
+  to pbkdf2 — upgrade GRUB, or keep the volume off GRUB's unlock path. The root
+  volume encrypted by this repo is unlocked by the initramfs, so it is
+  unaffected either way.
