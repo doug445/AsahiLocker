@@ -38,7 +38,10 @@ set -eu
 [ -d /sys/firmware/efi/efivars ] || exit 0
 
 efibootmgr -v 2>/dev/null | awk '
-    /^Boot[0-9A-F]{4}\*/ {
+    # \*? — inactive (un-starred) entries are just as stale when their GPT
+    # partition is gone, so consider both. Header lines (BootOrder:,
+    # BootCurrent:, Timeout:) cannot match the 4-hex-char class.
+    /^Boot[0-9A-F]{4}\*?[[:space:]]/ {
         entry=$1; sub(/\*$/,"",entry); sub(/^Boot/,"",entry)
         for (i=1; i<=NF; i++) {
             if (match($i, /GPT,[0-9a-f-]{36}/)) {

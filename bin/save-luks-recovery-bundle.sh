@@ -71,7 +71,10 @@ else
 fi
 
 # --- Resolve the RAW backing device + LUKS UUID -----------------------------
-RAW=$("$CRYPTSETUP" status "$MAPPER_NAME" 2>/dev/null | "$GREP" -oE '/dev/[a-z0-9]+' | "$GREP" -vi mapper | /usr/bin/head -1)
+# Take the 'device:' line verbatim (a character-class grep would truncate
+# names containing '-', e.g. /dev/dm-1) and canonicalise symlinks.
+RAW=$("$CRYPTSETUP" status "$MAPPER_NAME" 2>/dev/null | /usr/bin/awk '$1=="device:"{print $2; exit}')
+[ -n "$RAW" ] && RAW=$(/usr/bin/readlink -f "$RAW" 2>/dev/null || echo "$RAW")
 if [ -z "$RAW" ]; then
   # Fallback: resolve the crypttab UUID to a real device path (a bare
   # "UUID=xxxx" string is NOT usable as a device argument to cryptsetup/blkid)
@@ -163,6 +166,5 @@ ok "wrote README-RECOVERY.txt"
 "$SYNC"
 echo
 ok "LUKS recovery bundle complete:"
-"$LSBLK" >/dev/null 2>&1
 /usr/bin/ls -la "$DEST" | /usr/bin/sed 's/^/    /'
 echo -e "  ${Y}Remember to copy $DEST off this machine.${N}"

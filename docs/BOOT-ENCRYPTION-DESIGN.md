@@ -52,9 +52,9 @@ shipping a GRUB that the distro does not yet provide.
 >
 > **Below 4 GiB, the usable maximum is a property of the firmware, not of GRUB.**
 > It must be *measured* on the platform, never assumed from another one.
-> AsahiLocker ships **1 GiB** for `/boot` — the conservative figure — and treats
-> anything above it as opt-in, and only after measurement on the smallest
-> machine you intend to support.
+> This design specifies **1 GiB** for `/boot` — the conservative figure — and
+> treats anything above it as opt-in, and only after measurement on the
+> smallest machine you intend to support.
 >
 > Applies to `/boot` and any other volume GRUB itself must open. Does **not**
 > apply to root, which the initramfs opens.
@@ -112,19 +112,23 @@ full userspace, no allocator constraint, and fast on Apple Silicon. These two
 figures are not interchangeable and must never be copied from one volume to the
 other. `/boot` is derived by GRUB. GRUB is not userspace.
 
-### Still to confirm on this platform
+### What had to be confirmed on this platform — now measured
 
 The x86 systems above run standard UEFI firmware; Asahi runs U-Boot's EFI
-implementation. So even the 1 GiB figure needs confirming here:
+implementation, so even the 1 GiB figure could not be assumed here. Two
+questions had to be answered, and the allocation probe was built to answer
+exactly them (**it must never be pointed at 4096**: per the overflow above,
+that path does not produce a usable answer):
 
-1. Whether 1 GiB is reachable under U-Boot at all. Nobody has measured whether
-   GRUB's heap gets there on this hardware.
+1. Whether 1 GiB is reachable under U-Boot at all — nobody had measured whether
+   GRUB's heap gets there on this hardware. **Answered: yes** (probe result
+   below).
 2. Whether a failure is clean. A hang at the passphrase prompt would force a
    more conservative default than 1 GiB — never a more generous one.
-
-The allocation probe exists to answer exactly these two questions. **It must
-never be pointed at 4096**: per the overflow above, that path does not produce a
-usable answer.
+   **Unresolved in a different way than expected:** no allocation failure was
+   ever observed at the sizes tested, so failure cleanliness remains
+   unobserved — and the timing probe found a *different*, time-based failure
+   (the reset wall, below).
 
 ### Probe result — 2026-08-24, M2 Max, GRUB 2.14 under U-Boot
 
@@ -308,7 +312,7 @@ the strongest terms — this silently converts Option 2 into a worse Option 1.
   clear. That backup is now equivalent to the disk's key. Either exclude
   `/boot`, or treat the backup repository as exactly as sensitive as the
   passphrase. This surprises people, and it should be stated at the prompt, not
-  in a footnote.Solution: always encrypt your backups.
+  in a footnote. The simple mitigation: always encrypt your backups.
 - **The keyslot the keyfile occupies does not need an expensive KDF.** The
   keyfile is **4096 random bytes** (owner's choice; cryptsetup accepts up to
   8192 kB, and the 512-character limit in `--help` applies to *interactive*
@@ -403,8 +407,9 @@ Choose this if you want the convenience and your passphrase is strong.
 
 **Keyfile hygiene, non-negotiable when this option is taken:**
 
-- Generated at deploy time from `/dev/urandom`, 64 bytes, never reused across
-  machines.
+- Generated at deploy time from `/dev/urandom`, 4096 raw bytes (see the sizing
+  note above — 64 would already suffice; 4096 costs nothing), never reused
+  across machines.
 - It exists only inside the encrypted `/boot` initramfs and in the recovery
   bundle. It must never land on the ESP, in an unencrypted initramfs, or in a
   backup that is not itself encrypted.
@@ -472,10 +477,13 @@ parameters are worth; option 2 leaves them load-bearing.
 
 ### Implementation status
 
-**Not implemented.** The script half of this waits on the allocation probe: if
-1 GiB turns out to be unreachable under U-Boot's EFI, there is no encrypted
-`/boot` to offer either option for, and the whole prompt is moot. Building the
-menu before that answer exists would be building on an unverified assumption.
+**Not implemented.** The allocation question that originally gated this is now
+answered — 1 GiB (and 2 GiB) allocate and decrypt under U-Boot on an M2 Max,
+per the probe result above. What still blocks the script half is everything the
+*timing* probe surfaced: the ~20 s minimum unlock latency, the reset wall, and
+the open questions in
+[BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md#open-questions--this-is-where-help-is-wanted)
+— above all, measurements from smaller machines than an M2 Max.
 
 Runtime detail that applies to both options: the running system needs `/boot`
 mounted for kernel and initramfs updates, so `/boot` needs its own `crypttab`
@@ -567,14 +575,18 @@ reason to keep overriding it: the guard points the boot entry back at
 `EFI/fedora`, stops enforcing, and says so. The intent is to stop being in the
 boot path as soon as the distro makes us unnecessary.
 
-## Open questions — all blocking
+## Open questions — resolved ones struck through
 
-1. **Is 1 GiB reachable under U-Boot on Apple Silicon?** The ceiling itself is
-   settled at 1 GiB; what is unmeasured is whether U-Boot's EFI memory map can
-   deliver it. If not, `/boot` takes the lower figure.
-2. **Does the allocation fail cleanly or hang?** A clean failure is recoverable;
-   a hang at the passphrase prompt is a much worse user experience and changes
-   how conservative the default must be.
+1. ~~Is 1 GiB reachable under U-Boot on Apple Silicon?~~ **Resolved
+   (2026-08-24 probe): yes — 512 MiB, 1 GiB and 2 GiB all allocate *and*
+   complete a real keyslot decryption on an M2 Max.** The binding constraints
+   are now latency and the reset wall, not allocation.
+2. **Does an allocation failure fail cleanly or hang?** Still unobserved —
+   every size tested succeeded, so nothing had the chance to fail. It matters
+   most for machines smaller than the M2 Max, where the same request may be
+   refused; a hang at the passphrase prompt would force a more conservative
+   default. (The reset wall is a separate, *time*-based failure and is already
+   characterised — see above.)
 3. ~~One passphrase or two?~~ **Resolved: offer both**, one unlock as the
    default and two unlocks for anyone who wants root's KDF to stay the barrier.
    See "Unlock architecture" above. What remains open is only the wording of the

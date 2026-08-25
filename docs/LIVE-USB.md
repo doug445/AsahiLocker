@@ -134,6 +134,12 @@ sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 `os-prober` picks up the USB and adds an entry (e.g. `/dev/sda3`) to your normal
 GRUB menu. Reboot, pick it, done.
 
+> **If no USB entry appears**, os-prober is probably disabled — recent Fedora
+> defaults to `GRUB_DISABLE_OS_PROBER=true`. Set it to `false` in
+> `/etc/default/grub` (and `sudo dnf install os-prober` if the tool is absent),
+> re-run the command, and revert the setting afterwards if you prefer. Or skip
+> this method entirely and use Method B or C below — they need no config change.
+
 > **Watch the output path.** `-o /boot/grub2/grub.cfg` is correct. Never run
 > `grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg` — on Asahi that ESP file must
 > stay a small chainload stub, and overwriting it drops an encrypted system into

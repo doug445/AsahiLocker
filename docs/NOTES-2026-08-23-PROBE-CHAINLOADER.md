@@ -1,5 +1,11 @@
 # Probe postmortem — 2026-08-23: `chain.mod` not found, "all kernels" erroring
 
+> **Dated lab notebook — superseded.** The questions still open at the bottom
+> of this file were answered the following day; the current record is
+> [BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md). Kept unedited as the
+> postmortem of the chainloader failure. (The `read-results.sh` path mentioned
+> below now lives at `tools/boot-probe/read-results.sh`.)
+
 Written from the recovery USB after the internal (Route B) argon2id probe run
 failed. Everything below was verified against the mounted main system, then
 fixed in place. **The main system was never actually broken — see below.**

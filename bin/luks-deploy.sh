@@ -75,7 +75,7 @@ esac
 # fstab cross-checks, KDF benchmark, state backup to the deployment drive —
 # print the full plan, and exit BEFORE the point of no return. Nothing on the
 # TARGET is modified (config-only dry-run still asks for the passphrase to
-# unlock the container read-only for discovery).
+# unlock the container for discovery; all discovery mounts are read-only).
 DRY_RUN="${LUKS_DRY_RUN:-0}"
 for arg in "$@"; do
     case "$arg" in
@@ -406,7 +406,7 @@ trap cleanup EXIT
 
 # ─── Partial Previous Run Detection ─────────────────────────────────────────
 # If a previous run was interrupted, detect and warn
-if [ -b /dev/mapper/${LUKS_NAME} ] 2>/dev/null; then
+if [ -b /dev/mapper/${LUKS_NAME} ]; then
     warn "Found /dev/mapper/${LUKS_NAME} already open from a previous run!"
     echo "  keep  = leave it open and reuse it (saves a passphrase prompt in config-only mode)"
     echo "  close = close it and start fresh"
@@ -495,6 +495,9 @@ for ps_dir in /sys/class/power_supply/*/; do
     ps_type=$(cat "$ps_dir/type" 2>/dev/null || echo "")
     if [ "$ps_type" = "Battery" ]; then
         bat_capacity=$(cat "$ps_dir/capacity" 2>/dev/null || echo "100")
+        # Guard the arithmetic below: a garbled sysfs read must not kill the
+        # script under set -e with an inscrutable '[ -lt ]' error.
+        case "$bat_capacity" in ''|*[!0-9]*) bat_capacity=100;; esac
         bat_status=$(cat "$ps_dir/status" 2>/dev/null || echo "Unknown")
         log "Battery: ${bat_capacity}%, Status: ${bat_status}"
         if [ "$bat_capacity" -lt 50 ] && [ "$bat_status" != "Charging" ] && [ "$bat_status" != "Full" ]; then
@@ -1033,13 +1036,17 @@ else
     echo "   initramfs, which has the machine to itself — so any of"
     echo "   them is safe on any Asahi-supported Mac."
     echo ""
-    read -p "  Select KDF profile [1-3, default 2=moderate]: " KDF_CHOICE
-    case "${KDF_CHOICE:-2}" in
-        1) apply_kdf_profile aggressive ;;
-        2) apply_kdf_profile moderate ;;
-        3) apply_kdf_profile fast ;;
-        *) fatal "Invalid selection '$KDF_CHOICE' — expected 1, 2 or 3." ;;
-    esac
+    # Re-prompt on a typo: by this point the user may have sat through a
+    # 5-30 minute btrfs check, so a mistyped digit must not abort the run.
+    while true; do
+        read -p "  Select KDF profile [1-3, default 2=moderate]: " KDF_CHOICE
+        case "${KDF_CHOICE:-2}" in
+            1) apply_kdf_profile aggressive; break ;;
+            2) apply_kdf_profile moderate;   break ;;
+            3) apply_kdf_profile fast;       break ;;
+            *) echo "  Invalid selection '$KDF_CHOICE' — enter 1, 2 or 3." ;;
+        esac
+    done
     log "  Selected: $KDF_PROFILE_NAME ($((LUKS_PBKDF_MEMORY / 1024)) MiB, ${LUKS_PBKDF_ITER} iterations)"
 fi
 
@@ -1254,9 +1261,11 @@ fi
 echo ""
 log "[3/8] Verifying LUKS header and opening container..."
 
-# Verify LUKS header integrity
+# Verify LUKS header integrity ('Key Slot N:' is LUKS1 syntax; LUKS2 keyslot
+# parameters live on Cipher:/PBKDF:/Time cost:/Memory:/Threads: lines)
 log "  LUKS header dump:"
-cryptsetup luksDump "$TARGET_ROOT" 2>&1 | grep -E '(Version|Cipher|Hash|Key Slot [0-9])' | head -10 || true
+cryptsetup luksDump "$TARGET_ROOT" 2>&1 \
+    | grep -E '(^Version|Cipher:|PBKDF:|Time cost:|Memory:|Threads:)' | head -12 || true
 echo ""
 
 LUKS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
@@ -1414,7 +1423,13 @@ case "$RK_CHOICE" in
             install -m 600 /dev/null "$RK_FILE"
             printf '%s' "$RECOVERY_KEY" > "$RK_FILE"
             harden_path 0600 "$RK_FILE"
+            # The slot gets the CURRENT LUKS_PBKDF_* parameters. In config-only
+            # mode these are the moderate defaults (or env), not necessarily
+            # what the header's other slots use — cryptographically irrelevant
+            # for a random 256-bit key, but say so rather than surprise a
+            # later luksDump audit.
             log "  Enrolling recovery key (enter the volume passphrase when asked)..."
+            log "  Recovery keyslot KDF: argon2id $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} (current profile — other slots may differ)"
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
                    --pbkdf argon2id \
                    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
@@ -1690,6 +1705,12 @@ for initrd in /boot/initramfs-*.img /boot/initrd.img-*; do
                     echo "[CHROOT]       Auto-repair: dracut rebuild failed!"
                     ERRORS=$((ERRORS + 1))
                 fi
+            else
+                # Un-parseable name (e.g. initrd.img-<ver>) — cannot pick a kernel
+                # version to rebuild for, and a silent pass here would let an
+                # image without cryptsetup through the gate.
+                echo "[CHROOT]       Cannot parse a kernel version from $(basename "$initrd") — auto-repair impossible!"
+                ERRORS=$((ERRORS + 1))
             fi
         fi
     elif command -v lsinitramfs &>/dev/null; then
@@ -1843,10 +1864,22 @@ else
     echo "[CHROOT] Stripping 'rhgb quiet' from boot args (post-encryption-setup.sh restores them)..."
     strip_splash_tokens() {
         # $1 = file, $2 = sed address ('' = whole line applies)
-        # Boundary \2 (space, closing quote, or EOL) is preserved; the token and
-        # its leading space are dropped. Two passes: adjacent tokens
-        # ('rhgb quiet') need a second sweep because sed resumes after \2.
-        sed -i -E "$2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g; $2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g; $2 s/[[:space:]]+\$//" "$1"
+        # Three boundary cases, each swept twice because adjacent tokens
+        # ('rhgb quiet') need a second pass (sed resumes after the match):
+        #   1. token preceded by whitespace (mid/end of line): the token and its
+        #      leading space are dropped, boundary \2 (space, quote, EOL) kept
+        #   2. token at the very start of the line (bare cmdline files)
+        #   3. token right after an opening quote (GRUB_CMDLINE_LINUX="quiet ...")
+        sed -i -E "
+            $2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g
+            $2 s/[[:space:]]+(rhgb|quiet)([[:space:]]+|\"|\$)/\\2/g
+            $2 s/^(rhgb|quiet)([[:space:]]+|\$)//
+            $2 s/^(rhgb|quiet)([[:space:]]+|\$)//
+            $2 s/(=\")(rhgb|quiet)[[:space:]]+/\\1/
+            $2 s/(=\")(rhgb|quiet)[[:space:]]+/\\1/
+            $2 s/(=\")(rhgb|quiet)(\")/\\1\\3/
+            $2 s/[[:space:]]+\$//
+        " "$1"
     }
     if command -v grubby &>/dev/null; then
         grubby --update-kernel=ALL --remove-args="rhgb quiet" 2>&1 \
@@ -1880,15 +1913,20 @@ if command -v grub2-mkconfig &>/dev/null; then
 elif command -v grub-mkconfig &>/dev/null; then
     grub_tool="grub-mkconfig"
 fi
+GRUB_CFG_FOUND=false
 if [ -n "$grub_tool" ]; then
     for grub_cfg in /boot/grub2/grub.cfg /boot/grub/grub.cfg; do
         [ -f "$grub_cfg" ] || continue
+        GRUB_CFG_FOUND=true
         echo "[CHROOT] $grub_tool -o $grub_cfg"
-        $grub_tool -o "$grub_cfg" 2>&1
-        GRUB_REBUILT=true
+        if $grub_tool -o "$grub_cfg" 2>&1; then
+            GRUB_REBUILT=true
+        else
+            echo "[CHROOT] WARN: $grub_tool exited non-zero on $grub_cfg."
+        fi
         break
     done
-    if ! $GRUB_REBUILT; then
+    if ! $GRUB_CFG_FOUND; then
         # No existing real config — create one at the tool's native location
         # (still never on the ESP).
         case "$grub_tool" in

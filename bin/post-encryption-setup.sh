@@ -51,7 +51,7 @@ set -uo pipefail
 CHMOD=/usr/bin/chmod; CHOWN=/usr/bin/chown
 GREP=/usr/bin/grep; SED=/usr/bin/sed; BTRFS=/usr/bin/btrfs
 SYSTEMCTL=/usr/bin/systemctl; RESTORECON=/usr/sbin/restorecon
-LSBLK=/usr/bin/lsblk; WC=/usr/bin/wc; DIRNAME=/usr/bin/dirname; READLINK=/usr/bin/readlink
+WC=/usr/bin/wc; DIRNAME=/usr/bin/dirname; READLINK=/usr/bin/readlink
 
 G='\033[0;32m'; Y='\033[1;33m'; RED='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
 ok(){   echo -e "  ${G}[ok]${N} $*"; }
@@ -66,8 +66,23 @@ FAILS=0
 
 # ─── Config ─────────────────────────────────────────────────────────────────
 # Optional. Lets you enable your own units without editing this script.
+# Arguments are strict (mirrors luks-tune.sh): a mistyped option silently
+# ignored would run with defaults while the caller believed their config was
+# in effect.
 CONFIG=""
-[ "${1:-}" = "--config" ] && { CONFIG="${2:-}"; shift 2 || true; }
+case "${1:-}" in
+    "") ;;
+    --config)
+        CONFIG="${2:-}"
+        if [ -z "$CONFIG" ] || [ ! -f "$CONFIG" ]; then
+            err "--config requires an existing file (got: '${2:-}')"; exit 2
+        fi
+        [ "$#" -le 2 ] || { err "unexpected argument: $3"; exit 2; }
+        ;;
+    *)
+        err "unknown option: $1 (only '--config <file>' is accepted)"; exit 2
+        ;;
+esac
 [ -z "$CONFIG" ] && [ -f "$SELFDIR/post-encryption.conf" ] && CONFIG="$SELFDIR/post-encryption.conf"
 [ -z "$CONFIG" ] && [ -f /etc/post-encryption.conf ] && CONFIG=/etc/post-encryption.conf
 
@@ -190,10 +205,11 @@ GRUBBY=/usr/sbin/grubby; [ -x "$GRUBBY" ] || GRUBBY=/usr/bin/grubby
 if [ -f "$SPLASH_MARKER" ]; then
     TOKENS=$(/usr/bin/cat "$SPLASH_MARKER" 2>/dev/null)
     TOKENS=${TOKENS:-rhgb quiet}
+    SPLASH_OK=1
     if "$GRUBBY" --update-kernel=ALL --args="$TOKENS" >/dev/null 2>&1; then
         ok "BLS entries: restored '$TOKENS' (grubby)"
     else
-        err "grubby could not restore '$TOKENS' to the BLS entries"; FAILS=$((FAILS+1))
+        err "grubby could not restore '$TOKENS' to the BLS entries"; FAILS=$((FAILS+1)); SPLASH_OK=0
     fi
     if [ -f /etc/kernel/cmdline ] && ! "$GREP" -qw rhgb /etc/kernel/cmdline; then
         "$SED" -i "1s/[[:space:]]*\$/ $TOKENS/" /etc/kernel/cmdline \
@@ -203,7 +219,13 @@ if [ -f "$SPLASH_MARKER" ]; then
         "$SED" -i -E "s/^(GRUB_CMDLINE_LINUX=\".*)\"[[:space:]]*\$/\1 $TOKENS\"/" /etc/default/grub \
             && ok "/etc/default/grub: appended '$TOKENS' to GRUB_CMDLINE_LINUX"
     fi
-    /usr/bin/rm -f "$SPLASH_MARKER" && ok "splash restored; marker removed"
+    # Remove the marker only when the BLS restore actually landed — otherwise
+    # a re-run would see no marker and never retry.
+    if [ "$SPLASH_OK" -eq 1 ]; then
+        /usr/bin/rm -f "$SPLASH_MARKER" && ok "splash restored; marker removed"
+    else
+        warn "keeping $SPLASH_MARKER so a re-run can retry the restore"
+    fi
 else
     ok "no splash-restore marker — nothing to do"
 fi
@@ -212,21 +234,28 @@ fi
 hdr "4. Verification"
 # ============================================================================
 echo "  --- is root actually LUKS-encrypted? ---"
-ROOT_SRC=$(/usr/bin/findmnt -no SOURCE / 2>/dev/null)
-if "$LSBLK" -o TYPE 2>/dev/null | "$GREP" -q crypt && "$GREP" -q . /etc/crypttab 2>/dev/null; then
+# btrfs sources look like /dev/mapper/fedora_crypt[/root] — strip the subvol
+# suffix before handing the name to cryptsetup. Check ROOT itself, not merely
+# that *some* crypt device exists somewhere on the box.
+ROOT_SRC=$(/usr/bin/findmnt -no SOURCE / 2>/dev/null | "$SED" 's/\[.*//')
+ROOT_MAPPER=${ROOT_SRC#/dev/mapper/}
+if [ "$ROOT_MAPPER" != "$ROOT_SRC" ] \
+   && /usr/bin/cryptsetup status "$ROOT_MAPPER" 2>/dev/null | "$GREP" -q 'LUKS'; then
     ok "root is on a LUKS mapper: $ROOT_SRC"
-    /usr/bin/cryptsetup status "$(/usr/bin/basename "$ROOT_SRC")" 2>/dev/null \
+    /usr/bin/cryptsetup status "$ROOT_MAPPER" 2>/dev/null \
         | "$GREP" -E 'cipher|keysize|device' | "$SED" 's/^/    /' || true
 else
-    err "no active LUKS mapper found — is this box actually encrypted?"; FAILS=$((FAILS+1))
+    err "root ($ROOT_SRC) is not on an active LUKS mapper — is this box actually encrypted?"; FAILS=$((FAILS+1))
 fi
 
 echo "  --- initramfs carries the crypt module? ---"
 KVER=$(/usr/bin/uname -r)
-if /usr/bin/lsinitrd "/boot/initramfs-${KVER}.img" 2>/dev/null | "$GREP" -q 'cryptsetup\|crypt'; then
+# Match the actual artifacts (cryptsetup binaries / dm-crypt module); a bare
+# 'crypt' would also hit libcrypto etc. and pass on any initramfs.
+if /usr/bin/lsinitrd "/boot/initramfs-${KVER}.img" 2>/dev/null | "$GREP" -qE 'cryptsetup|dm-crypt'; then
     ok "initramfs-${KVER}.img contains crypt support"
 else
-    warn "could not confirm crypt module in initramfs-${KVER}.img (lsinitrd unavailable?)"
+    warn "could not confirm crypt support in initramfs-${KVER}.img (lsinitrd unavailable, or crypt genuinely missing — check manually)"
 fi
 
 echo "  --- failed units ---"
