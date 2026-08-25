@@ -83,9 +83,9 @@ Silicon answers with at least 2 GiB. Same GRUB, same code, different number.
 
 The whole point of the probe was to test the inherited assumption rather than
 keep building on it — and that is why this project now documents a *measured*
-ceiling for this platform instead of a borrowed one. Four places in the docs
-had stated 1 GiB as a "hard ceiling" that GRUB "will not go above"; all four
-were corrected once the measurement came in.
+ceiling for this platform instead of a borrowed one. Several places across the
+docs and the extras tooling had stated 1 GiB as a "hard ceiling" that GRUB
+"will not go above"; all of them were corrected once the measurement came in.
 
 > **Lesson for anyone extending this:** any GRUB limit that arises from
 > *allocation* is a firmware property, not a GRUB property. Measure it on the
@@ -116,7 +116,7 @@ keyslot, and the initramfs derives it in **9.5 s** — 0.2375 s per GiB-pass.
 > Initramfs timings do not transfer, and they are not off by a little.
 
 Practical consequence: **encrypted `/boot` costs ~20 s at every boot minimum**,
-on a Apple M2 Max.
+on an Apple M2 Max.
 
 ---
 

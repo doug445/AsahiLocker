@@ -2,11 +2,11 @@
 #
 # AsahiLocker — remove the argon2id probe from the INTERNAL ESP.
 #
-# The original remove-probe.sh targets the live USB (/dev/sdb1 and a grub.cfg
-# under /run/media). This is the counterpart for the internal staging, which
-# works differently in one important way: it never edited grub.cfg at all.
-# Fedora's grub.cfg already sources custom.cfg from $prefix, so the menu entry
-# went in a file of its own and removal is deleting that file.
+# (An earlier, unpublished remove-probe.sh targeted the live-USB staging route;
+# this is the version for the internal ESP staging that the repo documents.)
+# The internal route works differently in one important way: it never edited
+# grub.cfg at all. Fedora's grub.cfg already sources custom.cfg from $prefix,
+# so the menu entry went in a file of its own and removal is deleting that file.
 set -euo pipefail
 
 CUSTOM=/boot/grub2/custom.cfg

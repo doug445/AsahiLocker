@@ -89,9 +89,10 @@ afterwards; it does not touch any real disk:
 sudo bash tests/loopback-core-test.sh
 ```
 
-Expect `18 passed, 0 failed`. A `SKIP` line in stage 5b is normal — that stage
+Expect `18 passed, 0 failed`. A `SKIP` or `NOTE` line in stage 5b is normal and
+lowers the pass count (to between 13 and 16) without any failure — that stage
 races a hard kill against a live re-encryption and reports honestly when it did
-not manage to build the state it wanted.
+not manage to build the state it wanted. `0 failed` is the invariant.
 
 ### Run the CI lint checks
 
@@ -151,15 +152,19 @@ mokutil --sb-state
 Fedora ships GRUB 2.12, which has no argon2 at all. Upstream added it in 2.14.
 This builds into a local prefix and **installs nothing system-wide**:
 
+The path matters: the probe scripts in `tools/boot-probe/` default to
+`GRUB_PREFIX=~/Projects/grub-argon2-build/install-root`, so build there (or
+export `GRUB_PREFIX` when you run them):
+
 ```bash
 sudo dnf install -y autoconf-archive gcc make bison flex autoconf automake \
   gettext-devel freetype-devel device-mapper-devel python3 && \
-git clone https://git.savannah.gnu.org/git/grub.git ~/grub-argon2-build && \
-cd ~/grub-argon2-build && git checkout grub-2.14
+git clone https://git.savannah.gnu.org/git/grub.git ~/Projects/grub-argon2-build && \
+cd ~/Projects/grub-argon2-build && git checkout grub-2.14
 ```
 
 ```bash
-cd ~/grub-argon2-build && export LC_ALL=C.UTF-8 && ./bootstrap && ./configure \
+cd ~/Projects/grub-argon2-build && export LC_ALL=C.UTF-8 && ./bootstrap && ./configure \
   --target=aarch64 --with-platform=efi --prefix="$PWD/install-root" \
   --disable-werror --disable-nls --disable-grub-mkfont --disable-grub-themes && \
 make -j"$(nproc)" && make install
@@ -173,7 +178,7 @@ been built successfully. `LC_ALL=C.UTF-8` addresses the same root cause.
 Confirm you got the module Fedora omits:
 
 ```bash
-ls -la ~/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
+ls -la ~/Projects/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
 ```
 
 > **Do not install this over the system GRUB casually.** Secure Boot is disabled

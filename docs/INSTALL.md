@@ -46,10 +46,12 @@ Losing power mid-encryption is the main way to lose data here.
 
 ### 4. Choose your passphrase now
 
-There is **no TPM on Apple Silicon** and therefore no recovery key. If you forget
-this passphrase the data is gone permanently. Pick something strong that you will
-still know in a year, and write it down somewhere physically safe before you
-start — not on the machine you are about to encrypt.
+There is **no TPM on Apple Silicon**, so nothing can auto-unlock the disk for
+you — the passphrase (or the optional recovery key the script offers to enroll
+during deployment) is the only way in. Forget the passphrase and lose the
+recovery key, and the data is gone permanently. Pick something strong that you
+will still know in a year, and write it down somewhere physically safe before
+you start — not on the machine you are about to encrypt.
 
 ---
 
@@ -167,19 +169,20 @@ The script is interactive but every prompt has a sensible default. In order:
 
 | Prompt | What it means | What to answer |
 |--------|---------------|----------------|
+| `Keep or close? (keep/close)` | `/dev/mapper/fedora_crypt` is still open from an earlier run. (Only appears in that case — and then it is the very first prompt.) | `keep` to reuse it (saves a passphrase prompt when re-running), `close` for a fresh start |
 | `Are you certain you are in a live/rescue environment?` | Only appears if it *cannot confirm* you booted from live media. If you really did boot the live USB, override. If you are on the installed system, **stop**. | `LIVE` to override, anything else aborts |
 | `Continue on battery?` | Below 50% battery, no AC. | Plug in the charger and restart the script. `BATTERY` overrides. |
 | `Select [1-N] or device path` | Numbered menu of candidate partitions for root / boot / EFI. Candidates are scored: NVMe is preferred, matching labels score higher, anything on the live USB is heavily penalised. The default is almost always right. | Press Enter to accept the default, or type a number |
 | `Accept anyway? (yes/no)` | The chosen partition scored poorly (e.g. it looks like it is on the USB). | `no` unless you are certain |
+| `Unmount it now? (yes/no)` | The target partition is mounted somewhere (live desktops automount internal disks); encryption cannot run on a mounted device. | `yes` — the script unmounts it for you |
 | `Proceed? (yes/no)` | Your root/boot/EFI selections span different physical disks. | `no` unless that is genuinely your layout |
-| `Keep or close? (keep/close)` | `/dev/mapper/fedora_crypt` is still open from an earlier run. | `keep` to reuse it (saves a passphrase prompt when re-running), `close` for a fresh start |
 | `Resume the interrupted encryption now?` | The selected root has a LUKS header with an **unfinished** encryption (a previous run was interrupted). | `yes` — the script finishes it with `--resume-only`, then redoes the config phase |
 | `Re-run configuration + verification?` | The selected root is fully encrypted already — either a previous run died during the config phase, or you picked a working encrypted system. | `yes` to repair a half-configured install; `no` if the system already boots fine |
 | `Type 'MISMATCH' to override` | The BOOT or EFI partition you selected does **not** match the UUID the target's own fstab expects — you probably picked a partition belonging to a different install. | Almost always abort and re-select. Only override if you know the fstab is the thing that is wrong |
 | `Continue anyway? (yes/no)` | The BLS boot entries disagree with `/etc/fstab` about which subvolume is root. | `no` — investigate first; see [RECOVERY.md](RECOVERY.md) |
 | `Run btrfs integrity check?` | A read-only `btrfs check`. Takes 5–30 min. | **`Y`** — this is your last chance to find pre-existing corruption |
-| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `2` |
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
+| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `2` |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
 | `Press Enter once Caps Lock is OFF` | Only shown when the kernel reports Caps Lock on at the `ENCRYPT` gate — which is exactly what happens if you switched it on to type that all-caps word. | Turn Caps Lock off, then Enter. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
@@ -234,10 +237,11 @@ scrolls behind boot log text** — if the screen looks frozen shortly after GRUB
 it is almost certainly waiting for you. Type the passphrase and press Enter.
 
 How long unlock takes depends on the profile you chose, and it tracks memory
-*times* iterations — not memory alone. On an M2 Max the three profiles measure
-roughly 1 s (fast), 3 s (moderate) and 9.5 s (aggressive). A 1 GiB argon2id unlock
-is not a slow unlock on any machine you would still boot; the multi-second
-figures come mostly from the stacked iteration count, not the gigabytes.
+*times* iterations — not memory alone. On an M2 Max the three profiles come to
+roughly 2.1 s (fast), 3.8 s (moderate) and 9.5 s (aggressive, measured). A 1 GiB
+argon2id unlock is not a slow unlock on any machine you would still boot; the
+multi-second figures come mostly from the stacked iteration count, not the
+gigabytes.
 
 If it does not boot, do not panic — nothing is lost yet. Go to
 **[RECOVERY.md](RECOVERY.md)**.
@@ -328,8 +332,8 @@ systemctl --failed
 ```
 
 Then take a fresh backup, so the encrypted box has its own first snapshot with
-the new `crypttab`/`fstab`. You have successfully installed LUKS2 root drive 
-encryption on your system. 
+the new `crypttab`/`fstab`. That's it — LUKS2 root encryption is installed and
+verified.
 
 ---
 
