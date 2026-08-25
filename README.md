@@ -229,8 +229,8 @@ sudo LUKS_PBKDF_MEMORY=3145728 LUKS_PBKDF_ITER=8 ./bin/luks-deploy.sh   # fully 
 Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
 **The `fast` profile is a hard floor.** Custom parameters below it — less
 than 1 GiB of memory, or less total work (memory x iterations) than
-1 GiB x 9 — are refused outright. There is no acknowledgement flag; It also 
-catches the classic typo (`LUKS_PBKDF_MEMORY=1048` for `1048576`).
+1 GiB x 9 — are refused outright. There is no acknowledgement flag, and the
+floor also catches the classic typo (`LUKS_PBKDF_MEMORY=1048` for `1048576`).
 
 The two conditions are separate because they fail differently: dropping below
 1 GiB loses the memory-hardness that is the entire point, and dropping total
@@ -267,11 +267,32 @@ graphical installers produced argon2id memory costs of roughly **350-600 MiB**
 `--pbkdf-memory`/`--pbkdf-force-iterations`, so the header never depends on how
 much RAM happened to be free while it was being written.
 
+The partition menus can be pinned the same way as the KDF (each pinned device
+is still fstype-checked and cross-checked against the target's own fstab, and
+the typed `ENCRYPT` confirmation still applies):
+
+```bash
+sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
+     LUKS_TARGET_EFI=/dev/nvme0n1p4 ./bin/luks-deploy.sh
+```
+
+Fully hands-off (fleet imaging, automated testing): `LUKS_PASSPHRASE_FILE=<path>`
+reads the passphrase from a file — its exact bytes, no trailing newline — and is
+used for encrypt, resume, unlock, and as the existing key when enrolling the
+recovery key. `LUKS_MAPPER_NAME=<name>` changes the device-mapper name (default
+`fedora_crypt`; the companion scripts auto-detect a custom name from the booted
+system).
+
 ### Changing the KDF on a volume that already exists
 
 Profiles apply at **format time only**. A header keeps whatever it was built
-with, so changing a profile does nothing to a disk you already encrypted. Read
-what a volume actually uses first:
+with, so changing a profile does nothing to a disk you already encrypted — but
+you are not stuck with what you picked: `cryptsetup luksConvertKey` re-wraps a
+keyslot's key under new argon2id parameters **in place**. It does not change
+your passphrase, does not re-encrypt anything, and does not touch a single
+byte of filesystem data. It takes seconds.
+
+Read what a volume actually uses first:
 
 ```bash
 sudo cryptsetup luksDump /dev/nvme0n1p6
@@ -282,30 +303,52 @@ iteration count) and `Threads:`. Every keyslot carries its own parameters — a
 passphrase slot and a keyfile slot on the same volume are commonly different.
 
 There is an ncurses front-end for all of this if you would rather not hand-type
-the parameters — it shows the measured unlock time and the strength table below
-for whatever you pick, before you commit to anything:
+the parameters — [`bin/luks-tune.sh`](bin/luks-tune.sh) offers the four tiers
+below plus a custom option, shows the measured unlock time and the strength
+graph below for whatever you pick before you commit, and takes the header
+backup for you:
 
 ```bash
 sudo ./bin/luks-tune.sh              # interactive
 sudo ./bin/luks-tune.sh --dry-run    # show the command, change nothing
 ```
 
-To do it by hand instead, re-cost a keyslot in place **without changing the
-passphrase**:
+To do it by hand instead: back the header up first, and keep the backup until a
+successful boot confirms the new parameters — a keyslot is the only copy of
+your key, wrapped:
 
 ```bash
 sudo cryptsetup luksHeaderBackup /dev/nvme0n1p6 \
      --header-backup-file ~/luks-header-before.bin
+```
 
+Then pick a tier. Each command converts the keyslot your passphrase opens
+**without changing the passphrase**; add `-S <n>` to target a specific slot,
+and repeat per slot you want re-costed.
+
+```bash
+# fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more
+#                                      work than cryptsetup unaided here,
+#                                      which picks 1 GiB x 8)
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
+sudo cryptsetup luksConvertKey --pbkdf argon2id \
+     --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
+     /dev/nvme0n1p6
+
+# paranoid — 4 GiB, 12 iterations     (~11.4 s)
 sudo cryptsetup luksConvertKey --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 ```
-
-That converts the slot your passphrase opens. Add `-S <n>` to target a specific
-slot, and repeat per slot you want re-costed. Take the header backup first and
-keep it until the new parameters are confirmed by a successful boot — a keyslot
-is the only copy of your key, wrapped.
 
 Two things that trip people up:
 
@@ -314,7 +357,63 @@ Two things that trip people up:
   (2000 ms by default). That is why a stock 1 GiB volume unlocks in about two
   seconds while these profiles take longer — the memory figure is the same, the
   iteration count is not.
-- **`--pbkdf-memory` is in KiB**, not MiB or GiB. 4 GiB is `4194304`.
+- **`--pbkdf-memory` is in KiB**, not MiB or GiB — and `4194304` (4 GiB) is the
+  hard maximum: `cryptsetup` refuses anything above it. Past that ceiling only
+  the iteration count can raise the cost, which is the entire difference
+  between `aggressive` and `paranoid`.
+
+#### What `paranoid` actually buys you
+
+Paired with a properly generated passphrase, it takes offline brute force off
+the table completely — not "makes it hard", removes it as an avenue. Against a
+fleet of a thousand top-end GPUs, each running the six concurrent guesses that
+4 GiB per guess allows, at the per-guess cost measured on real hardware:
+
+```
+                                  time to search half the keyspace
+                                  (log scale — each block ≈ 1.5 orders of magnitude)
+
+ weak / reused password  ~30 bit  ▏                          12 days
+ human-chosen "strong"   ~40 bit  █                          33 years
+ 6 diceware words         77 bit  ████████                   10^13 years
+ 8 diceware words        103 bit  ██████████████             10^20 years
+ 10 diceware words       129 bit  ███████████████████        10^28 years
+ 12 diceware words       155 bit  ████████████████████████   10^36 years
+
+ the universe is         ~10^10 years old  ────────┤ everything below this line
+                                                     already outlives it
+```
+
+No budget closes that gap. Money buys an attacker hardware, and hardware scales
+the cost *linearly* while your passphrase scales the keyspace *exponentially* —
+adding two diceware words costs you four seconds of typing and multiplies their
+work by roughly seven million. A national intelligence service with an unlimited
+budget is in exactly the same position as a laptop thief, several dozen orders
+of magnitude short, and no appropriation changes the arithmetic.
+
+**Which is precisely why nobody capable would try.** An adversary at that level
+does not brute-force argon2id; they go around it. They take the passphrase from
+you, or from a keylogger, or from a camera above your desk. They image the
+machine while it is running, where the key sits in RAM. They find the backup you
+made to an unencrypted disk. Set your KDF so that brute force is hopeless — it
+already is, at every tier here — and then spend your remaining attention on the
+attacks that actually work. See [Risks](#risks--read-this).
+
+That top row is the one to look at twice. At ~30 bits, `paranoid` buys you
+twelve days. **The KDF cannot rescue a weak passphrase, and no tier on this page
+tries to pretend otherwise** — see
+[Your passphrase is the other half](#your-passphrase-is-the-other-half).
+
+#### Using the graph to choose
+
+Read it in both directions. If your passphrase is 8 diceware words or better,
+every tier already puts you past 10^13 years, so dropping to `fast` costs you
+nothing that matters and saves eight seconds at every single boot — a real,
+daily saving against a difference measured in orders of magnitude you will never
+reach. If your passphrase is shorter than you would like and you are not ready
+to change it, moving up to `paranoid` buys you the largest factor still
+available, though the row above shows how little that is compared with simply
+adding words.
 
 ### Never use pbkdf2
 
@@ -353,8 +452,8 @@ precisely this reason** — that what everyone was using had aged out — and
 Argon2 won it. That was eleven years ago. Every argument for pbkdf2 on a new
 volume in 2026 is an argument that has already been had, in public, and lost.
 
-Concretely, at the parameters below and against a human-chosen password: 32
-years with argon2id, **twelve days** with pbkdf2. That is not a tuning
+Concretely, at the parameters below and against a human-chosen password: 28
+years with argon2id, **ten days** with pbkdf2. That is not a tuning
 preference. That is the difference between a stolen laptop that keeps your life
 private and one that hands it over inside a fortnight.
 
@@ -508,23 +607,7 @@ appropriate for a volume you expect to outlive the hardware.
   correctly-configured encrypted volume is forgetting the passphrase, not
   someone breaking it. Paper in a safe beats a fifth backup of the header.
   Enrol a recovery key in a second keyslot as well — see
-  [save-luks-recovery-bundle.sh](bin/save-luks-recovery-bundle.sh).
-
-The partition menus can be pinned the same way (each pinned device is still
-fstype-checked and cross-checked against the target's own fstab, and the typed
-`ENCRYPT` confirmation still applies):
-
-```bash
-sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
-     LUKS_TARGET_EFI=/dev/nvme0n1p4 ./bin/luks-deploy.sh
-```
-
-Fully hands-off (fleet imaging, automated testing): `LUKS_PASSPHRASE_FILE=<path>`
-reads the passphrase from a file — its exact bytes, no trailing newline — and is
-used for encrypt, resume, unlock, and as the existing key when enrolling the
-recovery key. `LUKS_MAPPER_NAME=<name>` changes the device-mapper name (default
-`fedora_crypt`; the companion scripts auto-detect a custom name from the booted
-system).
+  [Recovery key](#recovery-key).
 
 ### Dry run
 
@@ -556,16 +639,12 @@ it as a `--key-file` from a live USB. It is enrolled *before* the header backup
 is taken, so the backup contains the slot. **Move it to secure offline storage
 after deployment** — anyone holding it can unlock the disk.
 
-**Stay on argon2id.** It is memory-hard, which is the entire point — that is what
-makes GPU and ASIC cracking expensive. Never substitute pbkdf2 to save memory or
-time; argon2id at 1 GiB is dramatically stronger than pbkdf2 at any iteration
-count. Verify what you got with `cryptsetup luksDump /dev/nvme0n1p6`.
-
 > **Note on GRUB and argon2id:** none of this constrains the root volume, because
 > GRUB never unlocks it — the initramfs does. It only matters if you have some
-> *other* volume that GRUB itself must unlock.
-> 
-> EXPERIMENTAL: Using GRUB 2.14 with argon2id to encrypt /boot partition;
+> *other* volume that GRUB itself must unlock — for example the experimental
+> encrypted-`/boot` research, which runs a self-built GRUB 2.14 with argon2id
+> (see [docs/BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md)).
+>
 > For those volumes: **never use 4 GiB** — a 32-bit overflow in GRUB's
 > `argon2_init` wraps the allocation size to zero, so it proceeds instead of
 > rejecting the parameters. That rule is unconditional.
@@ -629,7 +708,8 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
   attacker with repeated physical access could tamper with the initramfs.
 - **The passphrase prompt can hide behind boot text.** If the machine looks hung
   right after GRUB, it is probably waiting — type the passphrase and press Enter.
-  Splash screen is disabled during 1st post-conversion boot, so prompt should be visible.
+  (The deploy strips the boot splash, and `post-encryption-setup.sh` restores
+  it, precisely so this prompt stays visible on the first encrypted boots.)
 
 ---
 
@@ -687,14 +767,15 @@ What you cannot sensibly do is swap the algorithm out — see
 GRUB has to read the kernel and initramfs before anything is unlocked. The
 encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
 plain avoids putting GRUB on the unlock path at all — where the KDF is limited
-by however much heap the **firmware** grants it, and where GRUB 2.12 (current in
-Fedora 44) has no argon2 support whatsoever. Using GRUB 2.14 (which has argon2id
-support) on x86 vendor UEFI that limit has always been 1 GiB; under Asahi's 
-U-Boot it is higher, and this project using a built GRUB 2.14 measured
-2 GiB working on an M2 Max. Exceeding whatever the firmware affords does not
-mean a slow boot, it means no boot: GRUB fails to allocate. And at exactly 4 GiB
-it is worse than a failure — a 32-bit overflow in its `argon2_init` wraps the
-allocation to zero, so it proceeds instead of rejecting the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
+by however much heap the **firmware** grants it, and where GRUB 2.12 (current
+in Fedora 44) has no argon2 support whatsoever. With GRUB 2.14 (which does
+support argon2id), that firmware limit has always been 1 GiB on x86 vendor
+UEFI; under Asahi's U-Boot it is higher — this project's self-built GRUB 2.14
+measured 2 GiB working on an M2 Max. Exceeding whatever the firmware affords
+does not mean a slow boot, it means no boot: GRUB fails to allocate. And at
+exactly 4 GiB it is worse than a failure — a 32-bit overflow in its
+`argon2_init` wraps the allocation to zero, so it proceeds instead of rejecting
+the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
 see [Risks](#risks--read-this).
 
 ### What happens if the encryption is interrupted — power loss, a crash, a closed lid?
@@ -738,106 +819,12 @@ the memory and iteration figures from the profile you chose.
 ### Changing your KDF after installation
 
 You are not stuck with the profile you picked. `luksConvertKey` re-wraps a
-keyslot's key under new argon2id parameters **in place** — it does not change
-your passphrase, does not re-encrypt anything, and does not touch a single byte
-of filesystem data. It takes seconds.
-
-Back the header up first, and keep the backup until a successful boot confirms
-the new parameters:
-
-```bash
-sudo cryptsetup luksHeaderBackup /dev/nvme0n1p6 \
-     --header-backup-file ~/luks-header-before.bin
-```
-
-Then pick a tier. Each command converts the keyslot your passphrase opens; add
-`-S <n>` to target a specific slot, and repeat per slot you want re-costed.
-
-```bash
-# fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more
-#                                      work than cryptsetup unaided here,
-#                                      which picks 1 GiB x 8)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
-     /dev/nvme0n1p6
-
-# moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
-     /dev/nvme0n1p6
-
-# aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
-     /dev/nvme0n1p6
-
-# paranoid — 4 GiB, 12 iterations     (~11.4 s)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
-     --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
-     /dev/nvme0n1p6
-```
-
-`--pbkdf-memory` is in **KiB**, and 4194304 is the hard maximum — `cryptsetup`
-refuses anything above it. Past that ceiling only the iteration count can raise
-the cost, which is the entire difference between `aggressive` and `paranoid`.
-
-#### What `paranoid` actually buys you
-
-Paired with a properly generated passphrase, it takes offline brute force off
-the table completely — not "makes it hard", removes it as an avenue. Against a
-fleet of a thousand top-end GPUs, each running the six concurrent guesses that
-4 GiB per guess allows, at the per-guess cost measured on real hardware:
-
-```
-                                  time to search half the keyspace
-                                  (log scale — each block ≈ 1.5 orders of magnitude)
-
- weak / reused password  ~30 bit  ▏                          12 days
- human-chosen "strong"   ~40 bit  █                          33 years
- 6 diceware words         77 bit  ████████                   10^13 years
- 8 diceware words        103 bit  ██████████████             10^20 years
- 10 diceware words       129 bit  ███████████████████        10^28 years
- 12 diceware words       155 bit  ████████████████████████   10^36 years
-
- the universe is         ~10^10 years old  ────────┤ everything below this line
-                                                     already outlives it
-```
-
-No budget closes that gap. Money buys an attacker hardware, and hardware scales
-the cost *linearly* while your passphrase scales the keyspace *exponentially* —
-adding two diceware words costs you four seconds of typing and multiplies their
-work by roughly seven million. A national intelligence service with an unlimited
-budget is in exactly the same position as a laptop thief, several dozen orders
-of magnitude short, and no appropriation changes the arithmetic.
-
-**Which is precisely why nobody capable would try.** An adversary at that level
-does not brute-force argon2id; they go around it. They take the passphrase from
-you, or from a keylogger, or from a camera above your desk. They image the
-machine while it is running, where the key sits in RAM. They find the backup you
-made to an unencrypted disk. Set your KDF so that brute force is hopeless — it
-already is, at every tier here — and then spend your remaining attention on the
-attacks that actually work. See [Risks](#risks--read-this).
-
-That top row is the one to look at twice. At ~30 bits, `paranoid` buys you
-twelve days. **The KDF cannot rescue a weak passphrase, and no tier on this page
-tries to pretend otherwise** — see
-[Your passphrase is the other half](#your-passphrase-is-the-other-half).
-
-#### Using the graph to choose
-
-Read it in both directions. If your passphrase is 8 diceware words or better,
-every tier already puts you past 10^13 years, so dropping to `fast` costs you
-nothing that matters and saves eight seconds at every single boot — a real,
-daily saving against a difference measured in orders of magnitude you will never
-reach. If your passphrase is shorter than you would like and you are not ready
-to change it, moving up to `paranoid` buys you the largest factor still
-available, though the row above shows how little that is compared with simply
-adding words.
-
-Prefer a menu to typing parameters? [`bin/luks-tune.sh`](bin/luks-tune.sh)
-offers all four tiers above plus a custom option, interactively. It shows the measured unlock time and this same
-strength table for whatever you pick before you commit, and takes the header
-backup for you.
+keyslot's key under new argon2id parameters **in place** — no passphrase
+change, no re-encryption, not a byte of filesystem data touched, seconds of
+work. The header-backup step, commands for all four tiers (including
+`paranoid`), and the strength graph are in
+[Changing the KDF on a volume that already exists](#changing-the-kdf-on-a-volume-that-already-exists);
+the menu version is [`bin/luks-tune.sh`](bin/luks-tune.sh).
 
 ---
 
@@ -852,6 +839,7 @@ backup for you.
 | [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 12-point gate, self-repair, why `/boot` stays plain |
 | [FLEET.md](docs/FLEET.md) | Deploying across several M-series boxes, and the UUID-uniqueness footgun |
 | [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md) | **Research, not a feature.** Encrypted `/boot`: what has been measured, what broke, what is still unknown — and where help is wanted |
+| [BOOT-ENCRYPTION-DESIGN.md](docs/BOOT-ENCRYPTION-DESIGN.md) | **Design only, nothing implemented.** The intended encrypted-`/boot` architecture: the two unlock options and their trade-offs, retrofit rules, detached headers, release plan |
 
 ---
 

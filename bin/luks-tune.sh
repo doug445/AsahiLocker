@@ -27,8 +27,10 @@
 # ============================================================================
 # luks-tune.sh
 # ============================================================================
-# An ncurses front-end for inspecting and re-costing the argon2id KDF
-# parameters of keyslots on LUKS2 volumes that ALREADY EXIST.
+# An ncurses front-end for inspecting and re-costing the KDF parameters of
+# keyslots on LUKS2 volumes that ALREADY EXIST. Every conversion it writes is
+# argon2id; a keyslot still on pbkdf2 is listed too (memory/threads shown as
+# '-') so it can be converted to argon2id from the same menu.
 #
 # The deploy script's KDF profiles apply at luksFormat time only. A header
 # keeps whatever it was built with, so this is the tool for changing your mind
@@ -82,8 +84,6 @@ for arg in "$@"; do
             ;;
     esac
 done
-
-# ─── Safety floor (mirrors luks-deploy.sh) ───────────────────────────────────
 
 # ─── Profiles (mirrors luks-deploy.sh; memory in KiB) ────────────────────────
 P_PARANOID_MEM=4194304;   P_PARANOID_ITER=12
@@ -140,16 +140,25 @@ DEV=$(ui --title "Select a LUKS2 volume" \
 
 # ─── Show current state ──────────────────────────────────────────────────────
 slot_table() {   # $1 = device; emits "slot<TAB>kdf<TAB>mem_kib<TAB>iter<TAB>threads"
+    # argon2id slots end on their Threads: line. pbkdf2 slots have no Time
+    # cost/Memory/Threads lines at all — they end on Iterations:, and are
+    # emitted with '-' placeholders so they appear in the menu and can be
+    # converted to argon2id. ('Iterations:' also occurs in the Digests
+    # section, but slot is "" there, so it cannot false-fire.)
     "$CRYPTSETUP" luksDump "$1" | awk '
         /^[[:space:]]+[0-9]+: luks2/ { slot=$1; sub(":","",slot); k=""; m=""; i=""; t=""; next }
         slot!="" && /PBKDF:/      { k=$2 }
         slot!="" && /Time cost:/  { i=$3 }
         slot!="" && /Memory:/     { m=$2 }
         slot!="" && /Threads:/    { t=$2; printf "%s\t%s\t%s\t%s\t%s\n", slot, k, m, i, t; slot="" }
+        slot!="" && k=="pbkdf2" && /Iterations:/ { printf "%s\t%s\t-\t%s\t-\n", slot, k, $2; slot="" }
     '
 }
 
-human_mem() { awk -v k="$1" 'BEGIN{ if (k>=1048576) printf "%.0f GiB", k/1048576; else printf "%.0f MiB", k/1024 }'; }
+human_mem() {
+    case "$1" in ''|*[!0-9]*) printf '%s' "${1:--}"; return;; esac   # pbkdf2 slots carry '-'
+    awk -v k="$1" 'BEGIN{ if (k>=1048576) printf "%.0f GiB", k/1048576; else printf "%.0f MiB", k/1024 }'
+}
 
 render_slots() {
     printf '%-6s %-10s %-10s %-12s %s\n' SLOT KDF MEMORY ITERATIONS THREADS
@@ -203,15 +212,22 @@ case "$CHOICE" in
     moderate)   NEW_MEM=$P_MODERATE_MEM;   NEW_ITER=$P_MODERATE_ITER;   NEW_PAR=$P_PARALLEL ;;
     fast)       NEW_MEM=$P_FAST_MEM;       NEW_ITER=$P_FAST_ITER;       NEW_PAR=$P_PARALLEL ;;
     custom)
+        # Prefill from the slot's current values where they are numeric; a
+        # pbkdf2 slot carries '-' for memory/threads, so fall back to the
+        # 'fast' profile's numbers there.
+        DEF_MIB=$((P_FAST_MEM / 1024)); DEF_ITER="$CUR_ITER"; DEF_PAR=$P_PARALLEL
+        case "$CUR_MEM"  in ''|*[!0-9]*) ;; *) DEF_MIB=$((CUR_MEM / 1024));; esac
+        case "$CUR_ITER" in ''|*[!0-9]*) DEF_ITER=$P_FAST_ITER;; esac
+        case "$CUR_PAR"  in ''|*[!0-9]*) ;; *) DEF_PAR="$CUR_PAR";; esac
         MIB=$(ui --title "Memory cost" --inputbox \
             "Memory in MiB (cryptsetup wants KiB; this converts for you).\n\nCurrent: $(human_mem "$CUR_MEM")" \
-            12 70 "$((CUR_MEM / 1024))" 3>&1 1>&2 2>&3) || { clear; exit 0; }
+            12 70 "$DEF_MIB" 3>&1 1>&2 2>&3) || { clear; exit 0; }
         NEW_ITER=$(ui --title "Iteration cost" --inputbox \
             "Iterations (argon2id 'time cost').\n\nCurrent: $CUR_ITER" \
-            12 70 "$CUR_ITER" 3>&1 1>&2 2>&3) || { clear; exit 0; }
+            12 70 "$DEF_ITER" 3>&1 1>&2 2>&3) || { clear; exit 0; }
         NEW_PAR=$(ui --title "Parallelism" --inputbox \
             "Threads (lanes).\n\nCurrent: $CUR_PAR" \
-            12 70 "$CUR_PAR" 3>&1 1>&2 2>&3) || { clear; exit 0; }
+            12 70 "$DEF_PAR" 3>&1 1>&2 2>&3) || { clear; exit 0; }
         case "$MIB"      in ''|*[!0-9]*) die "Memory must be a whole number of MiB." ;; esac
         case "$NEW_ITER" in ''|*[!0-9]*) die "Iterations must be a whole number." ;; esac
         case "$NEW_PAR"  in ''|*[!0-9]*) die "Threads must be a whole number." ;; esac

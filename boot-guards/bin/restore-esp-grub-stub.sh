@@ -65,6 +65,12 @@ cur=$(sha512sum "$ESP" | awk '{print $1}')
 ts=$(date +%Y%m%d-%H%M%S)
 cp -a "$ESP" "${ESP}.broken.${ts}"
 cp -a "$REF" "$ESP"
+# Keep forensics bounded: if something rewrites the stub repeatedly, this
+# fires every 60s — prune all but the 5 newest drifted copies so the ESP
+# does not silently fill with .broken files.
+ls -1t "${ESP}".broken.* 2>/dev/null | tail -n +6 | while read -r old; do
+    rm -f "$old"
+done
 sync
 logger -t esp-grub-stub-guard \
     "restored ESP grub.cfg from $REF (drifted copy saved as ${ESP}.broken.${ts}, was sha=$cur)"

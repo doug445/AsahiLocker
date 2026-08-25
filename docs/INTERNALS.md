@@ -99,9 +99,13 @@ The script will not tell you it succeeded until all of these pass:
 | V11 | Every initramfs carries `dm-crypt` (module or builtin) — auto-repaired with `--add-drivers` if missing (in-chroot check) |
 | V12 | Every initramfs carries a keyboard/input driver (`dockchannel-hid`, `hid-apple`, `usbhid`, …) — **warn-only**, because without one you cannot *type* the passphrase at boot (in-chroot check) |
 
-V8's "USB copy" half and V12 are **warnings**, not gates — the authoritative
-header backup always goes to `/boot`, so a second USB is never required, and
-many kernels build generic HID support in.
+V8 (both halves) and V12 are **warnings**, not gates — the header backup is
+written unconditionally at step 5 (its absence at V8 means something removed it
+mid-run, which is loud but not itself fatal), a second USB is never required,
+and many kernels build generic HID support in. The script's own output labels
+the main-gate checks V1–V10; V11 and V12 here are the two in-chroot module
+checks, whose failures surface through the chroot error count rather than as
+`V`-labelled lines.
 
 ---
 
