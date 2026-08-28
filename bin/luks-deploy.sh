@@ -1524,7 +1524,13 @@ cat /mnt/etc/fstab
 
 # ─── 6c: /etc/default/grub ───────────────────────────────────────────────────
 log "  Updating /etc/default/grub..."
-cp /mnt/etc/default/grub /mnt/etc/default/grub.pre-luks
+mkdir -p /mnt/etc/default
+if [ -f /mnt/etc/default/grub ]; then
+    cp /mnt/etc/default/grub /mnt/etc/default/grub.pre-luks
+else
+    warn "  /etc/default/grub does not exist — creating it."
+    : > /mnt/etc/default/grub
+fi
 
 # GRUB_ENABLE_CRYPTODISK=y (allows GRUB to access encrypted partitions if needed)
 if ! grep -q "^GRUB_ENABLE_CRYPTODISK=y" /mnt/etc/default/grub; then
@@ -1532,14 +1538,63 @@ if ! grep -q "^GRUB_ENABLE_CRYPTODISK=y" /mnt/etc/default/grub; then
     log "    Added GRUB_ENABLE_CRYPTODISK=y"
 fi
 
-# Add rd.luks.uuid AND rd.luks.name to GRUB_CMDLINE_LINUX
+# Add rd.luks.uuid AND rd.luks.name to the kernel command line.
+#
+# WHICH variable holds it is distro-dependent, so never assume one is present:
+#   * plain Fedora ships  GRUB_CMDLINE_LINUX
+#   * Fedora Asahi Remix ships GRUB_CMDLINE_LINUX_DEFAULT and NO
+#     GRUB_CMDLINE_LINUX line at all
+# Update every one that exists; if the file defines neither, create
+# GRUB_CMDLINE_LINUX.  (This used to be a bare `grep ^GRUB_CMDLINE_LINUX=` in a
+# command substitution — under `set -o pipefail` a missing line made grep
+# return 1, which aborted stage 6 with no message at all.  See issue #2.)
 LUKS_BOOT_ARGS="rd.luks.uuid=$LUKS_UUID rd.luks.name=${LUKS_UUID}=$LUKS_NAME"
-CURRENT_CMDLINE=$(grep "^GRUB_CMDLINE_LINUX=" /mnt/etc/default/grub | sed 's/^GRUB_CMDLINE_LINUX="//' | sed 's/"$//')
-if ! echo "$CURRENT_CMDLINE" | grep -q "rd.luks.uuid=$LUKS_UUID"; then
-    NEW_CMDLINE="$LUKS_BOOT_ARGS $CURRENT_CMDLINE"
-    sed -i "s|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$NEW_CMDLINE\"|" /mnt/etc/default/grub
-    log "    Added $LUKS_BOOT_ARGS to GRUB_CMDLINE_LINUX"
+
+# Rewrite every definition of $1 to the literal value $2.  awk via ENVIRON so
+# the value is never re-interpreted (a stray & or | would corrupt a sed RHS).
+grub_cmdline_set() {
+    local _gv="$1" _nv="$2" _tmp="/mnt/etc/default/.grub.$$"
+    GV="$_gv" NV="$_nv" awk '
+        BEGIN { v = ENVIRON["GV"]; nv = ENVIRON["NV"] }
+        $0 ~ "^[[:space:]]*" v "=" { print v "=\"" nv "\""; next }
+        { print }
+    ' /mnt/etc/default/grub > "$_tmp" || { rm -f "$_tmp"; return 1; }
+    # cat, not mv: keeps the inode, mode, owner and SELinux label intact.
+    cat "$_tmp" > /mnt/etc/default/grub
+    rm -f "$_tmp"
+}
+
+GRUB_CMDLINE_VARS_FOUND=0
+for gvar in GRUB_CMDLINE_LINUX GRUB_CMDLINE_LINUX_DEFAULT; do
+    grep -qE "^[[:space:]]*${gvar}=" /mnt/etc/default/grub || continue
+    GRUB_CMDLINE_VARS_FOUND=1
+    if grep -E "^[[:space:]]*${gvar}=" /mnt/etc/default/grub \
+         | grep -q "rd.luks.uuid=$LUKS_UUID"; then
+        log "    $gvar already carries rd.luks.uuid — keeping."
+        continue
+    fi
+    # Last definition wins in shell, so that is the one whose value we keep.
+    CURRENT_CMDLINE=$(sed -n -E "s|^[[:space:]]*${gvar}=(.*)\$|\1|p" \
+        /mnt/etc/default/grub | tail -n1)
+    case "$CURRENT_CMDLINE" in
+        \"*\") CURRENT_CMDLINE=${CURRENT_CMDLINE#\"}; CURRENT_CMDLINE=${CURRENT_CMDLINE%\"} ;;
+        \'*\') CURRENT_CMDLINE=${CURRENT_CMDLINE#\'}; CURRENT_CMDLINE=${CURRENT_CMDLINE%\'} ;;
+    esac
+    grub_cmdline_set "$gvar" "$LUKS_BOOT_ARGS${CURRENT_CMDLINE:+ $CURRENT_CMDLINE}" \
+        || fatal "  Could not rewrite $gvar in /etc/default/grub."
+    log "    Added $LUKS_BOOT_ARGS to $gvar"
+done
+
+if [ "$GRUB_CMDLINE_VARS_FOUND" -eq 0 ]; then
+    warn "  No GRUB_CMDLINE_LINUX[_DEFAULT] line in /etc/default/grub — adding one."
+    echo "GRUB_CMDLINE_LINUX=\"$LUKS_BOOT_ARGS\"" >> /mnt/etc/default/grub
 fi
+
+# Do not leave this stage without the unlock arguments actually on disk.
+if ! grep -q "rd.luks.uuid=$LUKS_UUID" /mnt/etc/default/grub; then
+    fatal "  /etc/default/grub still has no rd.luks.uuid=$LUKS_UUID after update!"
+fi
+
 echo "  --- /etc/default/grub ---"
 cat /mnt/etc/default/grub
 
