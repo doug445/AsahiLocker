@@ -1396,6 +1396,15 @@ log "[5/8] Recovery key + LUKS header backup..."
 # Non-interactive: LUKS_RECOVERY_KEY=yes|no
 SLOTS_IN_USE=$(cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null | grep -cE '^[[:space:]]+[0-9]+: luks2' || true)
 RK_CHOICE="${LUKS_RECOVERY_KEY:-}"
+
+# Default the prompt to NO on a configuration-only re-run. Each acceptance
+# enrols another keyslot, so someone who re-runs the config phase a few times
+# and keeps hitting Enter ends up with a header full of recovery keys they
+# cannot tell apart. A fresh encrypt still defaults to yes: that is the run
+# where there is no recovery key yet, and no way back if the passphrase is lost.
+RK_DEFAULT="yes"
+[ "$DEPLOY_MODE" = "config-only" ] && RK_DEFAULT="no"
+
 if [ -z "$RK_CHOICE" ]; then
     echo ""
     echo "  A recovery key is a random 64-hex-character key in a second LUKS"
@@ -1405,10 +1414,18 @@ if [ -z "$RK_CHOICE" ]; then
     if [ "${SLOTS_IN_USE:-0}" -gt 1 ]; then
         warn "  Note: $SLOTS_IN_USE keyslots are already in use — a recovery key may already be enrolled."
     fi
-    read -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
+    if [ "$RK_DEFAULT" = "no" ]; then
+        warn "  This is a configuration-only re-run: saying yes adds ANOTHER"
+        warn "  keyslot on top of what is already there. Defaulting to no."
+        read -p "  Generate and enroll a recovery key now? [y/N]: " RK_CHOICE
+    else
+        read -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
+    fi
+    # A bare Enter takes the default rather than falling through to "enrol".
+    RK_CHOICE="${RK_CHOICE:-$RK_DEFAULT}"
 fi
 case "$RK_CHOICE" in
-    n|N|no|NO)
+    [Nn]|[Nn][Oo])
         warn "  Skipping recovery key (passphrase will be the only way in)."
         ;;
     *)

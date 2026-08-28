@@ -95,6 +95,11 @@ feature — it loses a disk or hands one over. That is the interesting surface:
 * **GRUB's argon2 memory ceiling**, including the 4 GiB allocation overflow.
   Upstream's, and documented in the README — it does not affect the root volume,
   which the initramfs unlocks rather than GRUB.
+* **Overwriting the ESP stub yourself.** Running `grub2-mkconfig -o` against
+  `/boot/efi/EFI/fedora/grub.cfg` replaces the chainload stub an encrypted boot
+  depends on. The docs warn against it, `luks-deploy.sh` detects it, and the
+  boot guards exist to undo it — the guards *failing* to catch it is in scope
+  above; typing the wrong output path is not a vulnerability in this tooling.
 * **A forgotten passphrase, or a lost recovery key.** There is no backdoor. That
   is the product working.
 * **A weak passphrase you chose.** The README covers what the KDF can and cannot
