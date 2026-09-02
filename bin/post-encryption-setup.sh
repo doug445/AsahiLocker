@@ -216,8 +216,15 @@ if [ -f "$SPLASH_MARKER" ]; then
             && ok "/etc/kernel/cmdline: appended '$TOKENS'"
     fi
     if [ -f /etc/default/grub ] && ! "$GREP" -qw rhgb /etc/default/grub; then
-        "$SED" -i -E "s/^(GRUB_CMDLINE_LINUX=\".*)\"[[:space:]]*\$/\1 $TOKENS\"/" /etc/default/grub \
-            && ok "/etc/default/grub: appended '$TOKENS' to GRUB_CMDLINE_LINUX"
+        # Asahi Remix ships GRUB_CMDLINE_LINUX_DEFAULT and no GRUB_CMDLINE_LINUX
+        # line at all, so match either.  sed exits 0 even when it matched
+        # nothing, so confirm the tokens actually landed instead of trusting it.
+        "$SED" -i -E "s/^(GRUB_CMDLINE_LINUX(_DEFAULT)?=\".*)\"[[:space:]]*\$/\1 $TOKENS\"/" /etc/default/grub
+        if "$GREP" -qw rhgb /etc/default/grub; then
+            ok "/etc/default/grub: appended '$TOKENS'"
+        else
+            warn "/etc/default/grub: no quoted GRUB_CMDLINE_LINUX[_DEFAULT] line to append '$TOKENS' to"
+        fi
     fi
     # Remove the marker only when the BLS restore actually landed — otherwise
     # a re-run would see no marker and never retry.

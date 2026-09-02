@@ -42,6 +42,7 @@ git clone https://github.com/doug445/AsahiLocker.git
 
 # 2. Boot the live USB. Easiest route, with the USB plugged in:
 #      sudo grub2-mkconfig -o /boot/grub2/grub.cfg    # adds it to your GRUB menu
+#      (-o must be exactly that path — NEVER the ESP grub.cfg; see docs/LIVE-USB.md)
 #    then reboot and select it.  (see docs/LIVE-USB.md for the U-Boot routes)
 
 # 3. From the live environment, encrypt the installed root:
