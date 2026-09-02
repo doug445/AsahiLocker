@@ -1132,39 +1132,6 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
 else
     read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
     [ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
-
-    # ── Caps Lock trap ──────────────────────────────────────────────────────
-    # 'ENCRYPT' is all caps, so it is natural to switch Caps Lock on to type it
-    # and leave it on for the new passphrase a few seconds later. cryptsetup
-    # asks for that passphrase twice, but both entries would be inverted the
-    # same way, so its verification passes. The mistake surfaces at the boot
-    # prompt — Caps Lock off, nothing works, and the volume holds the only copy
-    # of the data. Ask the kernel's keyboard LED state and say so plainly.
-    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
-        CAPS_STATE="unknown"
-        for _led in /sys/class/leds/*::capslock/brightness; do
-            [ -r "$_led" ] || continue
-            if [ "$(cat "$_led" 2>/dev/null || echo 0)" != "0" ]; then
-                CAPS_STATE="on"; break
-            fi
-            CAPS_STATE="off"
-        done
-        echo ""
-        case "$CAPS_STATE" in
-            on)
-                warn "CAPS LOCK IS ON — turn it off before the passphrase prompt."
-                warn "  You are about to set the passphrase this machine boots with."
-                warn "  cryptsetup asks for it twice, but both entries would be"
-                warn "  capitalised the same way, so it cannot catch this."
-                read -p "  Press Enter once Caps Lock is OFF (or leave it on deliberately): " _
-                ;;
-            *)
-                log "  If you switched Caps Lock on to type ENCRYPT, switch it off now —"
-                log "  cryptsetup's type-it-twice check cannot catch a passphrase that is"
-                log "  inverted both times, and the boot prompt is where you would find out."
-                ;;
-        esac
-    fi
 fi
 
 log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
@@ -1226,9 +1193,50 @@ else
     log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
     log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
     log "  You will be prompted to set a passphrase (type it twice)."
-    log "  Check Caps Lock first — both entries would be inverted, so it verifies."
     log "  If interrupted, just re-run this script — it resumes automatically."
     echo ""
+
+    # ── Caps Lock gate ──────────────────────────────────────────────────────
+    # cryptsetup's next two prompts are, in this order:
+    #     Are you sure? (Type 'yes' in capital letters):
+    #     Enter passphrase for /dev/...:
+    # Reaching for Caps Lock to type that YES is the natural thing to do, and it
+    # stays on for the passphrase one prompt later. cryptsetup asks for the
+    # passphrase twice, but both entries are inverted the same way, so its
+    # type-it-twice check passes and the mistake only surfaces at the boot
+    # prompt — Caps Lock off, nothing works, and the volume holds the only copy
+    # of the data.
+    #
+    # So the last thing typed before cryptsetup runs is a LOWER CASE word. It
+    # cannot be entered with Caps Lock on, which makes accepting it the proof:
+    # no keyboard LED reading, which is unreliable over Bluetooth anyway, and
+    # no warning issued minutes before the keystroke it is about.
+    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+        warn "  cryptsetup will now ask you to type YES in capital letters, and"
+        warn "  then for the passphrase this machine will boot with."
+        warn "  Hold SHIFT for that YES — do NOT use Caps Lock. Left on, it"
+        warn "  inverts the passphrase both times, so the type-it-twice check"
+        warn "  still passes and the boot prompt is where you would find out."
+        CAPS_TRIES=0
+        while :; do
+            if ! read -p "  Type 'yes' in lower case to confirm Caps Lock is off: " CAPS_OK; then
+                echo ""
+                fatal "Aborted (no input)."
+            fi
+            [ "$CAPS_OK" = "yes" ] && break
+            CAPS_TRIES=$((CAPS_TRIES + 1))
+            if [ "$CAPS_TRIES" -ge 5 ]; then
+                fatal "Aborted."
+            fi
+            if [ "$CAPS_OK" = "YES" ]; then
+                warn "  That arrived as 'YES' — Caps Lock is ON. Turn it off and"
+                warn "  type yes again in lower case."
+            else
+                warn "  Type yes (lower case) to continue, or Ctrl-C to abort."
+            fi
+        done
+        echo ""
+    fi
 
     # LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
     # auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
@@ -1626,6 +1634,7 @@ if [ -f /mnt/etc/kernel/cmdline ]; then
     fi
 else
     warn "  /etc/kernel/cmdline not found — creating it."
+    mkdir -p /mnt/etc/kernel
     echo "root=UUID=$BTRFS_UUID ro rootflags=subvol=$ROOT_SUBVOL $LUKS_BOOT_ARGS rhgb quiet" \
         > /mnt/etc/kernel/cmdline
 fi
