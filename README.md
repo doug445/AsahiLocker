@@ -98,7 +98,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 |------|------------|
 | `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB. Auto-detects everything, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 12 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
 | `bin/post-encryption-setup.sh` | Run once on the newly-encrypted system. Saves a recovery bundle, creates snapper subvolumes on the encrypted volume, enables the boot guards, verifies the result. Idempotent. |
-| `bin/luks-tune.sh` | An ncurses front-end (`dialog`, falling back to `whiptail`) for inspecting and re-costing the argon2id parameters of keyslots on volumes that already exist. Shows the measured unlock time and what the cost buys against a GPU fleet before you commit, backs the header up first, and hands the passphrase prompt to `cryptsetup` rather than reading it. Never creates or destroys a keyslot, never changes a passphrase, never touches data. `--dry-run` prints the command and changes nothing. |
+| `bin/luks-tune.sh` | An ncurses front-end (`dialog`, falling back to `whiptail`) for inspecting and re-costing the argon2id parameters of keyslots on volumes that already exist. Shows the measured unlock time and what the cost buys against a GPU fleet before you commit, backs the header up first, and hands the passphrase prompt to `cryptsetup` rather than reading it. Pins `--hash sha512` so a re-cost cannot walk a slot's AF hash back to cryptsetup's `sha256` default. Never creates or destroys a keyslot, never changes a passphrase, never touches data. `--dry-run` prints the command and changes nothing. |
 | `bin/save-luks-recovery-bundle.sh` | Assembles a labeled recovery bundle (LUKS header + `crypttab`/`fstab`/`cmdline`/BLS entries + a plain-English recovery README) so you are not dependent on a second USB. |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers). |
@@ -331,27 +331,35 @@ and repeat per slot you want re-costed.
 # fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more
 #                                      work than cryptsetup unaided here,
 #                                      which picks 1 GiB x 8)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
+sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
 # moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
+sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
 # aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
+sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
 # paranoid — 4 GiB, 12 iterations     (~11.4 s)
-sudo cryptsetup luksConvertKey --pbkdf argon2id \
+sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 ```
 
 Two things that trip people up:
+
+- **`--hash sha512` is not optional here.** `luksConvertKey` rewrites the
+  keyslot area, so it re-runs the anti-forensic split and re-stamps that
+  slot's AF hash. Leave `--hash` off and cryptsetup substitutes its
+  compiled-in default of `sha256` — re-costing a slot AsahiLocker formatted
+  would then *lower* its AF hash while raising its argon2id cost. The
+  volume-key digest is a separate field, fixed at `luksFormat` time;
+  `luksConvertKey` cannot change it either way.
 
 - **`--pbkdf-force-iterations` disables cryptsetup's time benchmarking.** Left
   off, cryptsetup auto-tunes the iteration count to land near `--iter-time`
