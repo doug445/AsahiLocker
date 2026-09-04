@@ -42,7 +42,14 @@
 # fact, not something to land on by accepting a default.
 #
 # What it does:      cryptsetup luksConvertKey  — re-wraps ONE keyslot's key
-#                    under new argon2id parameters.
+#                    under new argon2id parameters, with --hash sha512 so the
+#                    slot keeps the AF hash luks-deploy.sh formats with. Pass
+#                    no --hash and cryptsetup falls back to its compiled-in
+#                    default of sha256, which silently walks a sha512 keyslot
+#                    BACKWARDS every time it is re-costed.
+# What it cannot do: change the volume-key digest hash. That is fixed at
+#                    luksFormat time, so a header built by stock cryptsetup
+#                    keeps its sha256 digest no matter what is chosen here.
 # What it never does: create or destroy a keyslot, change a passphrase, touch
 #                    filesystem data, or offer pbkdf2. There is no code path
 #                    here that selects pbkdf2; see README, "Never use pbkdf2".
@@ -98,6 +105,13 @@ FLOOR_MEM_KIB=$P_FAST_MEM
 FLOOR_ITER=$P_FAST_ITER
 P_PARALLEL=4
 
+# AF splitter hash, pinned to the same value luks-deploy.sh passes to
+# luksFormat. luksConvertKey rewrites the keyslot area, so it re-runs the
+# anti-forensic split and re-stamps this field; omitting --hash lets cryptsetup
+# substitute its compiled-in default (sha256), turning a re-cost into a silent
+# downgrade of a sha512 slot. Always sent explicitly, never inherited.
+HASH=sha512
+
 CRYPTSETUP=/usr/sbin/cryptsetup
 [ -x "$CRYPTSETUP" ] || CRYPTSETUP=/sbin/cryptsetup
 [ -x "$CRYPTSETUP" ] || { echo "cryptsetup not found" >&2; exit 1; }
@@ -139,20 +153,51 @@ DEV=$(ui --title "Select a LUKS2 volume" \
          "${MENU_ITEMS[@]}" 3>&1 1>&2 2>&3) || { clear; exit 0; }
 
 # ─── Show current state ──────────────────────────────────────────────────────
-slot_table() {   # $1 = device; emits "slot<TAB>kdf<TAB>mem_kib<TAB>iter<TAB>threads"
-    # argon2id slots end on their Threads: line. pbkdf2 slots have no Time
-    # cost/Memory/Threads lines at all — they end on Iterations:, and are
-    # emitted with '-' placeholders so they appear in the menu and can be
-    # converted to argon2id. ('Iterations:' also occurs in the Digests
-    # section, but slot is "" there, so it cannot false-fire.)
+slot_table() {   # $1 = device; emits "slot<TAB>kdf<TAB>mem_kib<TAB>iter<TAB>threads<TAB>afhash"
+    # Every LUKS2 keyslot ends on 'Area offset:' whatever its KDF, so that is
+    # the record terminator; fields absent for a given KDF keep the '-' they
+    # were reset to. argon2id carries Time cost/Memory/Threads, pbkdf2 carries
+    # none of them and puts its count on 'Iterations:' instead — a pbkdf2 slot
+    # is still listed so it can be converted to argon2id from the same menu.
+    # A pbkdf2 slot also has its own 'Hash:' line, which is the PBKDF2 hash and
+    # NOT the AF hash; the capital H keeps those two patterns apart. ('Hash:'
+    # and 'Iterations:' also occur in the Digests section, but slot is "" by
+    # then, so neither can false-fire.)
     "$CRYPTSETUP" luksDump "$1" | awk '
-        /^[[:space:]]+[0-9]+: luks2/ { slot=$1; sub(":","",slot); k=""; m=""; i=""; t=""; next }
-        slot!="" && /PBKDF:/      { k=$2 }
-        slot!="" && /Time cost:/  { i=$3 }
-        slot!="" && /Memory:/     { m=$2 }
-        slot!="" && /Threads:/    { t=$2; printf "%s\t%s\t%s\t%s\t%s\n", slot, k, m, i, t; slot="" }
-        slot!="" && k=="pbkdf2" && /Iterations:/ { printf "%s\t%s\t-\t%s\t-\n", slot, k, $2; slot="" }
+        /^[[:space:]]+[0-9]+: luks2/ { slot=$1; sub(":","",slot); k="-"; m="-"; i="-"; t="-"; h="-"; next }
+        slot!="" && /^[[:space:]]+PBKDF:/      { k=$2 }
+        slot!="" && /^[[:space:]]+Time cost:/  { i=$3 }
+        slot!="" && /^[[:space:]]+Memory:/     { m=$2 }
+        slot!="" && /^[[:space:]]+Threads:/    { t=$2 }
+        slot!="" && /^[[:space:]]+Iterations:/ { i=$2 }
+        slot!="" && /^[[:space:]]+AF hash:/    { h=$3 }
+        slot!="" && /^[[:space:]]+Area offset:/ {
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n", slot, k, m, i, t, h; slot=""
+        }
     '
+}
+
+# The volume-key digest hash, read from the Digests section rather than a
+# keyslot. luksConvertKey cannot change it, so it is reported, never written.
+digest_hash() {   # $1 = device
+    "$CRYPTSETUP" luksDump "$1" | awk '
+        /^Digests:/ { d=1; next }
+        d && /^[[:space:]]+Hash:/ { print $2; exit }
+    '
+}
+
+# dialog refuses to draw a box taller than the terminal, and this script's
+# confirmation text is long. Size the tall boxes from their own content and
+# clamp to what the terminal can actually show.
+box_height() {   # $1 = text, $2 = lines of chrome (title, buttons, padding)
+    local n term
+    n=$(printf '%s\n' "$1" | wc -l)
+    n=$(( n + ${2:-7} ))
+    term=$(tput lines 2>/dev/null) || term=24
+    case "$term" in ''|*[!0-9]*) term=24;; esac
+    [ "$n" -gt $((term - 2)) ] && n=$((term - 2))
+    [ "$n" -lt 10 ] && n=10
+    printf '%s' "$n"
 }
 
 human_mem() {
@@ -161,10 +206,10 @@ human_mem() {
 }
 
 render_slots() {
-    printf '%-6s %-10s %-10s %-12s %s\n' SLOT KDF MEMORY ITERATIONS THREADS
-    printf '%s\n' "------------------------------------------------------"
-    while IFS=$'\t' read -r s k m i t; do
-        printf '%-6s %-10s %-10s %-12s %s\n' "$s" "$k" "$(human_mem "$m")" "$i" "$t"
+    printf '%-5s %-9s %-8s %-6s %-8s %s\n' SLOT KDF MEMORY ITER THREADS 'AF HASH'
+    printf '%s\n' "-------------------------------------------------------"
+    while IFS=$'\t' read -r s k m i t h; do
+        printf '%-5s %-9s %-8s %-6s %-8s %s\n' "$s" "$k" "$(human_mem "$m")" "$i" "$t" "$h"
     done
 }
 
@@ -172,16 +217,20 @@ mapfile -t SLOTS < <(slot_table "$DEV")
 [ "${#SLOTS[@]}" -gt 0 ] || die "Could not read any keyslots from $DEV."
 
 SUMMARY=$(printf '%s\n' "${SLOTS[@]}" | render_slots)
+DIGEST_HASH=$(digest_hash "$DEV"); [ -n "$DIGEST_HASH" ] || DIGEST_HASH="unknown"
 ui --title "$DEV — current keyslots" \
    --msgbox "$SUMMARY
 
+Volume-key digest: $DIGEST_HASH  (header-wide, set at luksFormat time)
+
 Each keyslot carries its own parameters. A passphrase slot and a
-keyfile slot on the same volume are commonly different." 18 74 || { clear; exit 0; }
+keyfile slot on the same volume are commonly different. Re-costing
+a slot here also rewrites its AF hash to $HASH." 20 74 || { clear; exit 0; }
 
 # ─── Pick a slot ─────────────────────────────────────────────────────────────
 SLOT_ITEMS=()
-while IFS=$'\t' read -r s k m i t; do
-    SLOT_ITEMS+=("$s" "$k  $(human_mem "$m")  t=$i  threads=$t")
+while IFS=$'\t' read -r s k m i t h; do
+    SLOT_ITEMS+=("$s" "$k  $(human_mem "$m")  t=$i  threads=$t  $h")
 done < <(printf '%s\n' "${SLOTS[@]}")
 
 SLOT=$(ui --title "Select a keyslot to re-cost" \
@@ -191,6 +240,7 @@ SLOT=$(ui --title "Select a keyslot to re-cost" \
 CUR=$(printf '%s\n' "${SLOTS[@]}" | awk -F'\t' -v s="$SLOT" '$1==s')
 CUR_KDF=$(echo "$CUR" | cut -f2); CUR_MEM=$(echo "$CUR" | cut -f3)
 CUR_ITER=$(echo "$CUR" | cut -f4); CUR_PAR=$(echo "$CUR" | cut -f5)
+CUR_HASH=$(echo "$CUR" | cut -f6)
 
 # ─── Pick new parameters ─────────────────────────────────────────────────────
 CHOICE=$(ui --title "New argon2id cost for slot $SLOT" --menu \
@@ -256,6 +306,16 @@ fi
 
 # ─── Confirm ─────────────────────────────────────────────────────────────────
 UUID=$("$CRYPTSETUP" luksUUID "$DEV")
+
+# The digest hash is header-wide and luksConvertKey has no way to rewrite it,
+# so it is stated rather than changed — otherwise a header left on sha256 by a
+# stock luksFormat would look fully upgraded once the AF hash moved.
+if [ "$DIGEST_HASH" = "$HASH" ]; then
+    DIGEST_NOTE="The volume-key digest is already $DIGEST_HASH."
+else
+    DIGEST_NOTE="The volume-key digest stays $DIGEST_HASH: it is fixed at luksFormat
+time and luksConvertKey cannot rewrite it. Only the AF hash moves."
+fi
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP="/root/luks-header-${UUID}-${STAMP}.bin"
 
@@ -331,6 +391,7 @@ $(
   printf '  %-12s %-14s %s\n' 'memory'     "$(human_mem "$CUR_MEM")"  "$(human_mem "$NEW_MEM")"
   printf '  %-12s %-14s %s\n' 'iterations' "$CUR_ITER"                "$NEW_ITER"
   printf '  %-12s %-14s %s\n' 'threads'    "$CUR_PAR"                 "$NEW_PAR"
+  printf '  %-12s %-14s %s\n' 'AF hash'    "$CUR_HASH"                "$HASH"
   printf '  %-12s %-14s %s\n' 'unlock'     "~$EST_CUR"                "~$EST_NEW"
 )
 
@@ -354,6 +415,10 @@ The header is backed up first to:
 cryptsetup will prompt for the passphrase of slot $SLOT on the
 terminal. This script never sees it.
 
+The AF hash is written as $HASH explicitly. Left unset, cryptsetup
+would substitute sha256 and this re-cost would quietly downgrade
+the slot. $DIGEST_NOTE
+
 Only this keyslot changes. Your passphrase does not change and no
 filesystem data is touched."
 
@@ -363,13 +428,13 @@ if [ "$DRY_RUN" -eq 1 ]; then
 
 Command that would run:
 
-  cryptsetup luksConvertKey -S $SLOT --pbkdf argon2id \\
+  cryptsetup luksConvertKey -S $SLOT --hash $HASH --pbkdf argon2id \\
     --pbkdf-memory $NEW_MEM --pbkdf-force-iterations $NEW_ITER \\
-    --pbkdf-parallel $NEW_PAR $DEV" 30 76 || true
+    --pbkdf-parallel $NEW_PAR $DEV" "$(box_height "$CONFIRM" 12)" 76 || true
     clear; exit 0
 fi
 
-ui --title "Confirm" --yesno "$CONFIRM" 28 76 || { clear; exit 0; }
+ui --title "Confirm" --yesno "$CONFIRM" "$(box_height "$CONFIRM" 7)" 76 || { clear; exit 0; }
 
 # ─── Back up the header, then convert ────────────────────────────────────────
 clear
@@ -380,11 +445,11 @@ if ! "$CRYPTSETUP" luksHeaderBackup "$DEV" --header-backup-file "$BACKUP"; then
 fi
 echo "Header backed up to $BACKUP"
 echo ""
-echo "Re-costing slot $SLOT on $DEV to $(human_mem "$NEW_MEM") / $NEW_ITER iterations."
+echo "Re-costing slot $SLOT on $DEV to $(human_mem "$NEW_MEM") / $NEW_ITER iterations, AF hash $HASH."
 echo "cryptsetup will now ask for the passphrase that opens slot $SLOT."
 echo ""
 
-if "$CRYPTSETUP" luksConvertKey -S "$SLOT" --pbkdf argon2id \
+if "$CRYPTSETUP" luksConvertKey -S "$SLOT" --hash "$HASH" --pbkdf argon2id \
         --pbkdf-memory "$NEW_MEM" --pbkdf-force-iterations "$NEW_ITER" \
         --pbkdf-parallel "$NEW_PAR" "$DEV"; then
     RESULT=$(slot_table "$DEV" | render_slots)
