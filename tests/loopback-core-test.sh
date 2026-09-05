@@ -161,12 +161,18 @@ pass "resize max ok"
 
 echo "== 4. recovery-key enrollment (luks-deploy's luksAddKey shape) =="
 od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$WORK/rk"; chmod 600 "$WORK/rk"
-cryptsetup luksAddKey --key-file "$WORK/pass" "$LOOP1" "$WORK/rk" "${KDF[@]}"
+cryptsetup luksAddKey --key-file "$WORK/pass" "$LOOP1" "$WORK/rk" --hash sha512 "${KDF[@]}"
 cryptsetup close "$MAP1"
 cryptsetup open --key-file "$WORK/rk" "$LOOP1" "$MAP1" \
     && pass "recovery key unlocks the volume" \
     || fail "recovery key cannot unlock"
 cryptsetup close "$MAP1"
+# Every keyslot must carry the AF hash luksFormat/reencrypt was given; a slot
+# added without --hash comes back as sha256 (verified on cryptsetup 2.8.7).
+AF_HASHES=$(cryptsetup luksDump "$LOOP1" | awk '/^[[:space:]]+AF hash:/{print $3}' | sort -u | paste -sd,)
+[ "$AF_HASHES" = "sha512" ] \
+    && pass "every keyslot (passphrase + recovery) has AF hash sha512" \
+    || fail "AF hashes after luksAddKey: $AF_HASHES (expected only sha512)"
 
 echo "== 5. an unfinished reencrypt carries the resume flag and finishes =="
 truncate -s 1200M "$WORK/disk2.img"

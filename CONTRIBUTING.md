@@ -89,8 +89,8 @@ afterwards; it does not touch any real disk:
 sudo bash tests/loopback-core-test.sh
 ```
 
-Expect `18 passed, 0 failed`. A `SKIP` or `NOTE` line in stage 5b is normal and
-lowers the pass count (to between 13 and 16) without any failure — that stage
+Expect `19 passed, 0 failed`. A `SKIP` or `NOTE` line in stage 5b is normal and
+lowers the pass count (to between 14 and 17) without any failure — that stage
 races a hard kill against a live re-encryption and reports honestly when it did
 not manage to build the state it wanted. `0 failed` is the invariant.
 
