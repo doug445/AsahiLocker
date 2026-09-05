@@ -800,6 +800,39 @@ Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run
 That exact sequence — including a hard kill mid-reencrypt — is what the CI
 loopback test exercises on every push.
 
+### Will a quantum computer break this?
+
+No — not the part of the system this tool builds. The quantum threat is
+specific, and none of it lands on a LUKS2 volume at rest:
+
+- **Shor's algorithm breaks public-key cryptography** — RSA, ECDH, ECDSA. LUKS2
+  contains none: the header holds keyslots, salts and a digest, and the data
+  is symmetric AES. There is no public key to factor, and nothing was ever
+  transmitted, so "harvest now, decrypt later" — which is about recorded TLS
+  key exchanges — has no analogue for a disk in a drawer.
+- **Grover's algorithm halves symmetric key strength**, and that is the whole of
+  its effect on AES. This tool uses AES-256-XTS (a 512-bit XTS key), so the
+  theoretical quantum brute force is 2^128 operations — the same class as
+  brute-forcing AES-128 classically, which is considered infeasible for the
+  age of the universe. NIST rates AES-256 as quantum-safe at its highest
+  category; it is the recommendation *for* the post-quantum era, not a victim
+  of it.
+- **The sha512 in the header** (anti-forensic splitter, volume-key digest) is a
+  preimage target, not a collision target; Grover leaves it at 2^256.
+- **The passphrase is the only lever, and argon2id guards it.** Grover could in
+  principle square-root a passphrase search — but every one of those guesses
+  is a full argon2id evaluation, 1 to 4 GiB of memory-hard, sequential work,
+  and nobody has a design for running that inside a quantum computer at any
+  useful rate. The memory cost that stops a GPU fleet stops this too. If you
+  want margin anyway, the fix is available today and costs nothing: ten
+  diceware words instead of eight.
+
+What quantum *will* eventually change, for context: TLS and SSH key exchange,
+GPG or age files encrypted to RSA/ECC public keys, and the RSA signatures that
+Secure Boot verifies — including on a UKI this tool re-signs. Those are the
+firmware and protocol ecosystems' migrations, they are not a way into the data
+on this disk, and the disk does not need to wait for them.
+
 ### Can I run it unattended across several machines?
 
 Yes. `LUKS_PROFILE` or the `LUKS_PBKDF_*` variables pin the KDF,
