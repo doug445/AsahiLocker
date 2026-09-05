@@ -903,6 +903,16 @@ the CI lint checks locally, dry-running the deploy, and verifying the GRUB
 argon2 constraint on your own machine. It also covers building GRUB 2.14 with
 argon2 into a local prefix, for anyone working on the `/boot` question.
 
+## Audit
+
+Audited in full on 2026-09-05 by **Claude Fable 5.1** (Anthropic) for code
+excellence: every script, the test suites and the documentation, with each
+finding reproduced before it was fixed. The results shipped as v1.10.0 through
+v1.10.2 — the recovery-keyslot AF-hash fix, the busy-device guard, the
+harden-only guarantee — and v1.11.0 marks the audited state.
+Nothing in this tool has changed hands: the design decisions are the
+author's, the audit checked that the code keeps them.
+
 ## License and contact
 
 MIT — see [LICENSE](LICENSE).
