@@ -696,8 +696,11 @@ fi
 ensure_unmounted() {
     # $1 = device; offer to unmount every mountpoint it currently has
     local dev="$1" mps mp
+    # findmnt -S lists every mountpoint of a source on any util-linux; lsblk's
+    # MOUNTPOINTS column only arrived in 2.37, and on older live media the
+    # old lsblk call errored out and this guard silently passed.
     # sort -r: unmount nested child mounts (/mnt/home) before parents (/mnt)
-    mps=$(lsblk -no MOUNTPOINTS "$dev" 2>/dev/null | grep -v '^$' | sort -r || true)
+    mps=$(findmnt -rno TARGET -S "$dev" 2>/dev/null | grep -v '^$' | sort -r || true)
     [ -n "$mps" ] || return 0
     warn "$dev is currently mounted at:"
     echo "$mps" | sed 's/^/    /'
@@ -1455,7 +1458,11 @@ case "$RK_CHOICE" in
             # later luksDump audit.
             log "  Enrolling recovery key (enter the volume passphrase when asked)..."
             log "  Recovery keyslot KDF: argon2id $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} (current profile — other slots may differ)"
+            # --hash sha512: a new keyslot gets its own AF hash, and without an
+            # explicit value cryptsetup stamps its compiled-in sha256 — the
+            # same silent downgrade luks-tune.sh had, verified on cryptsetup 2.8.
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
+                   --hash sha512 \
                    --pbkdf argon2id \
                    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
                    --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
@@ -1489,8 +1496,10 @@ esac
 # luksHeaderBackup refuses to overwrite; drop any stale copy from a previous
 # run first (the current header is always the authoritative one to keep).
 rm -f /mnt/boot/luks-header-backup.img
-cryptsetup luksHeaderBackup "$TARGET_ROOT" \
-    --header-backup-file /mnt/boot/luks-header-backup.img
+# umask 077 in a subshell: luksHeaderBackup creates the file itself and refuses
+# to overwrite, so the mode must be right at creation rather than fixed after.
+( umask 077; cryptsetup luksHeaderBackup "$TARGET_ROOT" \
+    --header-backup-file /mnt/boot/luks-header-backup.img )
 harden_path 0400 /mnt/boot/luks-header-backup.img
 # Also save to the deployment drive. install(1) rather than cp(1): cp creates
 # the destination at 0666 & ~umask -- 0644 by default -- so the header would sit
@@ -2016,7 +2025,16 @@ if [ -n "$grub_tool" ]; then
         esac
     fi
 fi
-$GRUB_REBUILT && echo "[CHROOT] GRUB config rebuilt." || echo "[CHROOT] WARN: Could not rebuild GRUB config."
+if $GRUB_REBUILT; then
+    echo "[CHROOT] GRUB config rebuilt."
+elif [ ! -d /boot/loader/entries ]; then
+    # No BLS entries: grub.cfg IS the boot configuration, and it still
+    # carries the pre-encryption command line without the unlock args.
+    echo "[CHROOT] FAIL: Could not rebuild GRUB config, and grub.cfg is what boots this machine."
+    ERRORS=$((ERRORS + 1))
+else
+    echo "[CHROOT] WARN: Could not rebuild GRUB config."
+fi
 
 # Detect an ESP grub.cfg that has ALREADY been clobbered with a full config
 # (by a previous run of this script, or by a guide-following mishap).
