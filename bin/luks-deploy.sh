@@ -238,7 +238,9 @@ if [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
        requested : $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} iterations
        floor     : $((KDF_FLOOR_MEM / 1024)) MiB x ${KDF_PROFILE_FAST_ITER} iterations (the 'fast' profile)
      There is no override. cryptsetup's own default is ~1 GiB with iterations
-     tuned to 2000 ms, so this would be weaker than luksFormat with no flags."
+     tuned to 2000 ms, so this would be weaker than luksFormat with no flags.
+     AsahiLocker hardens; it never writes a weaker KDF. If you truly want one,
+     that is a manual cryptsetup luksFormat/luksConvertKey outside this tool."
     fi
 fi
 
@@ -331,7 +333,8 @@ kdf_enforce_stock_floor() {
         fatal "Pinned KDF parameters are weaker than cryptsetup's own default on this machine.
        requested : $((LUKS_PBKDF_MEMORY / 1024)) MiB x ${LUKS_PBKDF_ITER} iterations
        stock     : $((STOCK_MEM / 1024)) MiB x ${STOCK_ITER} iterations (argon2id tuned to 2000 ms)
-     Raise the iteration count and re-run. There is no override."
+     Raise the iteration count and re-run. There is no override: AsahiLocker
+     hardens, never weakens. A weaker KDF is a manual cryptsetup operation."
     fi
 
     target_work=$(( stock_work * (100 + KDF_STOCK_MARGIN_PCT) / 100 ))
