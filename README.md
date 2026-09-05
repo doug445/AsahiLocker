@@ -232,6 +232,11 @@ Setting any `LUKS_PBKDF_*` variable pins the parameters and skips the menu.
 than 1 GiB of memory, or less total work (memory x iterations) than
 1 GiB x 9 — are refused outright. There is no acknowledgement flag, and the
 floor also catches the classic typo (`LUKS_PBKDF_MEMORY=1048` for `1048576`).
+**AsahiLocker hardens; it never weakens.** It does not write a KDF below the
+floor, and `luks-tune.sh` does not re-cost a keyslot to anything cheaper than
+the keyslot already has. If you genuinely want a weaker keyslot, that is a
+manual `cryptsetup luksConvertKey` you run yourself, outside this tool — no
+script here will do it for you.
 
 The two conditions are separate because they fail differently: dropping below
 1 GiB loses the memory-hardness that is the entire point, and dropping total
