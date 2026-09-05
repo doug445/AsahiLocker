@@ -530,7 +530,7 @@ echo ""
 
 # Identify the live USB's disk so we can deprioritize its partitions
 LIVE_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
-LIVE_ROOT_DISK=$(lsblk -no PKNAME "$LIVE_ROOT_DEV" 2>/dev/null | head -1)
+LIVE_ROOT_DISK=$(lsblk -dno PKNAME "$LIVE_ROOT_DEV" 2>/dev/null | head -1)
 log "Live environment disk: ${LIVE_ROOT_DISK:-(unknown)}"
 
 pick_partition() {
@@ -725,9 +725,9 @@ if [ -b /dev/mapper/${LUKS_NAME} ]; then
 fi
 
 # ─── Same-Disk Sanity Check ──────────────────────────────────────────────────
-DISK_ROOT=$(lsblk -no PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
-DISK_BOOT=$(lsblk -no PKNAME "$TARGET_BOOT" 2>/dev/null | head -n1)
-DISK_EFI=$(lsblk -no PKNAME "$TARGET_EFI" 2>/dev/null | head -n1)
+DISK_ROOT=$(lsblk -dno PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
+DISK_BOOT=$(lsblk -dno PKNAME "$TARGET_BOOT" 2>/dev/null | head -n1)
+DISK_EFI=$(lsblk -dno PKNAME "$TARGET_EFI" 2>/dev/null | head -n1)
 if [ "$DISK_ROOT" != "$DISK_BOOT" ] || [ "$DISK_ROOT" != "$DISK_EFI" ]; then
     warn "Selected partitions are on different disks!"
     echo "  ROOT: $TARGET_ROOT → $DISK_ROOT"
