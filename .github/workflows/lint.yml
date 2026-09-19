@@ -29,6 +29,15 @@ jobs:
             boot-guards/bin/esp-grub-stub-rebaseline \
             extras/bin/luks-fetch-cache
 
+  uboot-efivar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: python compiles
+        run: python3 -m py_compile boot-guards/bin/uboot-efivar.py
+      - name: U-Boot EFI variable file tool
+        run: bash tests/uboot-efivar-test.sh
+
   loopback:
     # Real cryptsetup reencrypt + hard-kill/repair/resume against a throwaway
     # file-backed loop device — no real disk is ever touched or modified.

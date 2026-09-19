@@ -10,7 +10,7 @@ before it lets you reboot.
 | Step | Action |
 |------|--------|
 | 1/8 | Shrinks btrfs by 32 MB to make room for the LUKS2 header |
-| 2/8 | In-place encrypts the partition with LUKS2, checksum resilience enabled so an interrupted run can resume |
+| 2/8 | In-place encrypts the partition with LUKS2 — 4096-byte encryption sectors when the btrfs sectorsize allows it (Apple NVMe is 4Kn), checksum resilience enabled so an interrupted run can resume |
 | 3/8 | Verifies the LUKS header (`luksDump`), opens the container, confirms btrfs is intact inside and the UUID was preserved |
 | 4/8 | Resizes btrfs back to fill the container, mounts a chroot using the auto-detected subvolumes |
 | 5/8 | Backs up the LUKS header to `/boot/` **and** to the script's own directory |

@@ -187,6 +187,9 @@ harden_path() {                        # harden_path <octal-mode> <path>
 #   LUKS_KEEP_SPLASH=1           do NOT strip 'rhgb quiet' from the boot args
 #                                (default: strip, so the passphrase prompt is
 #                                visible; post-encryption-setup.sh restores them)
+#   LUKS_SECTOR_SIZE=4096        encryption sector size (default: 4096 when the
+#                                btrfs sectorsize allows it, else 512); never
+#                                larger than the filesystem's sectorsize
 #   LUKS_SKIP_VERSION_CHECK=1    bypass the cryptsetup >= 2.4 floor
 #   LUKS_DRY_RUN=1 (or --dry-run flag)  preview: full detection + plan, no
 #                                       changes to the target, exit before
@@ -870,6 +873,39 @@ fi
 BOOT_UUID=$(blkid -s UUID -o value "$TARGET_BOOT")
 EFI_UUID=$(blkid -s UUID -o value "$TARGET_EFI")
 
+# ─── LUKS sector size ────────────────────────────────────────────────────────
+# Apple NVMe has 4096-byte sectors, and btrfs writes 4096-byte blocks on every
+# machine this runs on — yet cryptsetup's default encryption sector is 512, so
+# each filesystem block became eight XTS blocks with eight IVs (measured: the
+# author's own M2 Max volume, made by an earlier version of this script, is
+# "sector: 512 [bytes]" on a 4096/4096 disk). LUKS2 encrypts in 4096-byte
+# sectors when the filesystem never writes anything smaller, which btrfs with
+# a 4096-byte sectorsize never does: one XTS block per fs block, and the same
+# alignment the disk itself uses. Verified in-place on cryptsetup 2.8.8 for a
+# 4096-byte-sector device and a 512-byte one alike (tests/loopback-core-test.sh).
+# LUKS_SECTOR_SIZE=512|1024|2048|4096 pins it; it must not exceed the fs
+# sectorsize, and the device size must be a multiple of it.
+DEV_LSS=$(blockdev --getss "$TARGET_ROOT" 2>/dev/null || echo 512)
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    FS_SECTOR=$(btrfs inspect-internal dump-super "/dev/mapper/${LUKS_NAME}" 2>/dev/null | awk '/^sectorsize/{print $2; exit}')
+else
+    FS_SECTOR=$(btrfs inspect-internal dump-super "$TARGET_ROOT" 2>/dev/null | awk '/^sectorsize/{print $2; exit}')
+fi
+case "$FS_SECTOR" in ''|*[!0-9]*) FS_SECTOR=4096 ;; esac
+if [ -n "${LUKS_SECTOR_SIZE:-}" ]; then
+    case "$LUKS_SECTOR_SIZE" in 512|1024|2048|4096) ;; *) fatal "LUKS_SECTOR_SIZE must be 512, 1024, 2048 or 4096 (got '$LUKS_SECTOR_SIZE')" ;; esac
+    [ "$LUKS_SECTOR_SIZE" -le "$FS_SECTOR" ] || fatal "LUKS_SECTOR_SIZE=$LUKS_SECTOR_SIZE is larger than the btrfs sectorsize ($FS_SECTOR) — the filesystem would write partial encryption sectors"
+elif [ "$FS_SECTOR" -ge 4096 ]; then
+    LUKS_SECTOR_SIZE=4096
+else
+    LUKS_SECTOR_SIZE=512
+fi
+if [ "$DEPLOY_MODE" != "config-only" ]; then
+    _dev_b=$(blockdev --getsize64 "$TARGET_ROOT" 2>/dev/null || echo 0)
+    [ $(( _dev_b % LUKS_SECTOR_SIZE )) -eq 0 ] || { warn "  partition size is not a multiple of $LUKS_SECTOR_SIZE bytes — falling back to 512-byte LUKS sectors"; LUKS_SECTOR_SIZE=512; }
+fi
+log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (disk logical sector $DEV_LSS, btrfs sectorsize $FS_SECTOR)"
+
 # ─── fstab Cross-Validation ─────────────────────────────────────────────────
 # Verify the BOOT/EFI partitions picked in the menu are the SAME ones the
 # target's own fstab expects. On a disk with several installs side by side it
@@ -1075,6 +1111,11 @@ echo "  Subvols : root=$ROOT_SUBVOL, home=$HOME_SUBVOL"
 echo "  Free    : ${FS_AVAIL_MB} MiB"
 echo "  Arch    : $(uname -m)"
 echo "  Crypto  : cryptsetup $CRYPTSETUP_VER"
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    echo "  Sector  : (existing LUKS header — unchanged)"
+else
+    echo "  Sector  : ${LUKS_SECTOR_SIZE}-byte LUKS sectors (disk logical ${DEV_LSS}, btrfs sectorsize ${FS_SECTOR})"
+fi
 echo "  Mode    : $DEPLOY_MODE"
 if [ "$DEPLOY_MODE" = "config-only" ]; then
     echo "  KDF     : (existing LUKS header — unchanged)"
@@ -1111,7 +1152,8 @@ if [ "$DRY_RUN" = "1" ]; then
         echo "         --cipher aes-xts-plain64 --key-size 512 \\"
         echo "         --pbkdf argon2id --pbkdf-memory $LUKS_PBKDF_MEMORY \\"
         echo "         --pbkdf-parallel $LUKS_PBKDF_PARALLEL --pbkdf-force-iterations $LUKS_PBKDF_ITER \\"
-        echo "         --hash sha512 --reduce-device-size 32M --resilience checksum $TARGET_ROOT"
+        echo "         --hash sha512 --sector-size $LUKS_SECTOR_SIZE \\"
+        echo "         --reduce-device-size 32M --resilience checksum $TARGET_ROOT"
     else
         echo "  1-2. (config-only: no shrink, no encryption)"
     fi
@@ -1198,6 +1240,7 @@ else
     log "  KDF pinned: argon2id  mem=$(( LUKS_PBKDF_MEMORY / 1024 )) MiB (${LUKS_PBKDF_MEMORY} KiB)  time-cost(iters)=${LUKS_PBKDF_ITER}  parallel=${LUKS_PBKDF_PARALLEL}"
     log "  Hash: sha512  (AF splitter + LUKS2 volume-key digest; --hash sets both)"
     log "  Cipher: aes-xts-plain64  key-size=512 (AES-256-XTS)"
+    log "  Sector: ${LUKS_SECTOR_SIZE} bytes per encryption sector (disk ${DEV_LSS}, btrfs ${FS_SECTOR})"
     log "  You will be prompted to set a passphrase (type it twice)."
     log "  If interrupted, just re-run this script — it resumes automatically."
     echo ""
@@ -1260,6 +1303,7 @@ else
         --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
         --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
         --hash sha512 \
+        --sector-size "$LUKS_SECTOR_SIZE" \
         --reduce-device-size 32M \
         --resilience checksum \
         --verbose \
@@ -2264,6 +2308,15 @@ fi
 # ─── V10: LUKS device integrity ──────────────────────────────────────────────
 if [ -b /dev/mapper/${LUKS_NAME} ]; then
     log "  V10 OK: /dev/mapper/${LUKS_NAME} is active"
+    _ss=$(cryptsetup status "${LUKS_NAME}" 2>/dev/null | awk '/sector size:/{print $3; exit}')
+    if [ "$DEPLOY_MODE" = "config-only" ]; then
+        log "  V10 OK: encryption sector size ${_ss:-?} bytes (existing header)"
+    elif [ "${_ss:-}" = "$LUKS_SECTOR_SIZE" ]; then
+        log "  V10 OK: encryption sector size $_ss bytes, as planned"
+    else
+        err "  V10 FAIL: encryption sector size is ${_ss:-unknown}, planned $LUKS_SECTOR_SIZE!"
+        ERRORS=$((ERRORS + 1))
+    fi
 else
     err "  V10 FAIL: /dev/mapper/${LUKS_NAME} not found!"
     ERRORS=$((ERRORS + 1))
@@ -2295,6 +2348,7 @@ echo "  crypttab    : $LUKS_NAME UUID=$LUKS_UUID none luks,discard"
 echo "  fstab       : /dev/mapper/$LUKS_NAME (was UUID=$BTRFS_UUID)"
 echo "  grub default: GRUB_ENABLE_CRYPTODISK=y + rd.luks.uuid + rd.luks.name"
 echo "  kernel cmd  : rd.luks.uuid=$LUKS_UUID rd.luks.name=${LUKS_UUID}=$LUKS_NAME"
+echo "  LUKS sector : ${LUKS_SECTOR_SIZE} bytes"
 echo "  BLS entries : ALL updated with LUKS parameters"
 echo "  initramfs   : ALL kernels rebuilt with crypt+dm+btrfs modules"
 echo "  header bkup : /boot/luks-header-backup.img + $STATE_DIR/"

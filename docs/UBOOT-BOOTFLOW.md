@@ -53,6 +53,31 @@ env set boot_targets "usb nvme"     # try USB before internal NVMe
 env save                            # persist to U-Boot env
 ```
 
+## Where the EFI boot entries live (and why `efibootmgr` lies to you)
+
+`boot_targets` above is U-Boot's *own* environment. The **EFI** boot entries —
+`Boot####`, `BootOrder`, what `efibootmgr` shows under Linux — are a different
+store: U-Boot keeps them in one file on the EFI System Partition,
+`/boot/efi/ubootefi.var` (`lib/efi_loader/efi_var_file.c`), and picks that ESP
+by the PARTUUID the stub names in the device tree
+(`/chosen/asahi,efi-system-partition`; `arch/arm/mach-apple/board.c`). U-Boot
+reads the file at boot and writes it only from its own boot-time code: an
+entry shim's fallback registers at boot persists; an entry `efibootmgr`
+creates or deletes from Linux is a change to U-Boot's in-memory runtime copy
+and is gone at the next boot (`efi_set_variable_runtime`; Kconfig
+`EFI_RT_VOLATILE_STORE`: *"The OS will be responsible for syncing the RAM
+contents to the file, otherwise any changes made during runtime won't persist
+reboots"*).
+
+So: to remove a stale entry for good, edit the file —
+`boot-guards/bin/uboot-efivar.py` does (`list`, `stale`, `prune-stale`,
+`remove NNNN`), and the `clean-stale-efi-entries` guard runs it at every boot.
+With no `Boot####` entry that works, U-Boot's boot manager tries the default
+loader on the stub's own ESP before any other partition
+(`lib/efi_loader/efi_bootmgr.c`, *try EFI system partition*), so a deleted or
+unreadable `ubootefi.var` still boots — the ESP's `EFI/BOOT/BOOTAA64.EFI`
+(shim) runs, and shim's fallback writes the entry back.
+
 ## The flow for this repo (boot the live USB to encrypt)
 
 ```text

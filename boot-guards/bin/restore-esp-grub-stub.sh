@@ -48,7 +48,20 @@
 #     sudo /usr/local/sbin/esp-grub-stub-rebaseline
 set -eu
 
-ESP=${ESP_GRUB_CFG:-/boot/efi/EFI/fedora/grub.cfg}
+# The ESP's vendor directory is whichever holds this arch's GRUB or shim — on
+# Fedora Asahi Remix that is EFI/fedora, while os-release says
+# ID=fedora-asahi-remix. Never take a distro name for it. (POSIX sh: no
+# local, no compgen.)
+esp_grub_cfg() {
+    for _d in /boot/efi/EFI/*/; do
+        case "$(basename "$_d")" in [Bb][Oo][Oo][Tt]) continue ;; esac
+        for _f in "$_d"grub*.efi "$_d"shim*.efi; do
+            [ -f "$_f" ] && { echo "${_d}grub.cfg"; return 0; }
+        done
+    done
+    echo /boot/efi/EFI/fedora/grub.cfg
+}
+ESP=${ESP_GRUB_CFG:-$(esp_grub_cfg)}
 REF=${ESP_GRUB_REF:-/root/grub-esp-stub.cfg.known-good}
 HASHFILE=${ESP_GRUB_HASH:-/root/grub-esp-stub.sha512}
 

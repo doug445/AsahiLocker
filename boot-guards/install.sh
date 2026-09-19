@@ -39,6 +39,8 @@
 #      no longer attached. U-Boot on Asahi auto-registers an entry for every
 #      shim.efi it finds on removable media, and they linger after you unplug the
 #      installer USB, producing "can't find boot XXXX" noise at every boot.
+#      Under U-Boot the entries live in ubootefi.var on the ESP, which a runtime
+#      efibootmgr delete never reaches; uboot-efivar.py edits that file.
 #
 # Idempotent — safe to re-run. Uninstall with ./install.sh --uninstall
 # All tools called by absolute path (immune to shell aliases like cp='cp -i').
@@ -58,7 +60,20 @@ err(){  echo -e "  ${RED}[fail]${N} $*"; }
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SBIN=/usr/local/sbin
 UNITS=/etc/systemd/system
-ESP=/boot/efi/EFI/fedora/grub.cfg
+# The ESP's vendor directory is whichever holds this arch's GRUB or shim — on
+# Fedora Asahi Remix that is EFI/fedora, while os-release says
+# ID=fedora-asahi-remix. Never take a distro name for it.
+esp_grub_cfg() {
+    local d
+    for d in /boot/efi/EFI/*/; do
+        case "$(basename "$d")" in [Bb][Oo][Oo][Tt]) continue ;; esac
+        if compgen -G "${d}grub*.efi" >/dev/null 2>&1 || compgen -G "${d}shim*.efi" >/dev/null 2>&1; then
+            echo "${d}grub.cfg"; return 0
+        fi
+    done
+    echo /boot/efi/EFI/fedora/grub.cfg
+}
+ESP=${ESP_GRUB_CFG:-$(esp_grub_cfg)}
 REF=/root/grub-esp-stub.cfg.known-good
 HASHFILE=/root/grub-esp-stub.sha512
 
@@ -69,7 +84,7 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$SYSTEMCTL" disable --now "$u" >/dev/null 2>&1
         "$RM" -f "$UNITS/$u"
     done
-    "$RM" -f "$SBIN/restore-esp-grub-stub.sh" "$SBIN/clean-stale-efi-entries.sh" "$SBIN/esp-grub-stub-rebaseline"
+    "$RM" -f "$SBIN/restore-esp-grub-stub.sh" "$SBIN/clean-stale-efi-entries.sh" "$SBIN/esp-grub-stub-rebaseline" "$SBIN/uboot-efivar.py"
     "$SYSTEMCTL" daemon-reload
     ok "boot guards removed (baseline files in /root left in place)"
     exit 0
@@ -82,7 +97,7 @@ echo -e "${B}Installing Asahi boot guards...${N}"
 
 # ─── 1. Scripts ─────────────────────────────────────────────────────────────
 "$MKDIR" -p "$SBIN"
-for s in restore-esp-grub-stub.sh clean-stale-efi-entries.sh esp-grub-stub-rebaseline; do
+for s in restore-esp-grub-stub.sh clean-stale-efi-entries.sh esp-grub-stub-rebaseline uboot-efivar.py; do
     "$CP" -f "$HERE/bin/$s" "$SBIN/$s" && "$CHMOD" 0755 "$SBIN/$s" \
         && ok "installed $SBIN/$s" || { err "could not install $s"; exit 1; }
 done

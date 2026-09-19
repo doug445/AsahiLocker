@@ -286,7 +286,9 @@ Two guards, both worth having on an encrypted Asahi box:
 - **Stale EFI entry cleaner** — U-Boot auto-registers an EFI boot entry for every
   `shim.efi` it finds on removable media. They persist after you unplug the
   installer USB and produce `can't find boot XXXX` errors. This removes entries
-  whose partition is no longer attached.
+  whose partition is no longer attached — from `ubootefi.var` on the ESP, the
+  file U-Boot actually reads them from; a runtime `efibootmgr -B` only edits
+  U-Boot's in-memory copy and is undone by the next boot.
 
 ### Optional: encryption status readout
 

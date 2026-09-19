@@ -256,6 +256,33 @@ else
     assert_unlocks "$LOOP3" "$MAP2" "completed volume"
 fi
 
+echo "== 7. 4096-byte encryption sectors: a 4Kn device and a 512-byte one =="
+# Apple NVMe is 4Kn; btrfs writes 4096-byte blocks everywhere. luks-deploy
+# passes --sector-size 4096 whenever the fs sectorsize allows it. Both device
+# geometries must take it in place, and the content must survive.
+for LSS in 4096 512; do
+    IMG="$WORK/disk-ss$LSS.img"; truncate -s 600M "$IMG"
+    if ! L4=$(losetup --show -f --sector-size "$LSS" "$IMG" 2>/dev/null); then
+        echo "  SKIP: losetup --sector-size $LSS unsupported here"; continue
+    fi
+    LOOPS_EXTRA="${LOOPS_EXTRA:-} $L4"
+    mkfs.btrfs -q -f "$L4"; mount "$L4" "$WORK/mnt"; echo "ss-sentinel-$LSS" > "$WORK/mnt/f"
+    btrfs -q filesystem resize -32M "$WORK/mnt"; umount "$WORK/mnt"
+    FSS=$(btrfs inspect-internal dump-super "$L4" | awk '/^sectorsize/{print $2; exit}')
+    [ "$FSS" = 4096 ] && pass "btrfs sectorsize is 4096 on the $LSS-byte device" || fail "btrfs sectorsize is $FSS"
+    if cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" --cipher aes-xts-plain64 --key-size 512 --hash sha512 --sector-size 4096 "$L4"; then
+        pass "reencrypt --encrypt --sector-size 4096 on a $LSS-byte device"
+    else
+        fail "reencrypt --sector-size 4096 refused on a $LSS-byte device"; losetup -d "$L4"; continue
+    fi
+    cryptsetup open --key-file "$WORK/pass" "$L4" "$MAP2"
+    SS=$(cryptsetup status "$MAP2" | awk '/sector size:/{print $3; exit}')
+    [ "$SS" = 4096 ] && pass "container encrypts in 4096-byte sectors ($LSS-byte device)" || fail "sector size $SS"
+    mount "/dev/mapper/$MAP2" "$WORK/mnt"
+    grep -q "ss-sentinel-$LSS" "$WORK/mnt/f" && pass "content intact through 4096-byte-sector encryption" || fail "content lost"
+    umount "$WORK/mnt"; cryptsetup close "$MAP2"; losetup -d "$L4"
+done
+
 echo ""
 echo "==================================================="
 echo "  $PASS passed, $FAIL failed"

@@ -87,7 +87,9 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 - **Recovery you can actually use.** Optional 64-hex recovery key in a second
   keyslot, plus a labeled bundle with the LUKS header and every changed config.
 - **Asahi-specific boot guards.** Stops a stray `grub2-mkconfig` from bricking
-  an encrypted boot, and clears U-Boot's stale EFI entries.
+  an encrypted boot, and clears U-Boot's stale EFI entries — in the file they
+  actually live in (`ubootefi.var` on the ESP), which a runtime `efibootmgr`
+  delete never reaches.
 - **Tested in CI on every push**, x86_64 and aarch64, against a real loop device.
 
 ---
@@ -101,7 +103,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `bin/luks-tune.sh` | An ncurses front-end (`dialog`, falling back to `whiptail`) for inspecting and re-costing the argon2id parameters of keyslots on volumes that already exist. Shows the measured unlock time and what the cost buys against a GPU fleet before you commit, backs the header up first, and hands the passphrase prompt to `cryptsetup` rather than reading it. Pins `--hash sha512` so a re-cost cannot walk a slot's AF hash back to cryptsetup's `sha256` default. Never creates or destroys a keyslot, never changes a passphrase, never touches data. `--dry-run` prints the command and changes nothing. |
 | `bin/save-luks-recovery-bundle.sh` | Labeled recovery bundle: a fresh, **verified** header backup of **every** LUKS volume on the machine (not just root), the public `luksDump` of each, the **partition table** of every disk holding one (`sfdisk --dump`, so a header backup is never a puzzle about offsets), crypttab/fstab/every command-line carrier/boot entries/EFI boot variables, sha256 sums, and a README with the repair steps for this machine's initramfs style and the checks to make before any header is restored. Refreshes a stale `/boot` emergency copy (keeping the old one). Key files named in crypttab are listed, never copied. `--dry-run` writes nothing. **Key material — never attach it to a bug report.** |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
-| `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers). |
+| `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
 | `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. Runs in CI on every push (x86_64 + aarch64); safe to run locally with sudo. |
 | `docs/` | [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [RECOVERY](docs/RECOVERY.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) |
@@ -172,6 +174,7 @@ cost and sha256.
 | Iterations (time cost) | 10 / 8 / 9 — aggressive / moderate / `fast` |
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
+| Encryption sector | **4096 bytes** when the btrfs sectorsize allows it (it does on every Asahi install), else 512. Apple NVMe is a 4096-byte-sector disk and btrfs writes 4096-byte blocks; cryptsetup's default of 512 made every filesystem block eight XTS blocks with eight IVs. Verified in place for 4096-byte and 512-byte devices alike; `LUKS_SECTOR_SIZE=512` pins the old value |
 
 The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
 allocatable there — and you pay its full cost as unlock latency on every boot.
@@ -860,8 +863,15 @@ The boot guards and the U-Boot documentation are Apple-Silicon-specific.
 sudo cryptsetup luksDump /dev/nvme0n1p6
 ```
 
-Look for `Cipher: aes-xts-plain64`, a 512-bit key, and `PBKDF: argon2id` with
-the memory and iteration figures from the profile you chose.
+Look for `Cipher: aes-xts-plain64`, a 512-bit key, `PBKDF: argon2id` with
+the memory and iteration figures from the profile you chose, and under
+*Data segments* `sector: 4096 [bytes]`. A volume made by a release before
+1.12.0 shows `sector: 512 [bytes]` — it is exactly as secure, just doing eight
+XTS operations per filesystem block instead of one. It can be changed only by
+a full in-place re-encryption (`cryptsetup reencrypt --sector-size 4096
+/dev/nvme0n1p6`, from the live USB, header backed up first — hours, and the
+same interrupt-and-resume rules as the original encryption); `luks-tune.sh`
+does not offer it, because it is not a KDF change.
 
 ### Changing your KDF after installation
 
