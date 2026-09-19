@@ -174,7 +174,7 @@ cost and sha256.
 | Iterations (time cost) | 10 / 8 / 9 — aggressive / moderate / `fast` |
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
-| Encryption sector | **4096 bytes** when the btrfs sectorsize allows it (it does on every Asahi install), else 512. Apple NVMe is a 4096-byte-sector disk and btrfs writes 4096-byte blocks; cryptsetup's default of 512 made every filesystem block eight XTS blocks with eight IVs. Verified in place for 4096-byte and 512-byte devices alike; `LUKS_SECTOR_SIZE=512` pins the old value |
+| Encryption sector | **4096 bytes** when the btrfs sectorsize allows it (it does on every Asahi install), else 512. Apple NVMe is a 4096-byte-sector disk and btrfs writes 4096-byte blocks; cryptsetup's default of 512 made every filesystem block eight XTS blocks with eight IVs. Verified in place for 4096-byte and 512-byte devices alike; `LUKS_SECTOR_SIZE=512` pins the old value. cryptsetup refuses 4096-byte sectors on a partition whose size is not a multiple of 4096 — and on a 512-byte-sector GPT disk the last partition never is (GPT reserves 33 sectors at the end of the disk). The script then asks: type `ALIGN` to move the partition's end down by those few bytes (the table is backed up first; type, name, GUID and attributes are kept; the filesystem, already 32 MiB smaller, loses nothing), or press Enter for 512-byte sectors. `LUKS_ALIGN_PARTITION=yes\|no` answers it non-interactively. On Apple's 4096-byte-sector NVMe the question never comes up |
 
 The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
 allocatable there — and you pay its full cost as unlock latency on every boot.

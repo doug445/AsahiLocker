@@ -222,14 +222,23 @@ mapfile -t SLOTS < <(slot_table "$DEV")
 
 SUMMARY=$(printf '%s\n' "${SLOTS[@]}" | render_slots)
 DIGEST_HASH=$(digest_hash "$DEV"); [ -n "$DIGEST_HASH" ] || DIGEST_HASH="unknown"
+# The encryption sector size lives in the data segment, not a keyslot, and
+# luksConvertKey cannot change it either: shown so a volume made before
+# 1.12.0 (512-byte sectors on a 4096-byte disk) is recognisable here.
+SECTOR=$("$CRYPTSETUP" luksDump "$DEV" | awk '/^Data segments:/{d=1; next} d && /^[[:space:]]+sector:/{print $2; exit}')
+[ -n "$SECTOR" ] || SECTOR="unknown"
+SECTOR_NOTE=""
+[ "$SECTOR" = 512 ] && [ "$(blockdev --getss "$DEV" 2>/dev/null || echo 512)" = 4096 ] \
+    && SECTOR_NOTE=" — 512 on a 4096-byte-sector disk: eight XTS blocks per filesystem block (a full reencrypt --sector-size 4096 changes it; not a KDF matter)"
 ui --title "$DEV — current keyslots" \
    --msgbox "$SUMMARY
 
 Volume-key digest: $DIGEST_HASH  (header-wide, set at luksFormat time)
+Encryption sector: $SECTOR bytes$SECTOR_NOTE
 
 Each keyslot carries its own parameters. A passphrase slot and a
 keyfile slot on the same volume are commonly different. Re-costing
-a slot here also rewrites its AF hash to $HASH." 20 74 || { clear; exit 0; }
+a slot here also rewrites its AF hash to $HASH." 22 76 || { clear; exit 0; }
 
 # ─── Pick a slot ─────────────────────────────────────────────────────────────
 SLOT_ITEMS=()
