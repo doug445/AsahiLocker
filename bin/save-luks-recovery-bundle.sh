@@ -310,6 +310,13 @@ if [ "$DRY" -eq 0 ]; then
   if [ -d /sys/firmware/efi ] && command -v efibootmgr >/dev/null 2>&1; then
     efibootmgr -v > "$DEST/efibootmgr.txt" 2>/dev/null && ok "saved EFI boot entries (efibootmgr -v)"
   fi
+  # U-Boot (Apple Silicon): the boot entries' real home is ubootefi.var on the
+  # ESP — efibootmgr shows a copy. The file itself restores them.
+  for esp in "$PREFIX/boot/efi" "$PREFIX/efi" "$PREFIX/boot"; do
+    [ -f "$esp/ubootefi.var" ] || continue
+    cp -f "$esp/ubootefi.var" "$DEST/ubootefi.var" 2>/dev/null && ok "saved U-Boot's EFI variable file (ubootefi.var — the boot entries themselves)"
+    break
+  done
   chmod 0600 "$DEST"/*.txt 2>/dev/null
 fi
 
@@ -414,6 +421,11 @@ SYSTEM WILL NOT BOOT — repair from any live USB for this machine
   #   kernel-install add ...) and re-sign it if Secure Boot is on.
   # efibootmgr.txt has the firmware boot entries that existed; recreate a lost
   # one with efibootmgr -c -d /dev/DISK -p N -L "Linux" -l '\\EFI\\...\\shim.efi'
+  #   — on real UEFI firmware. Under U-Boot (Apple Silicon) an efibootmgr write
+  #   does not survive a reboot: the entries live in ubootefi.var on the ESP.
+  #   Put this bundle's ubootefi.var back there, or delete the file and let
+  #   U-Boot boot the ESP's own EFI/BOOT loader (shim's fallback then
+  #   re-registers the entry at boot time).
 
 --------------------------------------------------------------------------------
 KEY FILES
@@ -429,6 +441,7 @@ Files in this bundle:
   partition-table-*.sfdisk   sfdisk --dump of each disk holding a LUKS volume
   etc_*, boot_*, bls-entries-*/   boot configuration as it was
   lsblk.txt blkid.txt findmnt.txt efibootmgr.txt proc_cmdline.txt
+  ubootefi.var               U-Boot's EFI variable file (the boot entries), Apple Silicon only
 $SUMS
 ================================================================================
 EOF
