@@ -481,6 +481,36 @@ there is no supported configuration in which it is the right answer. If
 running on a twenty-six-year-old assumption about who is attacking it. Re-cost
 that keyslot with the `luksConvertKey` command above, today.
 
+### How this compares with FileVault — the KDF macOS gives the same disk
+
+The macOS install on the other half of this disk is protected by FileVault, so
+the comparison is not academic: the same passphrase habits, the same NVMe, two
+key-derivation designs. They are different in kind, and it is worth being exact
+about which one is stronger at what.
+
+| | FileVault (macOS on Apple Silicon) | AsahiLocker (LUKS2 on Fedora Asahi Remix) |
+|---|---|---|
+| Key derivation | **PBKDF2** with SHA-256 — a `for` loop, the 2000 design, no memory cost; documented at 41,000 iterations in the CoreStorage era (Choudary, Grobert and Metz, *Infiltrate the Vault*, 2012), and Apple has published no figure since | **argon2id** (RFC 9106, the Password Hashing Competition winner): 1–4 GiB of memory *per guess*, 8–10 passes, sha512 everywhere — the parameters in the table above |
+| Where the password is stretched | Inside the **Secure Enclave**, entangled with the chip's unique ID and rate-limited there; the derived key never exists outside that silicon | In the initramfs, on the CPU, from what is on the disk — nothing else is involved |
+| An attacker with the disk alone | Cannot start: without that specific Secure Enclave the key hierarchy is unreachable, however weak the password. Every guess has to run on the machine, throttled by the hardware | Can start at once: the LUKS header holds everything, and the only thing standing between a guess and the data is argon2id's cost per guess — 4 GiB and seconds of memory-bound work, on hardware of the attacker's choosing |
+| An attacker with the machine | The Secure Enclave's throttling, and behind it a PBKDF2 that a GPU would eat in days if it ever got to run offline (the [pbkdf2 column](#what-a-weak-kdf-costs-you--the-pbkdf2-column) is what that looks like) | Exactly the disk-alone case: the machine adds nothing, and takes nothing away |
+| What carries a weak passphrase | The hardware. Apple's design assumes the passphrase is weak and makes the silicon carry it | Nothing. AsahiLocker cannot reach the Secure Enclave (see the [FAQ](#why-do-i-have-to-type-a-passphrase-at-every-boot-cant-it-use-the-secure-enclave)), so the KDF is the whole wall, and the [table above](#your-passphrase-is-the-other-half) is the price list |
+| What carries a strong passphrase | Both — and past six diceware words the hardware is a formality | The passphrase, already past cosmic time at the same six words; the KDF decides the top rows of the table, not the bottom ones |
+| If the hardware promise ever fails | Falls back to PBKDF2 alone — the weak KDF, offline. A Secure Enclave flaw, a signing key, a legal order to a single vendor: the design has one load-bearing part, and it is closed | Nothing to fall back from: the design was never resting on hardware. A memory-hard KDF and a passphrase are the same wall on every machine, today and after the machine is replaced |
+| Intel Mac without a T2 chip | PBKDF2 alone, offline — the weak case, with no hardware in front of it | Unchanged |
+
+So, said plainly: **as a key-derivation function, AsahiLocker's argon2id
+exceeds FileVault's PBKDF2 by orders of magnitude** — the same way it exceeds
+pbkdf2 on a Linux volume, for the same reasons, in the same table. Apple knows
+this and does not rely on PBKDF2; it relies on the Secure Enclave to make the
+weak function unreachable. That is a legitimate design, and one Linux on this
+hardware cannot borrow. It is also a design with a single point of trust that
+is not yours. AsahiLocker takes the other road: make each guess genuinely
+expensive on any silicon, and let the passphrase do the rest. Which is why the
+passphrase advice in this document is not decoration — under Linux it is the
+Secure Enclave you do not have. Choose it with `diceware`, six words or more,
+and both columns of every table here read *past the age of the universe*.
+
 ### Your passphrase is the other half
 
 The KDF sets the price of a single guess. Your passphrase sets how many guesses
@@ -768,7 +798,10 @@ System Recovery remain available regardless.
 There is no TPM on Apple Silicon, and Asahi has no interface to seal a key in the
 Secure Enclave, so there is nowhere to store an auto-unlock key that would still
 be safe. The KDF re-runs in the initramfs on every boot and you type the
-passphrase. That is a platform constraint, not a shortcoming of this kit.
+passphrase. That is a platform constraint, not a shortcoming of this kit — and
+it is why the KDF here is argon2id and the passphrase advice is not optional:
+[How this compares with FileVault](#how-this-compares-with-filevault--the-kdf-macos-gives-the-same-disk)
+lays out what the Secure Enclave does for macOS and what stands in for it here.
 
 ### Which KDF does this use, and can I change it?
 
