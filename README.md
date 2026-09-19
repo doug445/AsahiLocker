@@ -961,6 +961,7 @@ the menu version is [`bin/luks-tune.sh`](bin/luks-tune.sh).
 
 | Doc | Covers |
 |-----|--------|
+| [TESTED-SYSTEMS.md](docs/TESTED-SYSTEMS.md) | The machines behind the ✅ claims — hardware, layout, what was verified and what was found |
 | [INSTALL.md](docs/INSTALL.md) | Step-by-step install, start to finish, with what each prompt means |
 | [LIVE-USB.md](docs/LIVE-USB.md) | Building a Fedora Asahi live USB, and the three ways to boot it |
 | [RECOVERY.md](docs/RECOVERY.md) | Interrupted encryption, unbootable system, corrupt header, undoing a shrink |
