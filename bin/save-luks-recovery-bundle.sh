@@ -81,14 +81,17 @@ ok(){ echo -e "  ${G}✅${N} $*"; }; warn(){ echo -e "  ${Y}⚠️ ${N} $*"; }
 err(){ echo -e "  ${R}❌${N} $*"; FAILS=$((FAILS+1)); }
 note(){ echo "     $*"; }
 
-DRY=0; BOOT_REFRESH=1
-for a in "$@"; do
+DRY=0; BOOT_REFRESH=1; TARGET_ARG=""
+while [ $# -gt 0 ]; do
+  a="$1"
   case "$a" in
     --dry-run) DRY=1 ;;
     --no-boot-refresh) BOOT_REFRESH=0 ;;
+    --target) TARGET_ARG="${2:-}"; [ -n "$TARGET_ARG" ] && [ -d "$TARGET_ARG" ] || { echo "--target needs a mounted directory" >&2; exit 2; }; shift ;;
     -h|--help) sed -n '/^# Assembles a CLEARLY/,/^# =\{20,\}/p' "$0" | sed -e '$d' -e 's/^# \?//'; exit 0 ;;
-    *) echo "unknown option: $a (--dry-run, --no-boot-refresh, --help)" >&2; exit 2 ;;
+    *) echo "unknown option: $a (--dry-run, --no-boot-refresh, --target <dir>, --help)" >&2; exit 2 ;;
   esac
+  shift
 done
 [ "$(id -u)" -eq 0 ] || { err "run as root (sudo)"; exit 1; }
 DRYNOTE=""; [ "$DRY" -eq 1 ] && DRYNOTE="  (dry run — nothing is written)"
@@ -114,14 +117,26 @@ mapper_raw(){   # crypt mapper name -> canonical backing device
 run(){ if [ "$DRY" -eq 1 ]; then note "[dry-run] $*"; else "$@"; fi; }
 
 # ─── Where is the target: this system, or one mounted at /mnt? ──────────────
+# --target <dir> names the system to bundle explicitly. Without it, the
+# running system is the target when its root is on LUKS, else a system
+# mounted at /mnt — which is right on a live USB (whose root is never LUKS)
+# and wrong on a rescue system that is itself encrypted: there the bundle
+# quietly described the rescue machine, not the disk under /mnt.
 ROOT_SRC=$(findmnt -no SOURCE / 2>/dev/null | strip_subvol)
 ROOT_CRYPT=$(luks_ancestor "$ROOT_SRC")
 PREFIX=""
-if [ -z "$ROOT_CRYPT" ]; then
+if [ -n "$TARGET_ARG" ]; then
+  MNT_SRC=$(findmnt -no SOURCE "$TARGET_ARG" 2>/dev/null | strip_subvol)
+  [ -n "$MNT_SRC" ] && [ -f "$TARGET_ARG/etc/fstab" ] || { err "--target $TARGET_ARG: nothing is mounted there with an /etc/fstab"; exit 1; }
+  [ -n "$(luks_ancestor "$MNT_SRC")" ] || { err "--target $TARGET_ARG: $MNT_SRC is not on a LUKS volume"; exit 1; }
+  PREFIX="${TARGET_ARG%/}"; ROOT_SRC="$MNT_SRC"; ROOT_CRYPT=$(luks_ancestor "$MNT_SRC")
+elif [ -z "$ROOT_CRYPT" ]; then
   MNT_SRC=$(findmnt -no SOURCE /mnt 2>/dev/null | strip_subvol)
   if [ -n "$MNT_SRC" ] && [ -f /mnt/etc/fstab ] && [ -n "$(luks_ancestor "$MNT_SRC")" ]; then
     PREFIX="/mnt"; ROOT_SRC="$MNT_SRC"; ROOT_CRYPT=$(luks_ancestor "$MNT_SRC")
   fi
+elif [ -f /mnt/etc/fstab ] && [ -n "$(luks_ancestor "$(findmnt -no SOURCE /mnt 2>/dev/null | strip_subvol)")" ]; then
+  warn "this system's root is on LUKS AND a LUKS-backed system is mounted at /mnt — bundling THIS system; pass --target /mnt for the other"
 fi
 [ -n "$ROOT_CRYPT" ] || { err "neither / nor /mnt sits on a LUKS volume — is the box encrypted & mounted?"; exit 1; }
 ROOT_RAW=$(mapper_raw "$ROOT_CRYPT")
@@ -158,6 +173,17 @@ while read -r name fstype; do
   if [ "$raw" = "$ROOT_RAW" ]; then label=root
   elif [ -n "$mapper" ]; then label="$mapper"
   else label="inactive-$(basename "$raw")"; fi
+  # Live-USB mode: the "machine" is whatever is plugged into the rescue
+  # system — another computer's backup drive, a second test disk. Only the
+  # target's own volumes belong in its bundle: its root, and what its crypttab
+  # names (by UUID, or by a path that resolves to the device). Others are
+  # named and skipped, never copied.
+  if [ -n "$PREFIX" ] && [ "$raw" != "$ROOT_RAW" ]; then
+    if ! awk -v u="$uuid" -v d="$raw" 'BEGIN{IGNORECASE=1} $1 !~ /^#/ && NF>=2 { s=$2; sub(/^UUID=/,"",s); if (s==u || $2==d) f=1 } END{exit !f}' "$PREFIX/etc/crypttab" 2>/dev/null; then
+      note "skipped $raw ($label): not this system's — the target's crypttab does not name it"
+      continue
+    fi
+  fi
   VOLUMES+=("$label	$raw	${mapper:-inactive}	$uuid")
 done < <(lsblk -rno NAME,FSTYPE 2>/dev/null)
 # Detached headers (crypttab header=): the data device carries no header.

@@ -69,6 +69,7 @@ cleanup() {
     [ -n "$LOOP1" ] && losetup -d "$LOOP1" 2>/dev/null
     [ -n "$LOOP2" ] && losetup -d "$LOOP2" 2>/dev/null
     [ -n "$LOOP3" ] && losetup -d "$LOOP3" 2>/dev/null
+    for l in ${LOOPS_EXTRA:-}; do losetup -d "$l" 2>/dev/null; done
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -282,6 +283,56 @@ for LSS in 4096 512; do
     grep -q "ss-sentinel-$LSS" "$WORK/mnt/f" && pass "content intact through 4096-byte-sector encryption" || fail "content lost"
     umount "$WORK/mnt"; cryptsetup close "$MAP2"; losetup -d "$L4"
 done
+
+echo "== 8. the last partition of a 512-byte-sector GPT disk: 33 sectors short, aligned, encrypted in 4096-byte sectors =="
+# GPT reserves 33 sectors at the end of the disk, so an installer's rest-of-the-
+# disk root partition never has a size that is a multiple of 4096 — and
+# cryptsetup refuses --sector-size 4096 on it. luks-deploy's align_partition_end
+# moves the end down by the remainder after the btrfs shrink; it is run here
+# exactly as the script defines it (sed markers), against a real GPT loop image.
+IMG8="$WORK/gpt.img"; truncate -s 320M "$IMG8"
+sgdisk -n 1:2048:0 -t 1:8300 -c 1:fedora "$IMG8" >/dev/null 2>&1
+if L8=$(losetup --show -f --partscan "$IMG8" 2>/dev/null) && sleep 1 && [ -b "${L8}p1" ]; then
+    LOOPS_EXTRA="${LOOPS_EXTRA:-} $L8"
+    SZ=$(blockdev --getsize64 "${L8}p1")
+    [ $((SZ % 4096)) -ne 0 ] && pass "the rest-of-the-disk partition is $((SZ % 4096)) bytes past a 4096-byte multiple (GPT's reserved tail)" || fail "partition size unexpectedly aligned ($SZ)"
+    mkfs.btrfs -q -f "${L8}p1"; mount "${L8}p1" "$WORK/mnt"; echo "align-sentinel" > "$WORK/mnt/f"; btrfs -q filesystem resize -32M "$WORK/mnt"; umount "$WORK/mnt"
+    if cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" --cipher aes-xts-plain64 --key-size 512 --hash sha512 --sector-size 4096 "${L8}p1" 2>/dev/null; then
+        fail "cryptsetup accepted --sector-size 4096 on the unaligned partition (the alignment step would be unnecessary)"
+    else
+        pass "cryptsetup refuses 4096-byte sectors on the unaligned partition, as expected"
+    fi
+    ALIGN_FN=$(sed -n '/^# --- align_partition_end ---/,/^# --- end align_partition_end ---/p' "$(dirname "$0")/../bin/luks-deploy.sh")
+    [ -n "$ALIGN_FN" ] || fail "align_partition_end not found in luks-deploy.sh"
+    ( set -e; log() { :; }; warn() { echo "  WARN $*"; }; fatal() { echo "  FATAL $*"; exit 1; }; harden_path() { :; }
+      # the eval'd function reads these (shellcheck cannot see that)
+      # shellcheck disable=SC2034
+      STATE_DIR="$WORK"
+      # shellcheck disable=SC2034
+      TARGET_ROOT="${L8}p1"
+      # shellcheck disable=SC2034
+      LUKS_SECTOR_SIZE=4096
+      # shellcheck disable=SC2034
+      DRY_RUN=0
+      eval "$ALIGN_FN"; align_partition_end ) && pass "align_partition_end ran (table backed up to $WORK/gpt-backup-*.bin)" || fail "align_partition_end failed"
+    SZ2=$(blockdev --getsize64 "${L8}p1")
+    [ $((SZ2 % 4096)) -eq 0 ] && [ $((SZ - SZ2)) -lt 4096 ] && pass "partition now $SZ2 bytes: a 4096-byte multiple, $((SZ - SZ2)) bytes shorter" || fail "partition after alignment: $SZ2 (was $SZ)"
+    G8=$(sgdisk -i 1 "$L8" | awk '/^Partition unique GUID:/{print $4}'); N8=$(sgdisk -i 1 "$L8" | sed -n "s/^Partition name: '\(.*\)'\$/\1/p")
+    [ "$N8" = fedora ] && [ -n "$G8" ] && pass "partition name and unique GUID kept ($N8, $G8)" || fail "partition identity changed: name='$N8' guid='$G8'"
+    ls "$WORK"/gpt-backup-*.bin >/dev/null 2>&1 && pass "GPT backup written before the edit" || fail "no GPT backup"
+    if cryptsetup reencrypt "${ENCRYPT_ARGS[@]}" --cipher aes-xts-plain64 --key-size 512 --hash sha512 --sector-size 4096 "${L8}p1"; then
+        pass "reencrypt --encrypt --sector-size 4096 on the aligned partition"
+        cryptsetup open --key-file "$WORK/pass" "${L8}p1" "$MAP2"
+        [ "$(cryptsetup status "$MAP2" | awk '/sector size:/{print $3; exit}')" = 4096 ] && pass "4096-byte encryption sectors" || fail "sector size wrong"
+        mount "/dev/mapper/$MAP2" "$WORK/mnt" && grep -q align-sentinel "$WORK/mnt/f" && pass "content intact after alignment + encryption" || fail "content lost"
+        umount "$WORK/mnt" 2>/dev/null; cryptsetup close "$MAP2"
+    else
+        fail "reencrypt still refused after alignment"
+    fi
+    losetup -d "$L8"
+else
+    echo "  SKIP: cannot create a partitioned loop device here"
+fi
 
 echo ""
 echo "==================================================="

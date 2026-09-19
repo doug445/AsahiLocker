@@ -190,6 +190,11 @@ harden_path() {                        # harden_path <octal-mode> <path>
 #   LUKS_SECTOR_SIZE=4096        encryption sector size (default: 4096 when the
 #                                btrfs sectorsize allows it, else 512); never
 #                                larger than the filesystem's sectorsize
+#   LUKS_ALIGN_PARTITION=yes|no  when the partition's size is not a multiple of
+#                                that sector size (the last partition on a
+#                                512-byte-sector GPT disk never is): move its
+#                                end down by the remainder (table backed up), or
+#                                keep it and use 512-byte sectors. Asked when unset
 #   LUKS_SKIP_VERSION_CHECK=1    bypass the cryptsetup >= 2.4 floor
 #   LUKS_DRY_RUN=1 (or --dry-run flag)  preview: full detection + plan, no
 #                                       changes to the target, exit before
@@ -900,11 +905,101 @@ elif [ "$FS_SECTOR" -ge 4096 ]; then
 else
     LUKS_SECTOR_SIZE=512
 fi
-if [ "$DEPLOY_MODE" != "config-only" ]; then
+# cryptsetup refuses a sector size the DEVICE size is not a multiple of
+# ("Device size is not aligned to requested sector size"), and on a 512-byte-
+# sector GPT disk the last partition is always 33 sectors short of one: the
+# table reserves 33 sectors at the end of the disk, so an installer's "rest of
+# the disk" root partition ends on an odd sector. Apple's 4096-byte-sector
+# NVMe never has this problem; nearly every x86 disk does. The only in-place
+# fix is to move the partition's END down by those few bytes — a partition-
+# table edit, so it is a typed choice (or LUKS_ALIGN_PARTITION=yes|no), never
+# a default; the table is backed up first, and the filesystem, already 32 MiB
+# smaller, loses nothing. Declined, the volume gets 512-byte sectors — as
+# every release before 1.12.0 did.
+SECTOR_ALIGN=0; SECTOR_SHORT=0
+if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
     _dev_b=$(blockdev --getsize64 "$TARGET_ROOT" 2>/dev/null || echo 0)
-    [ $(( _dev_b % LUKS_SECTOR_SIZE )) -eq 0 ] || { warn "  partition size is not a multiple of $LUKS_SECTOR_SIZE bytes — falling back to 512-byte LUKS sectors"; LUKS_SECTOR_SIZE=512; }
+    SECTOR_SHORT=$(( _dev_b % LUKS_SECTOR_SIZE ))
+    if [ "$SECTOR_SHORT" -ne 0 ]; then
+        _disk=$(lsblk -dno PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
+        _pt=$( [ -n "$_disk" ] && lsblk -dno PTTYPE "/dev/$_disk" 2>/dev/null | tr -d ' ')
+        if [ -z "$_disk" ] || [ "$_pt" != gpt ] || ! command -v sgdisk >/dev/null 2>&1; then
+            warn "  $TARGET_ROOT is $SECTOR_SHORT bytes past a ${LUKS_SECTOR_SIZE}-byte boundary and its end cannot be moved here (not a GPT partition, or no sgdisk) — 512-byte LUKS sectors"
+            LUKS_SECTOR_SIZE=512
+        else
+            echo ""
+            warn "  $TARGET_ROOT is $SECTOR_SHORT bytes past a ${LUKS_SECTOR_SIZE}-byte boundary."
+            echo "     GPT reserves 33 sectors at the end of a disk, so on a 512-byte-sector disk the"
+            echo "     last partition is normally this many bytes short of a 4096-byte multiple — and"
+            echo "     cryptsetup can only encrypt in ${LUKS_SECTOR_SIZE}-byte sectors a device whose size is one."
+            echo "     Two choices:"
+            echo "       ALIGN  move the end of $TARGET_ROOT down by $SECTOR_SHORT bytes: a partition-table"
+            echo "              edit (backed up first to the deployment drive; type, name, GUID and"
+            echo "              attributes kept; the filesystem, already 32 MiB smaller, is untouched),"
+            echo "              then encrypt in ${LUKS_SECTOR_SIZE}-byte sectors — one XTS block per filesystem block."
+            echo "       Enter  keep the partition as it is and encrypt in 512-byte sectors — eight XTS"
+            echo "              blocks per filesystem block, as every release before 1.12.0 did."
+            case "${LUKS_ALIGN_PARTITION:-}" in
+                yes|YES) SECTOR_ALIGN=1; log "  LUKS_ALIGN_PARTITION=yes: the partition end will be moved down $SECTOR_SHORT bytes (before encryption)" ;;
+                no|NO)   LUKS_SECTOR_SIZE=512; log "  LUKS_ALIGN_PARTITION=no: 512-byte LUKS sectors" ;;
+                "")
+                    if [ "$DRY_RUN" = "1" ]; then
+                        log "  [dry-run] a real run asks here; LUKS_ALIGN_PARTITION=yes|no answers it. Showing the ALIGN plan."
+                        SECTOR_ALIGN=1
+                    else
+                        read -p "  Type 'ALIGN' to move the partition end, or press Enter for 512-byte sectors: " ALIGN_CHOICE
+                        if [ "${ALIGN_CHOICE:-}" = "ALIGN" ]; then SECTOR_ALIGN=1; else LUKS_SECTOR_SIZE=512; log "  Keeping the partition as it is: 512-byte LUKS sectors"; fi
+                    fi ;;
+                *) fatal "LUKS_ALIGN_PARTITION must be yes or no (got '$LUKS_ALIGN_PARTITION')" ;;
+            esac
+        fi
+    fi
 fi
-log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (disk logical sector $DEV_LSS, btrfs sectorsize $FS_SECTOR)"
+log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (disk logical sector $DEV_LSS, btrfs sectorsize $FS_SECTOR)$( [ "$SECTOR_ALIGN" = 1 ] && echo " — after moving the partition end down $SECTOR_SHORT bytes")"
+
+# --- align_partition_end ---
+# Move the end of $TARGET_ROOT down so its size is a multiple of
+# $LUKS_SECTOR_SIZE. Runs after the btrfs shrink (the filesystem must already
+# fit). One sgdisk call recreates the partition with the same number, start,
+# type code, name, unique GUID and attribute flags; the whole table is backed
+# up first and the restore command is logged. Sector arithmetic is done in
+# bytes and converted with the DISK's logical sector size — sgdisk counts in
+# those, /sys counts in 512-byte units, and on a 4096-byte-sector disk the two
+# differ by eight.
+align_partition_end() {
+    local part disk num lss start512 size_b new_b start_u end_u type guid name attrs bak fs_b i
+    part=$(basename "$(readlink -f "$TARGET_ROOT")")
+    disk="/dev/$(lsblk -dno PKNAME "$TARGET_ROOT" | head -n1)"
+    num=$(cat "/sys/class/block/$part/partition" 2>/dev/null); [ -n "$num" ] || fatal "cannot read the partition number of $TARGET_ROOT"
+    lss=$(blockdev --getss "$disk"); start512=$(cat "/sys/class/block/$part/start")
+    size_b=$(blockdev --getsize64 "$TARGET_ROOT"); new_b=$(( size_b - size_b % LUKS_SECTOR_SIZE ))
+    fs_b=$(btrfs inspect-internal dump-super "$TARGET_ROOT" 2>/dev/null | awk '/^total_bytes/{print $2; exit}')
+    [ -n "$fs_b" ] && [ "$fs_b" -le "$new_b" ] || fatal "the filesystem (${fs_b:-?} bytes) would not fit the aligned partition ($new_b bytes) — not moving the end"
+    start_u=$(( start512 * 512 / lss )); end_u=$(( start_u + new_b / lss - 1 ))
+    type=$(sgdisk -i "$num" "$disk" | awk '/^Partition GUID code:/{print $4}')
+    guid=$(sgdisk -i "$num" "$disk" | awk '/^Partition unique GUID:/{print $4}')
+    name=$(sgdisk -i "$num" "$disk" | sed -n "s/^Partition name: '\(.*\)'\$/\1/p")
+    attrs=$(sgdisk -i "$num" "$disk" | awk '/^Attribute flags:/{print $3}')
+    [ -n "$type" ] && [ -n "$guid" ] || fatal "cannot read partition $num of $disk with sgdisk"
+    bak="$STATE_DIR/gpt-backup-$(basename "$disk").bin"
+    sgdisk --backup="$bak" "$disk" >/dev/null || fatal "could not back up the partition table of $disk"
+    harden_path 0600 "$bak"
+    log "  Partition table backed up: $bak  (restore: sgdisk --load-backup=$bak $disk)"
+    log "  Moving the end of $TARGET_ROOT: $size_b -> $new_b bytes (sectors $start_u..$end_u of $disk, ${lss}-byte units)"
+    sgdisk -d "$num" -n "$num:$start_u:$end_u" -t "$num:$type" -c "$num:$name" -u "$num:$guid" "$disk" >/dev/null \
+        || fatal "sgdisk failed — the table backup is $bak"
+    if [ -n "$attrs" ] && [ "$attrs" != "0000000000000000" ]; then
+        for i in $(seq 0 63); do
+            [ $(( 0x$attrs >> i & 1 )) -eq 1 ] && sgdisk -A "$num:set:$i" "$disk" >/dev/null
+        done
+    fi
+    partprobe "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+    [ "$(blockdev --getsize64 "$TARGET_ROOT")" = "$new_b" ] \
+        || fatal "the kernel still sees $TARGET_ROOT at $(blockdev --getsize64 "$TARGET_ROOT") bytes (wanted $new_b) — table backup: $bak"
+    log "  $TARGET_ROOT is now $new_b bytes, a multiple of $LUKS_SECTOR_SIZE (unique GUID, type and name unchanged)"
+}
+# --- end align_partition_end ---
 
 # ─── fstab Cross-Validation ─────────────────────────────────────────────────
 # Verify the BOOT/EFI partitions picked in the menu are the SAME ones the
@@ -1114,7 +1209,7 @@ echo "  Crypto  : cryptsetup $CRYPTSETUP_VER"
 if [ "$DEPLOY_MODE" = "config-only" ]; then
     echo "  Sector  : (existing LUKS header — unchanged)"
 else
-    echo "  Sector  : ${LUKS_SECTOR_SIZE}-byte LUKS sectors (disk logical ${DEV_LSS}, btrfs sectorsize ${FS_SECTOR})"
+    echo "  Sector  : ${LUKS_SECTOR_SIZE}-byte LUKS sectors (disk logical ${DEV_LSS}, btrfs sectorsize ${FS_SECTOR})$( [ "$SECTOR_ALIGN" = 1 ] && echo "; partition end moved down $SECTOR_SHORT bytes first" )"
 fi
 echo "  Mode    : $DEPLOY_MODE"
 if [ "$DEPLOY_MODE" = "config-only" ]; then
@@ -1148,6 +1243,7 @@ if [ "$DRY_RUN" = "1" ]; then
     log "[dry-run] Detection, cross-checks and state backup are done. A real run would now:"
     if [ "$DEPLOY_MODE" = "encrypt" ]; then
         echo "  1. mount $TARGET_ROOT and: btrfs filesystem resize -32M  (skipped if already shrunk)"
+        [ "$SECTOR_ALIGN" = 1 ] && echo "     then move the end of $TARGET_ROOT down $SECTOR_SHORT bytes (sgdisk; GPT backed up to the state dir) so its size is a multiple of $LUKS_SECTOR_SIZE"
         echo "  2. cryptsetup reencrypt --encrypt --type luks2 \\"
         echo "         --cipher aes-xts-plain64 --key-size 512 \\"
         echo "         --pbkdf argon2id --pbkdf-memory $LUKS_PBKDF_MEMORY \\"
@@ -1227,6 +1323,10 @@ else
     umount /mnt_temp
     rmdir /mnt_temp
     log "  Btrfs shrink complete."
+    if [ "$SECTOR_ALIGN" = 1 ]; then
+        log "  Aligning the partition end for ${LUKS_SECTOR_SIZE}-byte LUKS sectors..."
+        align_partition_end
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
