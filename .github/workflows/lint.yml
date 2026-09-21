@@ -41,10 +41,16 @@ jobs:
   loopback:
     # Real cryptsetup reencrypt + hard-kill/repair/resume against a throwaway
     # file-backed loop device — no real disk is ever touched or modified.
+    #
+    # aarch64 only. This is Apple Silicon tooling; x86_64 in-place encryption
+    # is LinuxLocker's job (https://github.com/doug445/LinuxLocker) and is
+    # tested there. The x86 leg also hung multi-install-selection-test.sh for
+    # an hour on 2026-09-21 — unexplained, and the suite now carries a
+    # watchdog so a repeat fails in five minutes instead of burning a runner.
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -55,4 +61,6 @@ jobs:
       - name: loopback core test
         run: sudo bash tests/loopback-core-test.sh
       - name: multi-install partition selection test
-        run: sudo bash tests/multi-install-selection-test.sh
+        # timeout, so a blocked helper fails the step in five minutes rather
+        # than holding a runner for an hour, which it did once on x86.
+        run: sudo timeout 300 bash tests/multi-install-selection-test.sh

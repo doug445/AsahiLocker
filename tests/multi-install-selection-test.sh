@@ -77,6 +77,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# On 2026-09-21 this suite blocked somewhere inside the first pick_partition on
+# a GitHub x86_64 runner and sat there for an hour until the run was cancelled,
+# having printed only the stage-1 header. The same tree passed on aarch64 in 48
+# seconds. Whatever blocked, a test must fail rather than hang -- so CI runs
+# this under `timeout`, NOT an in-script watchdog. A watchdog was tried first
+# and was worse: killing the watchdog subshell leaves its `sleep` orphaned, and
+# the orphan holds the inherited stdout open, so anything reading this script
+# through a pipe hangs on after the suite has already finished.
+#
+# stage() marks progress, so if it does block again the log names the call that
+# was in flight when the timeout fired.
+stage() { echo "  .. $*" >&2; }
+
 # ─── The disk: main install on p1..p3, rescue install on p4..p6 ─────────────
 truncate -s 230G "$IMG"                    # sparse — costs almost nothing
 LOOP=$(losetup --show -fP "$IMG")
@@ -137,13 +150,14 @@ is_running_dev() {
     return 1
 }
 
-pick()  { printf '%s\n' "${2:-}" | pick_partition $1 2>/dev/null; }
+# shellcheck disable=SC2086
+pick()  { stage "pick $1"; printf '%s\n' "${2:-}" | pick_partition $1 2>/dev/null; }
 # Captured, not piped: `set -o pipefail` plus a `grep -q` that exits on the
 # first match would report the producer's SIGPIPE as a pipeline failure.
 # The order matters and is deliberate: stderr (the menu) goes to the caller,
 # stdout (the chosen device) is discarded.
 # shellcheck disable=SC2069,SC2086
-menu()  { printf '\n' | pick_partition $1 2>&1 >/dev/null; }
+menu()  { stage "menu $1"; printf '\n' | pick_partition $1 2>&1 >/dev/null; }
 menu_has() { grep -q "$2" <<<"$1"; }
 
 ROOT_ARGS='ROOT btrfs|crypto_LUKS fedora|root'
