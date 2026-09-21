@@ -130,7 +130,16 @@ for d in "${devs[@]}"; do
   if [ $first -eq 1 ]; then out="$line"; first=0
   else out="$out"$'\n'"$(printf '%*s' "$KEYPAD" '')$line"; fi
 done
-[ -z "$out" ] && out="(no encrypted volumes detected)"
+if [ -z "$out" ]; then
+  # An empty sweep is not evidence of an unencrypted machine when this ran
+  # unprivileged: luksDump needs root and fastfetch does not have it, and
+  # after a suspend the timer's monotonic clock can leave the cache past
+  # MAXAGE for up to a whole period. The cache on disk was written by root and
+  # is still right; show it rather than announce "no encrypted volumes" on an
+  # encrypted box. Root with genuinely nothing to report still writes that.
+  if [ "$(id -u)" -ne 0 ] && [ -s "$CACHE" ]; then emit "$(cat "$CACHE")"; exit 0; fi
+  out="(no encrypted volumes detected)"
+fi
 # Written via temp+rename so a concurrent reader never sees a half-written cache.
 if printf '%s\n' "$out" > "$CACHE.tmp" 2>/dev/null; then
   chmod 644 "$CACHE.tmp" 2>/dev/null || true

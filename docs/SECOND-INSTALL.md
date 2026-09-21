@@ -124,17 +124,26 @@ Everything after that is identical to the live-USB route:
 On the live-USB route the LUKS header backup, the pre-encryption state and the
 recovery key land on the stick, which you keep. Here they land in
 `AsahiLocker/pre-luks-state-<timestamp>/` on a partition you are about to
-erase. The script warns about this at the end; act on it.
+erase.
+
+The script knows this. While the encrypted target is still mounted it copies
+that directory onto the target's own `/root/asahilocker-pre-luks-state-<timestamp>/`
+— readable only after the volume is unlocked — and the closing banner says
+whether that succeeded. It unmounts everything as it exits, so there is no
+moment afterwards in which you could make that copy yourself.
+
+That copy survives the cleanup in Step 6. But it lives *inside* the volume it
+unlocks, which makes the recovery key in it useless for the one case a
+recovery key exists for: a forgotten passphrase. So, before you erase this
+install, put the directory on a USB stick as well:
 
 ```bash
-# the encrypted target is still mounted at /mnt when the script finishes
-/usr/bin/cp -a /root/AsahiLocker/pre-luks-state-* /mnt/root/
+# on the rescue install, with a stick mounted at /run/media/$USER/STICK
+/usr/bin/cp -a /root/AsahiLocker/pre-luks-state-* /run/media/$USER/STICK/
 ```
 
-A USB stick is better still — this is the material that gets you back in if
-the header is ever damaged, and keeping the only copy on the encrypted disk it
-unlocks defeats the point. See
-[INSTALL.md → Step 6](INSTALL.md#step-6--secure-the-recovery-bundle).
+The header backup is additionally at `/boot/luks-header-backup.img` on the
+target. See [INSTALL.md → Step 6](INSTALL.md#step-6--secure-the-recovery-bundle).
 
 ## Step 5 — Verify before you burn the bridge
 

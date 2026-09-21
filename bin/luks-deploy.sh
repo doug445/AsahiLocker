@@ -509,24 +509,32 @@ fi
 CURRENT_ROOT_FSTYPE=$(findmnt -n -o FSTYPE / 2>/dev/null || echo "unknown")
 RUNNING_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
 RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "${RUNNING_ROOT_DEV:-unknown}")
+# What a block device is built on, as /dev paths: the partitions under a
+# dm-crypt, LVM or RAID device. Nothing for a plain partition or disk. The one
+# place the /sys slaves layout is spelled out; both walks below use it.
+block_slaves() {
+    local s
+    for s in "/sys/class/block/$(basename "$1")/slaves/"*; do
+        [ -e "$s" ] && echo "/dev/$(basename "$s")"
+    done
+    return 0
+}
+
 # Walk down through dm-crypt/LVM so "which disk am I on?" has an answer even
-# when / is a mapper device with no PKNAME of its own.
+# when / is a mapper device with no PKNAME of its own. First slave at each
+# level: this answers "which disk", and a root striped across disks is not a
+# layout this tool supports anyway.
 RUNNING_ROOT_BASE="$RUNNING_ROOT_DEV"
 _depth=0
 while [ -b "$RUNNING_ROOT_BASE" ] \
    && [ -z "$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)" ] \
    && [ "$_depth" -lt 8 ]; do
-    _next=""
-    for _slave in "/sys/class/block/$(basename "$RUNNING_ROOT_BASE")/slaves/"*; do
-        [ -e "$_slave" ] || continue
-        _next="/dev/$(basename "$_slave")"
-        break
-    done
+    _next=$(block_slaves "$RUNNING_ROOT_BASE" | head -1)
     [ -n "$_next" ] || break
     RUNNING_ROOT_BASE="$_next"
     _depth=$((_depth + 1))
 done
-unset _depth _next _slave
+unset _depth _next
 RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)
 log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($RUNNING_ROOT_DEV)"
 RUNNING_ROOT_NOTE=""
@@ -552,13 +560,28 @@ _add_running_dev() {
     # partition underneath it is what shows up in the ROOT menu (which accepts
     # crypto_LUKS so interrupted runs can be resumed). Without this the menu
     # would happily offer the running system's own container back.
-    for slave in "/sys/class/block/$(basename "$d")/slaves/"*; do
-        [ -e "$slave" ] || continue
-        _add_running_dev "/dev/$(basename "$slave")"
-    done
+    while IFS= read -r slave; do
+        [ -n "$slave" ] && _add_running_dev "$slave"
+    done < <(block_slaves "$d")
 }
-while IFS= read -r _src; do _add_running_dev "$_src"; done \
-    < <(findmnt -rno SOURCE 2>/dev/null | sort -u)
+# Only the mounts that ARE this system. udisks on a live desktop automounts
+# the target's partitions under /run/media, and a hand mount lands under /mnt;
+# counting those would mark the very install the operator came to encrypt as
+# IN USE, refuse it in every menu, and never reach the unmount offer further
+# down (ensure_unmounted) that exists for exactly that case. A mount is the
+# running system's when its mountpoint is one the OS lives at, or where live
+# media keeps its own backing image.
+is_system_mountpoint() {
+    case "$1" in
+        /|/boot|/boot/efi|/efi|/home|/usr|/var|/opt|/srv|/tmp|/nix) return 0 ;;
+        /usr/*|/var/*|/run/initramfs/*|/run/rootfsbase|/run/rootfsbase/*) return 0 ;;
+    esac
+    return 1
+}
+while read -r _tgt _src; do
+    [ -n "$_tgt" ] && is_system_mountpoint "$_tgt" && _add_running_dev "$_src"
+done < <(findmnt -rno TARGET,SOURCE 2>/dev/null)
+unset _tgt
 while IFS= read -r _src; do _add_running_dev "$_src"; done \
     < <(awk 'NR > 1 { print $1 }' /proc/swaps 2>/dev/null)
 
@@ -582,7 +605,16 @@ esac
 if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
     [ "$(cat "/sys/block/$RUNNING_ROOT_DISK/removable" 2>/dev/null || echo 0)" = "1" ] \
         && ENV_KIND="live"
-    [ "$(lsblk -dno TRAN "/dev/$RUNNING_ROOT_DISK" 2>/dev/null || echo)" = "usb" ] \
+    # A rescue system on a Thunderbolt or USB4 NVMe enclosure reports
+    # TRAN=nvme and removable=0, and would otherwise be taken for a sibling
+    # install on the internal disk -- then walked through the SIBLING
+    # confirmation and told its own drive is a rescue install to be erased.
+    # HOTPLUG is the kernel's word for "this bus can go away"; it covers those
+    # and plain USB alike, and Apple's internal NVMe reports 0.
+    case "$(lsblk -dno TRAN "/dev/$RUNNING_ROOT_DISK" 2>/dev/null || echo)" in
+        usb|thunderbolt|usb4) ENV_KIND="live" ;;
+    esac
+    [ "$(lsblk -dno HOTPLUG "/dev/$RUNNING_ROOT_DISK" 2>/dev/null | tr -d ' ')" = "1" ] \
         && ENV_KIND="live"
 fi
 log "Environment: $ENV_KIND (booted from ${RUNNING_ROOT_DEV}, disk ${RUNNING_ROOT_DISK:-unknown})"
@@ -639,14 +671,15 @@ echo ""
 # detection above ($RUNNING_DEVS / $RUNNING_ROOT_DISK / $ENV_KIND).
 
 partition_number() {
-    # Trailing digits of a partition name: nvme0n1p6 -> 6, sda3 -> 3.
-    # Prints nothing for a whole disk (no parent), and never fails: the result
-    # is captured in an assignment, where a non-zero status would trip set -e.
-    local dev="$1" base
-    [ -n "$(lsblk -dno PKNAME "$dev" 2>/dev/null | head -1)" ] || return 0
-    base=$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")
-    [[ "$base" =~ ([0-9]+)$ ]] && printf '%s' "${BASH_REMATCH[1]}"
-    return 0
+    # The kernel's own index for a partition, /sys/class/block/<p>/partition:
+    # 6 for nvme0n1p6, 3 for sda3. Absent -- so nothing printed -- for a whole
+    # disk and for device-mapper devices. Trailing digits were used before, and
+    # read a mapper's dm-N as partition N, which could hand the neighbour bonus
+    # to an unrelated unlocked volume. Never fails: the result is captured in
+    # an assignment, where a non-zero status would trip set -e.
+    local base
+    base=$(basename "$(readlink -f "$1" 2>/dev/null || echo "$1")")
+    cat "/sys/class/block/$base/partition" 2>/dev/null || true
 }
 
 pick_partition() {
@@ -757,12 +790,26 @@ pick_partition() {
         echo "  No $fstype partitions found!" >&2
         while true; do
             read -p "  Enter device path manually: " manual_dev
-            if [ -b "$manual_dev" ] && is_running_dev "$manual_dev"; then
+            if [ ! -b "$manual_dev" ]; then
+                echo "  ERROR: $manual_dev is not a block device." >&2
+                continue
+            fi
+            if is_running_dev "$manual_dev"; then
                 echo -e "  ${RED}ERROR: $manual_dev belongs to the system you are booted from.${NC}" >&2
                 continue
             fi
-            [ -b "$manual_dev" ] && { echo "  Selected: $manual_dev" >&2; echo "$manual_dev"; return; }
-            echo "  ERROR: $manual_dev is not a block device." >&2
+            # The same fstype check the menu path makes: a whole disk, or the
+            # ESP typed at the BOOT prompt, must not pass on [ -b ] alone --
+            # BOOT_UUID would be read from the wrong device and step 4 would
+            # mount it as /boot after the point of no return.
+            local manual_fs
+            manual_fs=$(blkid -s TYPE -o value "$manual_dev" 2>/dev/null || echo "unknown")
+            if ! [[ "$manual_fs" =~ ^($fstype)$ ]]; then
+                echo "  WARNING: $manual_dev has '$manual_fs', expected '$fstype'." >&2
+                read -p "  Accept anyway? (yes/no): " accept
+                [ "$accept" = "yes" ] || continue
+            fi
+            echo "  Selected: $manual_dev" >&2; echo "$manual_dev"; return
         done
     fi
 
@@ -2719,15 +2766,31 @@ echo ""
 # The second-install route ends with the operator deleting the install this
 # script ran from. Say so here, where they are actually looking.
 if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+    # The EXIT trap unmounts /mnt and closes the mapper the moment this script
+    # returns, so any "copy it now" instruction is already wrong when it is
+    # read. Do the copy here, while the target is still mounted, into its own
+    # /root: readable only once the volume is unlocked, so nothing is exposed,
+    # and it outlives the rescue install being erased from macOS.
+    KEEP_DIR="/mnt/root/asahilocker-$(basename "$STATE_DIR")"
+    if mountpoint -q /mnt && cp -a "$STATE_DIR" "$KEEP_DIR" 2>/dev/null; then
+        chmod 0700 "$KEEP_DIR" 2>/dev/null || true
+        chroot /mnt /usr/sbin/restorecon -RF "/root/$(basename "$KEEP_DIR")" 2>/dev/null || true
+        KEEP_NOTE="Copied onto the encrypted system: /root/$(basename "$KEEP_DIR")/"
+    else
+        KEEP_NOTE="Could NOT copy it onto the encrypted system -- do that by hand, now"
+    fi
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║  BEFORE you delete this rescue install from macOS:        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo "  $STATE_DIR/"
     echo "  is on the rescue install and holds the LUKS header backup, the"
-    echo "  pre-encryption fstab/grub/BLS state and (if enrolled) the recovery"
-    echo "  key. Copy it to a USB stick or to the encrypted system first:"
+    echo "  pre-encryption fstab/grub/BLS state and (if enrolled) the recovery key."
+    echo "  $KEEP_NOTE"
     echo ""
-    echo "      cp -a \"$STATE_DIR\" /mnt/root/     # target is still mounted at /mnt"
+    echo "  That copy sits INSIDE the volume it unlocks, which makes the recovery"
+    echo "  key in it useless for the one case it exists for: a forgotten"
+    echo "  passphrase. Before you erase this install, put the directory on a"
+    echo "  USB stick as well. (The header backup is also at /boot/luks-header-backup.img.)"
     echo ""
     echo "  Then set System Settings → General → Startup Disk back to the"
     echo "  encrypted install before removing this one. See docs/SECOND-INSTALL.md."

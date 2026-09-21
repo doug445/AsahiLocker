@@ -167,7 +167,10 @@ fi
 VOLUMES=()
 while read -r name fstype; do
   [ "$fstype" = "crypto_LUKS" ] || continue
-  raw=$(readlink -f "/dev/$name"); [ -b "$raw" ] || continue
+  # -p above: lsblk prints a device-mapper device by its dm name and there is
+  # no /dev/<dmname> node, so "/dev/$name" did not exist and every LUKS volume
+  # on LVM or RAID was silently left out of the bundle with FAILS still 0.
+  raw=$(readlink -f "$name"); [ -b "$raw" ] || continue
   uuid=$(cryptsetup luksUUID "$raw" 2>/dev/null || echo unknown)
   mapper=$(lsblk -rno NAME,TYPE "$raw" 2>/dev/null | awk '$2=="crypt"{print $1; exit}')
   if [ "$raw" = "$ROOT_RAW" ]; then label=root
@@ -185,7 +188,7 @@ while read -r name fstype; do
     fi
   fi
   VOLUMES+=("$label	$raw	${mapper:-inactive}	$uuid")
-done < <(lsblk -rno NAME,FSTYPE 2>/dev/null)
+done < <(lsblk -rpno NAME,FSTYPE 2>/dev/null)
 # Detached headers (crypttab header=): the data device carries no header.
 DETACHED=()
 if [ -r "$PREFIX/etc/crypttab" ]; then
