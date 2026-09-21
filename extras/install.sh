@@ -43,7 +43,10 @@
 #
 # fastfetch's `command` module renders output as a SINGLE line, so an embedded
 # newline would escape the logo column. Hence one module per line number; a line
-# number past the end prints nothing and fastfetch skips that module.
+# number past the end prints nothing and fastfetch skips that module. The script
+# reads this config back for its layout -- the key, keyWidth and separator set
+# the indent of the continuation lines, the module count sets how many lines
+# it will offer -- so rename the key or add modules freely.
 # ============================================================================
 set -uo pipefail
 

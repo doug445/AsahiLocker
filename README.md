@@ -407,8 +407,20 @@ excellence: every script, the test suites and the documentation, with each
 finding reproduced before it was fixed. The results shipped as v1.10.0 through
 v1.10.2 — the recovery-keyslot AF-hash fix, the busy-device guard, the
 harden-only guarantee — and v1.11.0 marks the audited state.
+
+Audited again in full on 2026-09-21 by **Claude Fable 5.1**, after the
+second-install work of 1.13.0, with the same rule: nothing counted as a finding
+until it had been reproduced against the code or the running machine. Nine
+findings; five of them in code written that same week, which is the honest
+headline. The worst was a closing banner telling the operator to copy the
+recovery material from a mountpoint the exit trap had already unmounted. The
+fixes are v2.0.0, and the same pass produced
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): every M-series Mac the shipped
+kernel carries a device tree for, laptop and desktop, tiered by what has
+actually been verified.
+
 Nothing in this tool has changed hands: the design decisions are the
-author's, the audit checked that the code keeps them.
+author's, the audits check that the code keeps them.
 
 ## Acknowledgements
 
