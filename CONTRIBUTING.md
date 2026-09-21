@@ -101,7 +101,17 @@ honestly when it did not manage to build the state it wanted.
 ### Run the CI lint checks
 
 Exactly what `.github/workflows/lint.yml` runs, so you find failures before the
-PR does:
+PR does. One caveat: CI installs whatever `shellcheck` Ubuntu ships (0.9.0 at
+the time of writing) and a current distro may hand you something several
+releases newer, which is quieter about some warnings -- SC2034 among them. If
+CI reports something your local run did not, check the versions before
+anything else, and reproduce with the one CI uses:
+
+```bash
+curl -sL https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.$(uname -m).tar.xz \
+  | tar xJ && ./shellcheck-v0.9.0/shellcheck --version
+```
+
 
 ```bash
 for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline extras/bin/luks-fetch-cache; do \

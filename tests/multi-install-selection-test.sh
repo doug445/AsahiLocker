@@ -117,6 +117,13 @@ lsblk() {
     else command lsblk "$@"; fi
 }
 
+# ENV_KIND and RUNNING_ROOT_DISK are read by the sourced pick_partition(), so
+# no assignment to them looks "used" from here. One setter keeps that fact --
+# and the directive stating it -- in a single place, instead of one directive
+# per case that the next case added would quietly go without.
+# shellcheck disable=SC2034
+set_env() { ENV_KIND="$1"; RUNNING_ROOT_DISK="$2"; }
+
 # The one function pick_partition() takes from the outer script. The real one
 # walks /proc/mounts and dm slaves; here the answer is dictated per case.
 is_running_dev() {
@@ -143,9 +150,7 @@ ROOT_ARGS='ROOT btrfs|crypto_LUKS fedora|root'
 
 echo "=== 1. booted from the rescue install (p4/p5/p6) ==="
 RUNNING_DEVS=("${LOOP}p4" "${LOOP}p5" "${LOOP}p6")
-# ENV_KIND and RUNNING_ROOT_DISK are inputs to the sourced pick_partition().
-# shellcheck disable=SC2034
-ENV_KIND="installed"; RUNNING_ROOT_DISK="${LOOP#/dev/}"
+set_env installed "${LOOP#/dev/}"
 
 R=$(pick "$ROOT_ARGS")
 [ "$R" = "${LOOP}p3" ] && pass "ROOT defaults to the other install ($R)" \
@@ -173,7 +178,7 @@ grep -q "part of the system you are booted from" <<<"$OUT" \
 
 echo ""
 echo "=== 2. booted from a live USB, both installs idle ==="
-RUNNING_DEVS=(); ENV_KIND="live"; RUNNING_ROOT_DISK="sdz"
+RUNNING_DEVS=(); set_env live sdz
 R2=$(pick "$ROOT_ARGS")
 [ "$R2" = "${LOOP}p3" ] && pass "the bigger root wins the 'fedora' vs 'fedora' tie ($R2)" \
                         || fail "ROOT defaulted to $R2, wanted the 200G ${LOOP}p3"
@@ -184,7 +189,7 @@ E2=$(pick "EFI vfat efi|fedor $R2")
 echo ""
 echo "=== 3. booted from the main install, rescue idle (the reverse) ==="
 RUNNING_DEVS=("${LOOP}p1" "${LOOP}p2" "${LOOP}p3")
-ENV_KIND="installed"; RUNNING_ROOT_DISK="${LOOP#/dev/}"
+set_env installed "${LOOP#/dev/}"
 R3=$(pick "$ROOT_ARGS")
 [ "$R3" = "${LOOP}p6" ] && pass "ROOT defaults to the rescue install ($R3)" \
                         || fail "ROOT defaulted to $R3, wanted ${LOOP}p6"
