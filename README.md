@@ -329,8 +329,16 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
   `grubby` — all present in the live environment.
 - 15–60 minutes, depending on partition size.
 
-The core script also works on Fedora x86_64, Arch and Manjaro with btrfs roots;
-the boot guards and U-Boot documentation are Asahi-specific.
+This is Apple Silicon tooling: the boot guards, the ESP stub handling and the
+U-Boot documentation all assume the m1n1 → U-Boot → GRUB chain. The core
+encryption script does run on Fedora x86_64, Arch and Manjaro with btrfs roots,
+but that is not where it is developed or tested first.
+
+**If you are not on Apple Silicon, use
+[LinuxLocker](https://github.com/doug445/LinuxLocker) instead** — the same
+in-place LUKS2 approach, written for everything else: it detects the distro,
+filesystem and boot stack, handles systemd-boot as well as GRUB, and rebuilds
+and re-signs Unified Kernel Images for Secure Boot.
 
 ---
 

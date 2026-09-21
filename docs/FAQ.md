@@ -107,8 +107,17 @@ instead of quoting someone else's numbers.
 
 ## Does it work on anything other than Asahi?
 
-The core script also runs on Fedora x86_64, Arch and Manjaro with btrfs roots.
-The boot guards and the U-Boot documentation are Apple-Silicon-specific.
+It can, but it is not the right tool for the job. The core encryption script
+runs on Fedora x86_64, Arch and Manjaro with btrfs roots; the boot guards, the
+ESP stub handling and the U-Boot documentation are Apple-Silicon-specific, and
+Apple Silicon is what gets tested first here.
+
+For anything else, use **[LinuxLocker](https://github.com/doug445/LinuxLocker)**.
+Same in-place LUKS2 conversion, aimed at the rest of the world: it identifies
+the distro and package manager, resolves the filesystem tools once it knows
+what the target uses, handles systemd-boot as well as GRUB, and rebuilds and
+re-signs Unified Kernel Images for Secure Boot. AsahiLocker is the Apple
+Silicon sibling of it.
 
 ## How do I check what I actually ended up with?
 
