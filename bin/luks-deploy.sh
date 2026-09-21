@@ -32,7 +32,11 @@
 # Targets: Fedora Asahi Remix on Apple Silicon (aarch64), btrfs root
 # Also works on: Fedora x86_64, Manjaro, Arch (btrfs)
 #
-# MUST be run from a live USB / rescue environment, NOT the installed system.
+# MUST NOT be run from the system it is encrypting. Run it either from a
+# Fedora Asahi live USB (docs/LIVE-USB.md) or from a second, minimal Asahi
+# install on the same internal disk (docs/SECOND-INSTALL.md) — the usual
+# answer when the machine will not boot USB at all. Either way the running
+# system's own partitions are excluded from the menus and refused as targets.
 #
 # What this script does:
 #   1. Auto-detects partitions, subvolumes, and boot configuration
@@ -486,18 +490,113 @@ if ! lsmod | grep -q dm_crypt; then
     warn "Cannot load dm-crypt module. cryptsetup may still work via kernel built-in."
 fi
 
-# ─── Live Environment Check ──────────────────────────────────────────────────
+# ─── Environment Detection ───────────────────────────────────────────────────
+# Two environments can run this script safely:
+#   • a Fedora Asahi live USB                       (docs/LIVE-USB.md)
+#   • a second, minimal Asahi install on the same internal disk
+#                                                   (docs/SECOND-INSTALL.md)
+# The second route exists because plenty of Apple Silicon machines never
+# enumerate a USB stick in U-Boot at all, and a 20 GiB Fedora Minimal install
+# alongside the real one is the reliable way out. Encrypting a partition from a
+# sibling install is no different from doing it off a stick — but the sibling
+# sits on the same disk as the target, which is exactly the situation where
+# picking the wrong partition is easy and unrecoverable.
+#
+# So: map every device the running system is using, up front. The partition
+# menus mark those [IN USE] and refuse to hand them out, and the self-target
+# guard below turns "I selected the system I am booted from" into a hard stop
+# instead of an obscure umount failure an hour later.
 CURRENT_ROOT_FSTYPE=$(findmnt -n -o FSTYPE / 2>/dev/null || echo "unknown")
-log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($(findmnt -n -o SOURCE / 2>/dev/null || echo 'unknown'))"
+RUNNING_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
+RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "${RUNNING_ROOT_DEV:-unknown}")
+# Walk down through dm-crypt/LVM so "which disk am I on?" has an answer even
+# when / is a mapper device with no PKNAME of its own.
+RUNNING_ROOT_BASE="$RUNNING_ROOT_DEV"
+_depth=0
+while [ -b "$RUNNING_ROOT_BASE" ] \
+   && [ -z "$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)" ] \
+   && [ "$_depth" -lt 8 ]; do
+    _next=""
+    for _slave in "/sys/class/block/$(basename "$RUNNING_ROOT_BASE")/slaves/"*; do
+        [ -e "$_slave" ] || continue
+        _next="/dev/$(basename "$_slave")"
+        break
+    done
+    [ -n "$_next" ] || break
+    RUNNING_ROOT_BASE="$_next"
+    _depth=$((_depth + 1))
+done
+unset _depth _next _slave
+RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)
+log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($RUNNING_ROOT_DEV)"
+RUNNING_ROOT_NOTE=""
+if [ "$RUNNING_ROOT_BASE" != "$RUNNING_ROOT_DEV" ]; then
+    RUNNING_ROOT_NOTE=" (backed by $RUNNING_ROOT_BASE)"
+    log "  $RUNNING_ROOT_DEV is backed by $RUNNING_ROOT_BASE — this system is itself encrypted."
+fi
 
-if [ "$CURRENT_ROOT_FSTYPE" = "btrfs" ]; then
+# Every block device the running system has mounted or is swapping onto.
+RUNNING_DEVS=()
+_add_running_dev() {
+    local raw="$1" d seen slave
+    d=$(printf '%s' "$raw" | sed 's/\[.*//')          # btrfs: strip [/subvol]
+    [ -n "$d" ] || return 0
+    d=$(readlink -f "$d" 2>/dev/null || echo "$d")
+    [ -b "$d" ] || return 0
+    for seen in ${RUNNING_DEVS[@]+"${RUNNING_DEVS[@]}"}; do
+        [ "$seen" = "$d" ] && return 0
+    done
+    RUNNING_DEVS+=("$d")
+    # Follow device-mapper down to the real partitions. A rescue install that
+    # is ITSELF encrypted mounts / from /dev/dm-0, and the crypto_LUKS
+    # partition underneath it is what shows up in the ROOT menu (which accepts
+    # crypto_LUKS so interrupted runs can be resumed). Without this the menu
+    # would happily offer the running system's own container back.
+    for slave in "/sys/class/block/$(basename "$d")/slaves/"*; do
+        [ -e "$slave" ] || continue
+        _add_running_dev "/dev/$(basename "$slave")"
+    done
+}
+while IFS= read -r _src; do _add_running_dev "$_src"; done \
+    < <(findmnt -rno SOURCE 2>/dev/null | sort -u)
+while IFS= read -r _src; do _add_running_dev "$_src"; done \
+    < <(awk 'NR > 1 { print $1 }' /proc/swaps 2>/dev/null)
+
+is_running_dev() {
+    # True if $1 backs any filesystem or swap of the system we are running on.
+    local d seen
+    d=$(readlink -f "$1" 2>/dev/null || echo "$1")
+    for seen in ${RUNNING_DEVS[@]+"${RUNNING_DEVS[@]}"}; do
+        [ "$seen" = "$d" ] && return 0
+    done
+    return 1
+}
+
+# Live media vs. an installed system. A Fedora Asahi live USB is a real
+# installed system too (asahi-fedora-usb writes ext4/btrfs, not squashfs), so
+# fstype alone is not the tell — removability is.
+ENV_KIND="installed"
+case "$CURRENT_ROOT_FSTYPE" in
+    overlay|tmpfs|ramfs|squashfs|iso9660|erofs) ENV_KIND="live" ;;
+esac
+if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
+    [ "$(cat "/sys/block/$RUNNING_ROOT_DISK/removable" 2>/dev/null || echo 0)" = "1" ] \
+        && ENV_KIND="live"
+    [ "$(lsblk -dno TRAN "/dev/$RUNNING_ROOT_DISK" 2>/dev/null || echo)" = "usb" ] \
+        && ENV_KIND="live"
+fi
+log "Environment: $ENV_KIND (booted from ${RUNNING_ROOT_DEV}, disk ${RUNNING_ROOT_DISK:-unknown})"
+
+if [ "$ENV_KIND" = "installed" ]; then
     echo ""
-    err "Your current root filesystem is Btrfs."
-    err "This script MUST be run from a LIVE USB / rescue environment."
-    err "Running on the installed system WILL destroy your data."
-    echo ""
-    read -p "Are you certain you are in a live/rescue environment? (Type 'LIVE' to override): " LIVE_OVERRIDE
-    [ "$LIVE_OVERRIDE" = "LIVE" ] || fatal "Aborted for safety."
+    warn "You are not on live media — this is an installed system on"
+    warn "  ${RUNNING_ROOT_DEV}${RUNNING_ROOT_NOTE}."
+    warn "That is a supported way to run AsahiLocker (see docs/SECOND-INSTALL.md),"
+    warn "  but ONLY to encrypt a DIFFERENT install than the one you booted."
+    warn "The partitions this system is using are marked [IN USE] in the menus"
+    warn "  below and cannot be chosen. If the install you want to encrypt is the"
+    warn "  one you are sitting in, stop now: reboot into a live USB or a second"
+    warn "  Asahi install and run this from there."
 fi
 
 # ─── Power / Battery Check ──────────────────────────────────────────────────
@@ -536,18 +635,40 @@ echo ""
 # Prefers NVMe over USB/sd*, uses LABEL/PARTLABEL for scoring, excludes live
 # USB disk from defaults, and presents a numbered menu for each partition type.
 
-# Identify the live USB's disk so we can deprioritize its partitions
-LIVE_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
-LIVE_ROOT_DISK=$(lsblk -dno PKNAME "$LIVE_ROOT_DEV" 2>/dev/null | head -1)
-log "Live environment disk: ${LIVE_ROOT_DISK:-(unknown)}"
+# The running system's devices and disk were mapped during environment
+# detection above ($RUNNING_DEVS / $RUNNING_ROOT_DISK / $ENV_KIND).
+
+partition_number() {
+    # Trailing digits of a partition name: nvme0n1p6 -> 6, sda3 -> 3.
+    # Prints nothing for a whole disk (no parent), and never fails: the result
+    # is captured in an assignment, where a non-zero status would trip set -e.
+    local dev="$1" base
+    [ -n "$(lsblk -dno PKNAME "$dev" 2>/dev/null | head -1)" ] || return 0
+    base=$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")
+    [[ "$base" =~ ([0-9]+)$ ]] && printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+}
 
 pick_partition() {
-    # Usage: pick_partition <ROLE> <FSTYPE> <LABEL_HINT_REGEX>
+    # Usage: pick_partition <ROLE> <FSTYPE> <LABEL_HINT_REGEX> [NEAR_DEV]
     # Displays scored numbered list, returns selected device path on stdout.
     # All display/prompts go to stderr so stdout is clean for capture.
-    local role="$1" fstype="$2" label_hint="$3"
-    local -a devs=() disp_labels=() sizes=() disks=() scores=()
-    local idx=0 best_idx=0 best_score=-999
+    #
+    # NEAR_DEV is an already-chosen partition of the SAME install — in practice
+    # the ROOT, passed when picking BOOT and EFI. An Asahi install lays its
+    # three partitions down consecutively (EFI, boot, root), so on a disk
+    # carrying two installs the neighbours just below the chosen root are
+    # almost certainly its own boot and EFI. That only moves the default; the
+    # fstab cross-check further down is what actually proves the pairing.
+    local role="$1" fstype="$2" label_hint="$3" near_dev="${4:-}"
+    local -a devs=() disp_labels=() sizes=() disks=() scores=() inuse=()
+    local idx=0 best_idx=-1 best_score=-999999
+
+    local near_disk="" near_num=""
+    if [ -n "$near_dev" ]; then
+        near_disk=$(lsblk -dno PKNAME "$near_dev" 2>/dev/null | head -1)
+        near_num=$(partition_number "$near_dev")
+    fi
 
     # Collect all partitions matching fstype (skip loop devices).
     # lsblk -P (KEY="value" pairs) instead of positional columns: columnar
@@ -561,30 +682,67 @@ pick_partition() {
         [[ "$fs" =~ ^($fstype)$ ]] || continue
         echo "$name" | grep -q "^loop" && continue
 
+        # lsblk prints a device-mapper device by its dm name, and there is no
+        # /dev/<dmname> node — only /dev/mapper/<dmname>. Built naively the
+        # path does not exist, so blkid, blockdev and (much worse) the
+        # is_running_dev check below all quietly do nothing for it.
         local dev="/dev/$name"
+        [ -b "$dev" ] || dev="/dev/mapper/$name"
+        [ -b "$dev" ] || continue
         local label partlabel
         label=$(blkid -s LABEL -o value "$dev" 2>/dev/null || echo "")
         partlabel=$(blkid -s PARTLABEL -o value "$dev" 2>/dev/null || echo "")
         local disp="${label:-${partlabel:-(none)}}"
 
         # Score this candidate
-        local score=0
+        local score=0 busy=0
         # Strongly prefer NVMe over USB/SATA
         [[ "$dev" == *nvme* ]] && score=$((score + 100))
         # Bonus for label matching the expected role
         if [ -n "$label_hint" ]; then
             echo "$label $partlabel" | grep -Eqi "$label_hint" 2>/dev/null && score=$((score + 50))
         fi
-        # Heavily penalize anything on the live USB disk
-        [ -n "$LIVE_ROOT_DISK" ] && [ "$disk" = "$LIVE_ROOT_DISK" ] && score=$((score - 200))
+        # On a live USB, everything on the USB's own disk is the wrong answer.
+        # When running from a second install the target is on the same disk by
+        # definition, so that penalty would rule out the right answer too —
+        # there the running install is excluded partition by partition instead.
+        if [ "$ENV_KIND" = "live" ] && [ -n "$RUNNING_ROOT_DISK" ] && [ "$disk" = "$RUNNING_ROOT_DISK" ]; then
+            score=$((score - 200))
+        fi
+        # Partitions of the system we are running from are never candidates.
+        if is_running_dev "$dev"; then
+            busy=1
+            score=$((score - 100000))
+        fi
+        # Neighbours of the already-chosen root beat a same-type partition
+        # belonging to some other install further down the disk.
+        if [ -n "$near_disk" ] && [ "$disk" = "$near_disk" ]; then
+            score=$((score + 10))
+            local num delta
+            num=$(partition_number "$dev")
+            if [ -n "$num" ] && [ -n "$near_num" ]; then
+                delta=$((near_num - num))
+                if [ "$delta" -gt 0 ] && [ "$delta" -le 3 ]; then
+                    score=$((score + 60 - delta))
+                fi
+            fi
+        fi
+        # Tie-break on size: a 20 GiB rescue install and a 250 GiB daily driver
+        # both answer to 'fedora', and it is the big one people mean.
+        local size_b
+        size_b=$(blockdev --getsize64 "$dev" 2>/dev/null || echo 0)
+        case "$size_b" in ''|*[!0-9]*) size_b=0;; esac
+        score=$((score + size_b / 68719476736))     # +1 per 64 GiB
 
         devs+=("$dev")
         disp_labels+=("$disp")
         sizes+=("$size")
         disks+=("$disk")
         scores+=("$score")
+        inuse+=("$busy")
 
-        if [ "$score" -gt "$best_score" ]; then
+        # An in-use partition is never the recommendation, whatever it scores.
+        if [ "$busy" -eq 0 ] && [ "$score" -gt "$best_score" ]; then
             best_score=$score
             best_idx=$idx
         fi
@@ -599,28 +757,50 @@ pick_partition() {
         echo "  No $fstype partitions found!" >&2
         while true; do
             read -p "  Enter device path manually: " manual_dev
+            if [ -b "$manual_dev" ] && is_running_dev "$manual_dev"; then
+                echo -e "  ${RED}ERROR: $manual_dev belongs to the system you are booted from.${NC}" >&2
+                continue
+            fi
             [ -b "$manual_dev" ] && { echo "  Selected: $manual_dev" >&2; echo "$manual_dev"; return; }
             echo "  ERROR: $manual_dev is not a block device." >&2
         done
     fi
 
-    # Display numbered candidates with recommended marker
+    # Display numbered candidates with recommended / in-use markers
     for ((i=0; i<${#devs[@]}; i++)); do
         local marker=""
         [ "$i" -eq "$best_idx" ] && marker=" ${GREEN}← recommended${NC}"
+        [ "${inuse[$i]}" -eq 1 ] && marker=" ${RED}← IN USE by this running system${NC}"
         printf "    %d) %-18s  %-22s  %8s  (%s)" \
             "$((i+1))" "${devs[$i]}" "${disp_labels[$i]}" "${sizes[$i]}" "${disks[$i]}" >&2
         echo -e "$marker" >&2
     done
+    if [ "$best_idx" -lt 0 ]; then
+        echo -e "  ${YELLOW}Every candidate belongs to the running system — nothing to recommend.${NC}" >&2
+        echo -e "  ${YELLOW}You are probably booted into the very install you meant to encrypt.${NC}" >&2
+    fi
 
     # Selection loop
     while true; do
-        read -p "  Select [1-${#devs[@]}] or device path [default: $((best_idx+1))]: " choice
-        choice="${choice:-$((best_idx+1))}"
+        local default_hint=""
+        [ "$best_idx" -ge 0 ] && default_hint=" [default: $((best_idx+1))]"
+        read -p "  Select [1-${#devs[@]}] or device path${default_hint}: " choice
+        if [ -z "$choice" ]; then
+            if [ "$best_idx" -lt 0 ]; then
+                echo "  No default available — type a number or a device path." >&2
+                continue
+            fi
+            choice=$((best_idx+1))
+        fi
 
         # Numeric selection
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#devs[@]}" ]; then
             local sel="${devs[$((choice-1))]}"
+            if [ "${inuse[$((choice-1))]}" -eq 1 ]; then
+                echo -e "  ${RED}$sel is part of the system you are booted from — it cannot be${NC}" >&2
+                echo -e "  ${RED}encrypted from inside itself. Pick the OTHER install.${NC}" >&2
+                continue
+            fi
             echo -e "  Selected: ${GREEN}${sel}${NC}" >&2
             echo "$sel"
             return
@@ -628,6 +808,10 @@ pick_partition() {
 
         # Direct device path
         if [ -b "$choice" ]; then
+            if is_running_dev "$choice"; then
+                echo -e "  ${RED}$choice is part of the system you are booted from — pick another.${NC}" >&2
+                continue
+            fi
             local actual_fs
             actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
             if ! [[ "$actual_fs" =~ ^($fstype)$ ]]; then
@@ -668,12 +852,76 @@ fi
 if [ -n "${LUKS_TARGET_BOOT:-}" ]; then
     TARGET_BOOT=$(pinned_partition "BOOT" "LUKS_TARGET_BOOT" "$LUKS_TARGET_BOOT" "ext4")
 else
-    TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot")
+    TARGET_BOOT=$(pick_partition "BOOT" "ext4" "boot" "$TARGET_ROOT")
 fi
 if [ -n "${LUKS_TARGET_EFI:-}" ]; then
     TARGET_EFI=$(pinned_partition "EFI" "LUKS_TARGET_EFI" "$LUKS_TARGET_EFI" "vfat")
 else
-    TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor")
+    TARGET_EFI=$(pick_partition "EFI" "vfat" "efi|fedor" "$TARGET_ROOT")
+fi
+
+# ─── Self-Target Guard ───────────────────────────────────────────────────────
+# There is no override here. Re-encrypting the blocks under a mounted, running
+# root rewrites the filesystem the kernel is reading from, and the half-done
+# state is not recoverable by re-running anything. Selecting the running
+# system used to fail later and obscurely (umount / refuses); it fails here
+# instead, while nothing has happened yet.
+for _role_dev in "ROOT:$TARGET_ROOT" "BOOT:$TARGET_BOOT" "EFI:$TARGET_EFI"; do
+    _guard_role="${_role_dev%%:*}"
+    _guard_dev="${_role_dev#*:}"
+    if is_running_dev "$_guard_dev"; then
+        echo ""
+        err "Selected $_guard_role partition $_guard_dev is in use by the system you booted."
+        err "  Booted root: $RUNNING_ROOT_DEV"
+        err "  Nothing can encrypt the filesystem it is itself running from."
+        echo ""
+        err "  Boot a Fedora Asahi live USB (docs/LIVE-USB.md), or a second"
+        err "  minimal Asahi install (docs/SECOND-INSTALL.md), and from there"
+        err "  select the partitions of the install you want encrypted."
+        fatal "Refusing to operate on the running system."
+    fi
+done
+unset _role_dev _guard_role _guard_dev
+
+# ─── Second-Install Confirmation ─────────────────────────────────────────────
+# Running from a sibling install on the same disk is supported, and the guard
+# above has already proved the target is not this system. What is left is the
+# one thing only the operator knows: which of the two installs is the keeper.
+# Show both, side by side, and make them say it.
+if [ "$ENV_KIND" = "installed" ]; then
+    _run_label=$(blkid -s LABEL -o value "$RUNNING_ROOT_DEV" 2>/dev/null || echo "")
+    _tgt_label=$(blkid -s LABEL -o value "$TARGET_ROOT" 2>/dev/null || echo "")
+    echo ""
+    log "=== Second-install mode ==="
+    echo "  Running FROM  : $RUNNING_ROOT_DEV  ${_run_label:+[$_run_label]}  $(lsblk -dno SIZE "$RUNNING_ROOT_DEV" 2>/dev/null || echo '?')"
+    echo "  Encrypting    : $TARGET_ROOT  ${_tgt_label:+[$_tgt_label]}  $(lsblk -dno SIZE "$TARGET_ROOT" 2>/dev/null || echo '?')"
+    echo ""
+    echo "  The second line is the system that will ask for a passphrase at boot."
+    echo "  If those are the wrong way round, abort now."
+    if [ "${LUKS_ACK_SIBLING:-0}" = "1" ]; then
+        log "  LUKS_ACK_SIBLING=1 — confirmation pre-acknowledged."
+    else
+        read -p "  Confirm (Type 'SIBLING' to proceed): " SIBLING_OK
+        [ "$SIBLING_OK" = "SIBLING" ] || fatal "Aborted for safety."
+    fi
+    unset _run_label _tgt_label
+
+    # Where the recovery material will land. On the live-USB route $SCRIPT_DIR
+    # is the stick, which the user keeps. On this route it is very often the
+    # rescue install's own root — and that install gets deleted from macOS a
+    # day later, taking the header backup and recovery key with it.
+    SCRIPT_DEV=$(findmnt -n -o SOURCE --target "$SCRIPT_DIR" 2>/dev/null | sed 's/\[.*//')
+    SCRIPT_DEV=$(readlink -f "$SCRIPT_DEV" 2>/dev/null || echo "${SCRIPT_DEV:-}")
+    if [ -n "$SCRIPT_DEV" ] && is_running_dev "$SCRIPT_DEV"; then
+        echo ""
+        warn "AsahiLocker is running from $SCRIPT_DIR, which lives on this"
+        warn "  rescue install ($SCRIPT_DEV) — not on removable media."
+        warn "The deploy log, the pre-encryption state backup, the LUKS header"
+        warn "  backup and the recovery key are all written there. Deleting this"
+        warn "  install afterwards destroys every one of them."
+        warn "Copy that directory onto a USB stick — or onto the encrypted system"
+        warn "  itself — BEFORE you reclaim this partition in macOS."
+    fi
 fi
 
 # ─── Stale Mapper Cross-Check ────────────────────────────────────────────────
@@ -2467,6 +2715,24 @@ echo "          /boot/luks-deploy.log (on target system)"
 echo ""
 echo "Pre-encryption backups: $STATE_DIR/"
 echo ""
+
+# The second-install route ends with the operator deleting the install this
+# script ran from. Say so here, where they are actually looking.
+if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  BEFORE you delete this rescue install from macOS:        ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo "  $STATE_DIR/"
+    echo "  is on the rescue install and holds the LUKS header backup, the"
+    echo "  pre-encryption fstab/grub/BLS state and (if enrolled) the recovery"
+    echo "  key. Copy it to a USB stick or to the encrypted system first:"
+    echo ""
+    echo "      cp -a \"$STATE_DIR\" /mnt/root/     # target is still mounted at /mnt"
+    echo ""
+    echo "  Then set System Settings → General → Startup Disk back to the"
+    echo "  encrypted install before removing this one. See docs/SECOND-INSTALL.md."
+    echo ""
+fi
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║  You can now reboot. You will be prompted for your        ║"
 echo "║  LUKS passphrase at boot.                                 ║"

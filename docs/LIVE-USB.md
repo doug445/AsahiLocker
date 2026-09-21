@@ -1,7 +1,13 @@
 # Creating and Booting a Fedora Asahi Live USB
 
-`luks-deploy.sh` must run from a live environment — it refuses to encrypt the
-filesystem it is booted from. This is how to build that USB and boot it.
+`luks-deploy.sh` must run from outside the system it is encrypting — it refuses
+to encrypt the filesystem it is booted from. This is how to build that USB and
+boot it.
+
+If the stick will not boot, **start with [`usb start`](#if-the-usb-will-not-boot)**;
+if that genuinely gets you nowhere, a second minimal Asahi install on the
+internal disk does the same job — see
+[SECOND-INSTALL.md](SECOND-INSTALL.md).
 
 ---
 
@@ -51,7 +57,27 @@ git clone https://github.com/leifliddy/asahi-fedora-usb.git
 cd asahi-fedora-usb
 ```
 
-### 1c. Identify your USB drive — carefully
+### 1c. Choosing a drive
+
+Not every USB stick works here, and the ones that fail do not fail gracefully —
+they build fine under Linux and are then simply absent from U-Boot. There is no
+list of blessed hardware; what there is, is experience:
+
+- **SanDisk drives have been the most reliable** in practice. If you have a
+  choice of sticks, start with one.
+- **Have a second stick ready.** Swapping the drive is the cheapest test there
+  is, and it resolves more of these than any amount of U-Boot poking.
+- **Try a different port**, and a **powered hub** if you have one. Some sticks
+  draw more at enumeration than the port will give them before U-Boot has
+  initialised the controller.
+- A drive that works perfectly on a PC tells you nothing about this. U-Boot's
+  USB stack is not Linux's, and it is far less forgiving of slow or quirky
+  controllers.
+
+None of that is a reason to give up on encrypting the machine: if no stick
+works, [SECOND-INSTALL.md](SECOND-INSTALL.md) gets you there without one.
+
+### 1d. Identify your USB drive — carefully
 
 ```bash
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,VENDOR,LABEL
@@ -63,7 +89,7 @@ Find the entry matching your USB stick by **size and model**. Confirm it is not
 > **The build script repartitions and erases the entire target device.** Naming
 > the wrong device here destroys whatever is on it. Verify twice.
 
-### 1d. Build
+### 1e. Build
 
 Run as a real root shell — the script rejects `sudo` on itself:
 
@@ -103,7 +129,7 @@ To get online from the live USB:
 nmcli dev wifi connect <ssid> password <password>
 ```
 
-### 1e. Copy this tooling onto the USB
+### 1f. Copy this tooling onto the USB
 
 While the drive is still mounted on your build machine:
 
@@ -194,15 +220,38 @@ Full command reference: **[UBOOT-BOOTFLOW.md](UBOOT-BOOTFLOW.md)**
 
 ## If the USB will not boot
 
-1. **`usb start` first.** Some U-Boot builds do not enumerate USB until told to.
-   Then re-run `bootflow scan -l`.
-2. **Check U-Boot can see it at all:** `bootdev list`. If `usb0` is absent, the
+**Do `usb start` before you conclude anything.** This is the single most common
+dead end, and it looks convincing: no activity LED on the stick, nothing in
+`bootflow scan -l`, the drive apparently unpowered until Linux boots later and
+lights it up. That is U-Boot's normal state — the USB subsystem is not
+initialised, and the port is not powered, until something asks for it. Nothing
+asks for it on its own.
+
+```text
+=> usb start          # powers the port and enumerates; prints what it finds
+=> usb tree           # the stick should be listed here now
+=> bootflow scan -l   # re-scan only after usb start has reported a device
+```
+
+If `usb start` prints `0 Storage Device(s) found`, then work through:
+
+1. **Check U-Boot can see it at all:** `bootdev list`. If `usb0` is absent, the
    drive is invisible to U-Boot — no boot method will work.
-3. **Diagnose:** `bootflow scan -ale` lists entries *including* failures and why.
-4. **Try another port**, then **another USB stick**. Some controllers enumerate
-   fine under Linux but never appear to U-Boot; some are simply extremely slow.
-   This is a firmware/controller quirk, not a problem with your build.
-5. **Verify the build actually completed** — re-run `./build.sh -wd /dev/sdX`.
+2. **Diagnose:** `bootflow scan -ale` lists entries *including* failures and why.
+3. **Try another port**, then **another USB stick** — and prefer a SanDisk if
+   you have one, they have been the most consistently visible to U-Boot here.
+   Plenty of drives enumerate fine under Linux and never appear to U-Boot at
+   all; some are simply extremely slow. This is a firmware/controller quirk,
+   not a problem with your build. A powered hub sometimes helps where a
+   bus-powered stick does not. See
+   [Choosing a drive](#1c-choosing-a-drive).
+4. **Verify the build actually completed** — re-run `./build.sh -wd /dev/sdX`.
+
+Still nothing? Do not give up on encrypting the machine — take the other route.
+A second, minimal Asahi install on the internal NVMe is a supported environment
+for `luks-deploy.sh`, and the script has explicit guards for the fact that the
+tool and its target then share a disk:
+**[SECOND-INSTALL.md](SECOND-INSTALL.md)**.
 
 ---
 

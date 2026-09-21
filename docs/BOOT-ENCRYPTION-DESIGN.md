@@ -401,7 +401,7 @@ Two things make that far less alarming than it first sounds:
   argon2id at 10 iterations is *more* work per guess than `cryptsetup`'s own
   measured default, and the difference from 4 GiB is a 4x factor on attacker
   parallelism — real, but linear, and dwarfed by passphrase entropy. See
-  [Your passphrase is the other half](../README.md#your-passphrase-is-the-other-half).
+  [Your passphrase is the other half](CRYPTO.md#your-passphrase-is-the-other-half).
 
 Choose this if you want the convenience and your passphrase is strong.
 

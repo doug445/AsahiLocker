@@ -57,6 +57,15 @@ you start — not on the machine you are about to encrypt.
 
 ## Step 1 — Build a Fedora Asahi live USB
 
+> **If your Mac will not boot the stick**, try `usb start` at the U-Boot prompt
+> first — an unpowered, unenumerated port is the usual cause and it looks
+> exactly like "this machine cannot boot USB"
+> ([LIVE-USB.md](LIVE-USB.md#if-the-usb-will-not-boot)). If it really will not,
+> skip this step and Step 2 entirely: a second minimal Asahi install on the
+> internal disk is an equally supported place to run the encryption from, and
+> Steps 3 onward are unchanged. See
+> [SECOND-INSTALL.md](SECOND-INSTALL.md).
+
 You need a bootable **Fedora Asahi** USB. A stock Fedora ISO will not work —
 Apple Silicon needs an aarch64 image with the Asahi kernel and firmware.
 
@@ -170,9 +179,9 @@ The script is interactive but every prompt has a sensible default. In order:
 | Prompt | What it means | What to answer |
 |--------|---------------|----------------|
 | `Keep or close? (keep/close)` | `/dev/mapper/fedora_crypt` is still open from an earlier run. (Only appears in that case — and then it is the very first prompt.) | `keep` to reuse it (saves a passphrase prompt when re-running), `close` for a fresh start |
-| `Are you certain you are in a live/rescue environment?` | Only appears if it *cannot confirm* you booted from live media. If you really did boot the live USB, override. If you are on the installed system, **stop**. | `LIVE` to override, anything else aborts |
+| `Confirm (Type 'SIBLING' to proceed)` | Only appears when you are running from an installed system rather than live media — the [second-install route](SECOND-INSTALL.md). It prints the install you booted from and the install about to be encrypted, one above the other. | Check they are the right way round, then `SIBLING`. Anything else aborts |
 | `Continue on battery?` | Below 50% battery, no AC. | Plug in the charger and restart the script. `BATTERY` overrides. |
-| `Select [1-N] or device path` | Numbered menu of candidate partitions for root / boot / EFI. Candidates are scored: NVMe is preferred, matching labels score higher, anything on the live USB is heavily penalised. The default is almost always right. | Press Enter to accept the default, or type a number |
+| `Select [1-N] or device path` | Numbered menu of candidate partitions for root / boot / EFI. Candidates are scored: NVMe is preferred, matching labels score higher, the larger of two identically-labelled roots wins, and `BOOT`/`EFI` prefer the neighbours of the root you just chose. Anything the running system is using is marked `IN USE`, is never recommended, and cannot be selected at all. The default is almost always right. | Press Enter to accept the default, or type a number |
 | `Accept anyway? (yes/no)` | The chosen partition scored poorly (e.g. it looks like it is on the USB). | `no` unless you are certain |
 | `Unmount it now? (yes/no)` | The target partition is mounted somewhere (live desktops automount internal disks); encryption cannot run on a mounted device. | `yes` — the script unmounts it for you |
 | `Proceed? (yes/no)` | Your root/boot/EFI selections span different physical disks. | `no` unless that is genuinely your layout |
