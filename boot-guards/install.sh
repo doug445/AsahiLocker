@@ -84,6 +84,7 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$SYSTEMCTL" disable --now "$u" >/dev/null 2>&1
         "$RM" -f "$UNITS/$u"
     done
+    "$RM" -rf "$UNITS/esp-grub-stub-guard.service.d"
     "$RM" -f "$SBIN/restore-esp-grub-stub.sh" "$SBIN/clean-stale-efi-entries.sh" "$SBIN/esp-grub-stub-rebaseline" "$SBIN/uboot-efivar.py"
     "$SYSTEMCTL" daemon-reload
     ok "boot guards removed (baseline files in /root left in place)"
@@ -130,7 +131,14 @@ fi
 if [ "$SKIP_STUB" -eq 0 ]; then
     "$CP" -f "$HERE/systemd/esp-grub-stub-guard.service" "$UNITS/"
     "$CP" -f "$HERE/systemd/esp-grub-stub-guard.timer"   "$UNITS/"
-    ok "installed esp-grub-stub-guard.service + .timer"
+    # The shipped unit's ConditionPathExists names Fedora's EFI/fedora. This
+    # box's stub was found above and may live elsewhere; point the unit at the
+    # real file, or the timer fires every minute, the service is skipped on the
+    # unmet condition, and the guard is installed, enabled and inert.
+    "$MKDIR" -p "$UNITS/esp-grub-stub-guard.service.d"
+    printf '[Unit]\nConditionPathExists=\nConditionPathExists=%s\n' "$ESP" \
+        > "$UNITS/esp-grub-stub-guard.service.d/esp-path.conf"
+    ok "installed esp-grub-stub-guard.service + .timer (watching $ESP)"
 fi
 "$SYSTEMCTL" daemon-reload
 
