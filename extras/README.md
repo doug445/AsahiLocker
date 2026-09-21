@@ -32,8 +32,22 @@ Add to `~/.config/fastfetch/config.jsonc`:
 fastfetch's `command` module renders its output as a **single line**, so an
 embedded newline would escape the logo column and garble every device after the
 first. Instead it is called once per line number; asking for a line past the end
-prints nothing and fastfetch skips that module. Add as many as the maximum number
-of encrypted volumes you expect.
+prints nothing and fastfetch skips that module.
+
+The script reads that config back. It finds the `command` modules that call it
+and takes its layout from them: the first module's `key` and `keyWidth` (or
+`display.key.width`) and the `display.separator` give the indent for the
+continuation lines, so the alignment follows whatever you name the key — no
+constant to keep in step — and the number of modules is the number of lines it
+will be asked for. With more encrypted volumes than modules, the last line
+carries `(+N more)` rather than dropping them silently. The config is the
+calling user's (`$SUDO_USER`'s through `sudo`), else the system one; without one
+the defaults are the old ones, 17 columns and unlimited lines. Overrides:
+`LUKS_FETCH_CONFIG`, `LUKS_FETCH_KEYPAD`, `LUKS_FETCH_SLOTS`.
+
+`sudo` in the module text is optional. Unprivileged, the script serves the cache
+the timer keeps, re-indented for the caller's layout; it never prints a
+half-parsed line for a header it was not allowed to read.
 
 ## Notes
 
