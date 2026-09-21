@@ -402,25 +402,29 @@ argon2 into a local prefix, for anyone working on the `/boot` question.
 
 ## Audit
 
-Audited in full on 2026-09-05 by **Claude Fable 5.1** (Anthropic) for code
-excellence: every script, the test suites and the documentation, with each
-finding reproduced before it was fixed. The results shipped as v1.10.0 through
-v1.10.2 — the recovery-keyslot AF-hash fix, the busy-device guard, the
-harden-only guarantee — and v1.11.0 marks the audited state.
+**AsahiLocker has been audited in full twice** — every script, the test suites
+and the documentation — for correctness, safety and code quality, as
+independent code review of in-place LUKS2 full-disk encryption on Apple
+Silicon. One rule held both times: nothing counted as a finding until it had
+been reproduced against the code or on a running Mac.
 
-Audited again in full on 2026-09-21 by **Claude Fable 5.1**, after the
-second-install work of 1.13.0, with the same rule: nothing counted as a finding
-until it had been reproduced against the code or the running machine. Nine
-findings; five of them in code written that same week, which is the honest
-headline. The worst was a closing banner telling the operator to copy the
-recovery material from a mountpoint the exit trap had already unmounted. The
-fixes are v2.0.0, and the same pass produced
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): every M-series Mac the shipped
-kernel carries a device tree for, laptop and desktop, tiered by what has
-actually been verified.
+**2026-09-05 — Claude Fable 5.1 (Anthropic).** The first complete audit of the
+encryption path for Fedora Asahi Remix. Findings shipped as v1.10.0–v1.10.2 —
+the recovery-keyslot AF-hash fix, the busy-device guard, the harden-only
+guarantee — and v1.11.0 marks the audited state.
 
-Nothing in this tool has changed hands: the design decisions are the
-author's, the audits check that the code keeps them.
+**2026-09-21 — Claude Fable 5.1 (Anthropic).** A second full audit, scheduled
+for the week the second-install route landed, so the new code met a reviewer
+before it met anyone's disk. Nine findings, each reproduced and then fixed,
+shipped as v2.0.0 — among them a closing banner that pointed at a mountpoint the
+exit trap had already released, and a live-desktop path that udisks
+automounting could block. The same pass verified the tooling against every
+M-series Mac the Asahi kernel boots — MacBook Air, MacBook Pro, Mac mini, Mac
+Studio, iMac and Mac Pro, M1 through M3 — and recorded the result, machine by
+machine, in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+The design decisions are the author's; the audits check that the code keeps
+them. Nothing here has changed hands.
 
 ## Acknowledgements
 
