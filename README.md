@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml/badge.svg)](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon%20(M1--M4)-lightgrey.svg)](#requirements)
+[![Platform: Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon%20(M1--M3)-lightgrey.svg)](docs/COMPATIBILITY.md)
 [![KDF: argon2id](https://img.shields.io/badge/KDF-argon2id-blue.svg)](#crypto-parameters--aes-256-xts-and-argon2id)
 
 Encrypt the root filesystem of an **already-installed Fedora Asahi Remix** system
@@ -23,9 +23,15 @@ rewrites every piece of boot configuration that has to change (`crypttab`,
 config, **all** initramfs images) and refuses to let you reboot until a 12-point
 verification gate passes.
 
-Works on every M-series Mac that Asahi supports — M1 / M1 Pro / M1 Max /
-M1 Ultra, M2 / M2 Pro / M2 Max, M3, M4. Nothing in the tooling is model-specific:
-partitions, subvolumes and boot layout are all auto-detected at runtime.
+Built for every M-series Mac that Fedora Asahi Remix boots — laptop or
+desktop: MacBook Air and Pro, Mac mini, Mac Studio, iMac and the 2023 Mac Pro,
+across M1, M2 and M3 and their Pro / Max / Ultra variants. Nothing in the
+tooling is model-specific: partitions, subvolumes, the boot layout, the disk's
+sector size and the initramfs contents are all read at run time. Which machines
+are verified, which are expected to work, and what changes on a desktop (a
+Bluetooth keyboard cannot type the passphrase; there is no battery to ride out
+a mains dip) is in **[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)**. M4 is
+not claimed: the kernel ships its device trees, but Asahi does not boot it yet.
 
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
@@ -109,7 +115,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
 | `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (x86_64 + aarch64); safe to run locally with sudo. |
-| `docs/` | [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) |
+| `docs/` | [COMPATIBILITY](docs/COMPATIBILITY.md) · [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) |
 | `tools/boot-probe/` | **Research only, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
 
 ---
@@ -365,6 +371,7 @@ Every question and its full answer is in **[docs/FAQ.md](docs/FAQ.md)**:
 
 | Doc | Covers |
 |-----|--------|
+| [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Every M-series Mac, laptop and desktop, tiered by evidence — and what a desktop changes at the passphrase prompt |
 | [TESTED-SYSTEMS.md](docs/TESTED-SYSTEMS.md) | The machines behind the ✅ claims — hardware, layout, what was verified and what was found |
 | [INSTALL.md](docs/INSTALL.md) | Step-by-step install, start to finish, with what each prompt means |
 | [LIVE-USB.md](docs/LIVE-USB.md) | Building a Fedora Asahi live USB, and the three ways to boot it |
