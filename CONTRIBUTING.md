@@ -87,12 +87,16 @@ afterwards; it does not touch any real disk:
 
 ```bash
 sudo bash tests/loopback-core-test.sh
+sudo bash tests/multi-install-selection-test.sh
 ```
 
-Expect `19 passed, 0 failed`. A `SKIP` or `NOTE` line in stage 5b is normal and
-lowers the pass count (to between 14 and 17) without any failure — that stage
-races a hard kill against a live re-encryption and reports honestly when it did
-not manage to build the state it wanted. `0 failed` is the invariant.
+`0 failed` is the invariant; the pass counts move as stages are added.
+`loopback-core-test.sh` reports 36 passes with every stage reachable — a `SKIP`
+or `NOTE` line in stage 5b is normal and lowers the count without any failure,
+because that stage races a hard kill against a live re-encryption and reports
+honestly when it did not manage to build the state it wanted.
+`multi-install-selection-test.sh` reports 11, and its stage 4 skips when
+`dmsetup` is unavailable.
 
 ### Run the CI lint checks
 
