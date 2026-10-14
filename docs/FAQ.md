@@ -107,10 +107,10 @@ instead of quoting someone else's numbers.
 
 ## Does it work on anything other than Asahi?
 
-It can, but it is not the right tool for the job. The core encryption script
-runs on Fedora x86_64, Arch and Manjaro with btrfs roots; the boot guards, the
-ESP stub handling and the U-Boot documentation are Apple-Silicon-specific, and
-Apple Silicon is what gets tested first here.
+No. AsahiLocker is for Fedora Asahi Remix on Apple Silicon (aarch64) only. The
+boot guards, the ESP stub handling and the U-Boot documentation are
+Apple-Silicon-specific, and Apple Silicon is the only platform it is developed
+and tested on.
 
 For anything else, use **[LinuxLocker](https://github.com/doug445/LinuxLocker)**.
 Same in-place LUKS2 conversion, aimed at the rest of the world: it identifies

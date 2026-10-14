@@ -29,8 +29,8 @@
 # ============================================================================
 # In-place LUKS2 encryption of a btrfs root partition.
 #
-# Targets: Fedora Asahi Remix on Apple Silicon (aarch64), btrfs root
-# Also works on: Fedora x86_64, Manjaro, Arch (btrfs)
+# Targets: Fedora Asahi Remix on Apple Silicon (aarch64), btrfs root — only.
+# Every other platform: LinuxLocker (https://github.com/doug445/LinuxLocker).
 #
 # MUST NOT be run from the system it is encrypting. Run it either from a
 # Fedora Asahi live USB (docs/LIVE-USB.md) or from a second, minimal Asahi
