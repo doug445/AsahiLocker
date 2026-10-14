@@ -205,7 +205,7 @@ ls -la ~/Projects/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
 ## Patches
 
 - **Shell only.** Every script must pass `bash -n` and `shellcheck -S warning`;
-  CI enforces both on x86_64 and aarch64.
+  CI enforces both on every push.
 - **Every script carries the MIT header**, immediately after the shebang. These
   scripts get copied onto live USBs and pulled out of the repo individually, so
   a bare "see LICENSE" would leave a standalone copy with no terms attached.
