@@ -406,10 +406,10 @@ argon2 into a local prefix, for anyone working on the `/boot` question.
 
 ## Audit
 
-**AsahiLocker has been audited in full twice** — every script, the test suites
-and the documentation — for correctness, safety and code quality, as
-independent code review of in-place LUKS2 full-disk encryption on Apple
-Silicon. One rule held both times: nothing counted as a finding until it had
+**AsahiLocker has been code-audited in full twice, for coding excellence** —
+every script, the test suites and the documentation, checked for correctness,
+safety and code quality, as independent code review of in-place LUKS2
+full-disk encryption on Apple Silicon. One rule held both times: nothing counted as a finding until it had
 been reproduced against the code or on a running Mac.
 
 **2026-09-05 — Claude Fable 5.1 (Anthropic).** The first complete audit of the
