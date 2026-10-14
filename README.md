@@ -339,10 +339,10 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
   `grubby` — all present in the live environment.
 - 15–60 minutes, depending on partition size.
 
-This is Apple Silicon tooling: the boot guards, the ESP stub handling and the
-U-Boot documentation all assume the m1n1 → U-Boot → GRUB chain. The core
-encryption script does run on Fedora x86_64, Arch and Manjaro with btrfs roots,
-but that is not where it is developed or tested first.
+**AsahiLocker is for Fedora Asahi Remix on Apple Silicon (aarch64) only.** The
+boot guards, the ESP stub handling and the U-Boot documentation all assume the
+m1n1 → U-Boot → GRUB chain, and Apple Silicon is the only platform it is
+developed and tested on.
 
 **If you are not on Apple Silicon, use
 [LinuxLocker](https://github.com/doug445/LinuxLocker) instead** — the same
