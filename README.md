@@ -33,6 +33,10 @@ Bluetooth keyboard cannot type the passphrase; there is no battery to ride out
 a mains dip) is in **[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)**. M4 is
 not claimed: the kernel ships its device trees, but Asahi does not boot it yet.
 
+**New here?** The one-page guide, [Encrypt Asahi Linux with LUKS2, in
+place](https://doug445.github.io/AsahiLocker/), walks through the whole job
+start to finish.
+
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
 > verified backup. See [Risks](#risks--read-this).
@@ -99,7 +103,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
   an encrypted boot, and clears U-Boot's stale EFI entries — in the file they
   actually live in (`ubootefi.var` on the ESP), which a runtime `efibootmgr`
   delete never reaches.
-- **Tested in CI on every push**, x86_64 and aarch64, against a real loop device.
+- **Tested in CI on every push**, on aarch64 runners, against a real loop device.
 
 ---
 
@@ -114,7 +118,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
-| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (x86_64 + aarch64); safe to run locally with sudo. |
+| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (aarch64); safe to run locally with sudo. |
 | `docs/` | [COMPATIBILITY](docs/COMPATIBILITY.md) · [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) |
 | `tools/boot-probe/` | **Research only, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
 

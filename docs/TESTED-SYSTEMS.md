@@ -12,7 +12,7 @@ format as [linux-backup-system's](https://github.com/doug445/linux-backup-system
 | Fedora Asahi Remix (aarch64) | MacBook Pro (M1 Pro) | btrfs root on LUKS2 argon2id **`aggressive`** (4 GiB × 10) — **9.5 s unlock measured from the boot journal**, the figure the KDF profile table is built on — GRUB on `arm64-efi` behind m1n1/U-Boot | **in-place encryption ✅ — production**, the development platform since August 2026. Once left unbootable by an earlier release: `main` had been rewound behind the v1.8.2/1.8.3 tags, so the machine ran a `luks-deploy.sh` without the issue #2 fix (a `grep` for `GRUB_CMDLINE_LINUX` — a line Fedora Asahi Remix does not have — exiting stage 6c silently under `pipefail`); recovered from the live USB in configuration-only mode, and the fix is on `main` since 2026-09-02 |
 
 The loopback suite (`tests/loopback-core-test.sh`, 36 checks) runs on every
-push on x86_64 and aarch64 runners: shrink, in-place reencrypt with the
+push on aarch64 runners: shrink, in-place reencrypt with the
 script's exact flags, header and content survival, recovery-key enrolment
 with the AF hash pinned, resume after `--init-only` and after a hard kill
 (`cryptsetup repair`), 4096-byte sectors on a 4Kn and a 512-byte device, and
