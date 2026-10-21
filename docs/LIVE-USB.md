@@ -253,6 +253,29 @@ for `luks-deploy.sh`, and the script has explicit guards for the fact that the
 tool and its target then share a disk:
 **[SECOND-INSTALL.md](SECOND-INSTALL.md)**.
 
+### Boot starts, then hangs on a `dev-disk-by-uuid` job
+
+GRUB appears, the kernel starts, and then boot stops on a line like:
+
+```text
+A start job is running for /dev/disk/by-uuid/d747cb2a-… (… / no limit)
+```
+
+where the UUID is the USB's root partition (`sdX3`). U-Boot read the stick
+fine — that is how the kernel and initramfs got loaded — but once Linux takes
+over, a USB device that was attached at power-on is never enumerated, so the
+initramfs waits forever for its root filesystem. This is an Asahi kernel/U-Boot
+bug, not a problem with your build:
+[AsahiLinux/linux#554](https://github.com/AsahiLinux/linux/issues/554).
+
+**Workaround: unplug the stick and plug it back in while it is hung.** The
+replug makes Linux enumerate it, the job completes, and boot continues on its
+own. Root is not mounted yet, so this is safe.
+
+It has nothing to do with `resume=` — do not go editing the kernel command line
+for it. If the replug does not help, use
+**[SECOND-INSTALL.md](SECOND-INSTALL.md)**, which needs no USB at all.
+
 ---
 
 ## Once booted
