@@ -620,9 +620,10 @@ m1n1_usb_check() {
     warn "This is an M3 (t8122) running m1n1 ${old}."
     warn "  Below m1n1 ${M1N1_USB_MIN}, U-Boot on the M3 finds no USB storage at all: a"
     warn "  live USB will not appear in bootflow, whatever stick or port you use."
-    warn "  Stage 1: from macOS, run the Asahi installer, option 'm' (Upgrade m1n1)."
-    warn "    Only the dev installer (curl https://alx.sh/dev | sh) has 1.9.x today."
-    warn "  Stage 2: sudo dnf upgrade m1n1, then reboot."
+    warn "  First: sudo dnf upgrade m1n1, then reboot (stage 2; a normal update)."
+    warn "  Still no USB? Stage 1 via the Asahi installer (option 'm') fixed it"
+    warn "    on an M3 Air, but has left an M2 Max on macOS 27 unbootable --"
+    warn "    read docs/LIVE-USB.md before trying it."
     warn "  Or skip the USB: a second install needs none (docs/SECOND-INSTALL.md)."
     warn "  Details: docs/LIVE-USB.md, 'M3: m1n1 1.9.1 or later'."
 }
