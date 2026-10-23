@@ -44,35 +44,118 @@ device tree:
 for s in 1 2; do tr -d '\0' < /proc/device-tree/chosen/asahi,m1n1-stage$s-version; echo; done
 ```
 
-The two stages are upgraded separately:
+The two stages are upgraded separately, and **they carry different risk**.
 
-- **Stage 1** lives in the macOS-side boot stub and is only changed by the
-  Asahi installer, run **from macOS**. Choose **`m` — Upgrade m1n1 on an
-  existing OS**, then pick this install. The installer carries over the
-  stub's settings and then repeats its second step: you shut down, boot this
-  install from the boot picker, and approve it again in recoveryOS.
-  The installer does not touch the ESP, `/boot` or the LUKS volume.
-  As of **October 2026** the regular installer (`curl https://alx.sh | sh`,
-  installer v0.9.2) still bundles m1n1 **1.6.1**. Only the development
-  installer has 1.9.x:
+1. **Stage 2 — do this first.** It lives on the ESP and comes from Fedora's
+   `m1n1` package: `sudo dnf upgrade m1n1`, then reboot. Fedora 44 has
+   shipped 1.9.9 since October 2026. It is an ordinary package update. Then
+   try the stick again.
+2. **Stage 1 — the fix reported on the M3 Air.** It lives in the macOS-side
+   boot stub and is only changed by the Asahi installer, run from macOS
+   (option **`m` — Upgrade m1n1 on an existing OS**). That option then
+   repeats the installer's second step: shut down, boot the install from the
+   boot picker, and approve it in recoveryOS. The fix in
+   [issue #4](https://github.com/doug445/AsahiLocker/issues/4) was this,
+   using the development installer (`curl https://alx.sh/dev | sh`). As of
+   **October 2026** the regular installer (v0.9.2) still bundles m1n1
+   **1.6.1**.
 
-  ```bash
-  curl https://alx.sh/dev | sh
-  ```
+   > **⚠️ This step can leave the install unbootable.** On an **M2 Max** with
+   > system firmware 27 (macOS 27), the approval step showed a blue screen
+   > saying it was not the correct recoveryOS. It asked for a user name and
+   > password, rebooted, and showed the same screen again. It failed four
+   > times in a row. On the M3 Air in #4 the upgrade worked; which macOS
+   > version that was is not yet known. Read your system firmware version
+   > before you start:
+   >
+   > ```bash
+   > tr -d '\0' < /proc/device-tree/chosen/asahi,system-fw-version; echo
+   > ```
+   >
+   > An older stage 2 m1n1 may print `unknown` here.
+   >
+   > **The way back:** the upgrade does not delete the old stage 1. Pointing
+   > the boot back at it made the M2 Max bootable again. See
+   > [If the stage 1 upgrade loops](#if-the-stage-1-upgrade-loops) below.
+3. **Or skip the USB altogether** with the
+   [second-install route](SECOND-INSTALL.md). It is the route the first
+   M3 MacBook Air encryption took.
 
-  Once the regular installer ships 1.9.1 or later, use that one instead.
-- **Stage 2** lives on the ESP and comes from Fedora's `m1n1` package.
-  `sudo dnf upgrade m1n1`, then reboot. Fedora 44 has shipped 1.9.9 since
-  October 2026.
+It is not yet known whether stage 2 alone is enough. If it is, stage 1 never
+needs touching for this. `luks-deploy.sh` warns about all of this when it runs
+on an installed M3 system (the run that sends you here for a USB stick).
 
-The reported fix was the **stage 1** upgrade. Until it is clear which stage
-carries the fix, bring **both** to 1.9.1 or later. `luks-deploy.sh` warns about
-this when it runs on an installed M3 system (the run that sends you here for a
-USB stick).
+#### If the stage 1 upgrade loops
 
-If you would rather not upgrade m1n1, the
-[second-install route](SECOND-INSTALL.md) needs no USB. It is the route the
-first M3 MacBook Air encryption took.
+This procedure recovered the M2 Max. It puts the **old** stage 1 back in use;
+it does not install the new one.
+
+**Why it works.** Option `m` does not replace the installed m1n1. It writes
+the new one to `Finish Installation.app/Contents/Resources/boot.bin` on the
+stub. It then hides the stub as an unfinished install by renaming two files,
+so that the next boot of the stub runs step 2. Only step 2's
+`kmutil configure-boot` installs the new m1n1. Until that succeeds, the old one
+is still the boot object. When step 2 completes, its "Wrapping up" renames the
+two files back. Doing those two renames by hand returns the stub to its old,
+working m1n1. (Source: the installer's `stub.py` and `step2/step2.sh`.)
+
+Boot **macOS**: hold the power button and pick macOS in the startup picker.
+Then open Terminal. Set `V` to the Asahi stub volume, named as it appears in
+the startup picker (`ls /Volumes` lists them):
+
+```bash
+V="/Volumes/Fedora Asahi"
+```
+
+**Check first**, so the fix is not applied to the wrong situation:
+
+```bash
+# 1. The stub is in the hidden state -- both files should exist:
+ls -la "$V/.IAPhysicalMedia" "$V/System/Library/CoreServices/SystemVersion-disabled.plist"
+
+# 2. The rename targets do not already exist -- both should say "No such file":
+ls "$V/IAPhysicalMedia-disabled.plist" "$V/System/Library/CoreServices/SystemVersion.plist"
+
+# 3. An m1n1 was installed before. Get the volume group ID, which the
+#    step 2 screen also prints:
+grep '^VGID=' "$V/Finish Installation.app/Contents/Resources/step2.sh"
+#    ...then the "coih" line must show a hash, not "absent":
+sudo bputil -d -v <VGID> | grep -E "coih|Security Mode"
+```
+
+**Check 3 is the important one.** If `coih` is `absent`, the original install
+never finished step 2, so there is no old m1n1 to go back to. These commands
+will not help. Run the installer again and use its repair option (`p`).
+
+**Then undo the two renames.** They are the same two that step 2's "Wrapping
+up" makes. Step 2's `kmutil configure-boot` is skipped, so the new m1n1 is
+never installed:
+
+```bash
+sudo mount -u -w "$V"
+sudo mv "$V/.IAPhysicalMedia" "$V/IAPhysicalMedia-disabled.plist"
+sudo mv "$V/System/Library/CoreServices/SystemVersion-disabled.plist" "$V/System/Library/CoreServices/SystemVersion.plist"
+```
+
+The stub's system volume mounts read-only; the `mount -u -w` makes it writable.
+
+**Afterwards**, `bless --info --getBoot` should show the stub's system volume
+(`/dev/diskXs2`). If it does not, choose the Asahi volume as the startup disk
+in System Settings → General → Startup Disk. Then reboot.
+
+Good to know:
+
+- **It is safe to repeat.** Running option `m` again hides the stub again, and
+  the installer accepts either file name. The new m1n1 waits in
+  `Finish Installation.app/Contents/Resources/boot.bin` until a step 2
+  succeeds.
+- **The file dates are misleading.** A rename does not change a file's
+  modification time, so the files still show the original install date.
+  `stat -f "%Sc" <file>` shows the change time, which is when option `m`
+  renamed them.
+- **This does not update m1n1.** It only puts the old one back. An M3 that
+  needs the newer m1n1 for USB still has to get step 2 to complete, or use the
+  [second-install route](SECOND-INSTALL.md) instead.
 
 ---
 
