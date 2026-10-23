@@ -24,6 +24,56 @@ m1n1 and U-Boot are already on the internal NVMe, and U-Boot can boot USB media.
 But it means you cannot use this tooling to encrypt a system that does not exist
 yet — install Fedora Asahi Remix first, then encrypt it.
 
+### M3: m1n1 1.9.1 or later
+
+On an **M3 MacBook Air** with m1n1 1.6.x, U-Boot finds **no USB mass storage
+at all**: `usb start` reports no storage device, whatever stick and port you
+try. On the M3 the USB ports are reached over SPMI rather than I2C, and the
+m1n1 that understands this is **1.9.1**. Upgrading m1n1 fixes it; nothing in
+AsahiLocker or the stick is at fault. Reported and solved by
+[@ljrk0](https://github.com/ljrk0) in
+[issue #4](https://github.com/doug445/AsahiLocker/issues/4).
+The MacBook Pro 14" M3 (`j504`) and the M3 iMac use the same chip (`t8122`)
+and are likely affected, but this is unconfirmed. The M3 Pro / Max / Ultra
+have not been reported either way.
+
+Check what you are running from Linux. m1n1 records both of its stages in the
+device tree:
+
+```bash
+for s in 1 2; do tr -d '\0' < /proc/device-tree/chosen/asahi,m1n1-stage$s-version; echo; done
+```
+
+The two stages are upgraded separately:
+
+- **Stage 1** lives in the macOS-side boot stub and is only changed by the
+  Asahi installer, run **from macOS**. Choose **`m` — Upgrade m1n1 on an
+  existing OS**, then pick this install. The installer carries over the
+  stub's settings and then repeats its second step: you shut down, boot this
+  install from the boot picker, and approve it again in recoveryOS.
+  The installer does not touch the ESP, `/boot` or the LUKS volume.
+  As of **October 2026** the regular installer (`curl https://alx.sh | sh`,
+  installer v0.9.2) still bundles m1n1 **1.6.1**. Only the development
+  installer has 1.9.x:
+
+  ```bash
+  curl https://alx.sh/dev | sh
+  ```
+
+  Once the regular installer ships 1.9.1 or later, use that one instead.
+- **Stage 2** lives on the ESP and comes from Fedora's `m1n1` package.
+  `sudo dnf upgrade m1n1`, then reboot. Fedora 44 has shipped 1.9.9 since
+  October 2026.
+
+The reported fix was the **stage 1** upgrade. Until it is clear which stage
+carries the fix, bring **both** to 1.9.1 or later. `luks-deploy.sh` warns about
+this when it runs on an installed M3 system (the run that sends you here for a
+USB stick).
+
+If you would rather not upgrade m1n1, the
+[second-install route](SECOND-INSTALL.md) needs no USB. It is the route the
+first M3 MacBook Air encryption took.
+
 ---
 
 ## Step 1 — Build the USB
@@ -237,15 +287,18 @@ If `usb start` prints `0 Storage Device(s) found`, then work through:
 
 1. **Check U-Boot can see it at all:** `bootdev list`. If `usb0` is absent, the
    drive is invisible to U-Boot — no boot method will work.
-2. **Diagnose:** `bootflow scan -ale` lists entries *including* failures and why.
-3. **Try another port**, then **another USB stick** — and prefer a SanDisk if
+2. **On an M3, check m1n1 first.** m1n1 older than 1.9.1 leaves U-Boot
+   with no USB storage on any stick or port — see
+   [M3: m1n1 1.9.1 or later](#m3-m1n1-191-or-later).
+3. **Diagnose:** `bootflow scan -ale` lists entries *including* failures and why.
+4. **Try another port**, then **another USB stick** — and prefer a SanDisk if
    you have one, they have been the most consistently visible to U-Boot here.
    Plenty of drives enumerate fine under Linux and never appear to U-Boot at
    all; some are simply extremely slow. This is a firmware/controller quirk,
    not a problem with your build. A powered hub sometimes helps where a
    bus-powered stick does not. See
    [Choosing a drive](#1c-choosing-a-drive).
-4. **Verify the build actually completed** — re-run `./build.sh -wd /dev/sdX`.
+5. **Verify the build actually completed** — re-run `./build.sh -wd /dev/sdX`.
 
 Still nothing? Do not give up on encrypting the machine — take the other route.
 A second, minimal Asahi install on the internal NVMe is a supported environment
