@@ -45,7 +45,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.
 | | Mac Studio `j475c` | desktop | C | |
 | **M2 Ultra** `t6022` | Mac Studio `j475d` | desktop | C | |
 | | Mac Pro (2023) `j180d` | desktop | C | See the Mac Pro note below |
-| **M3** `t8122` | MacBook Air 13" / 15" (2024) `j613` / `j615` | laptop | **B** | M3 MacBook Air, September 2026, via the second-install route: encryption completed, passphrase prompt at boot, verified working. Noah Petherbridge, kirsle.net |
+| **M3** `t8122` | MacBook Air 13" / 15" (2024) `j613` / `j615` | laptop | **B** | M3 MacBook Air, September 2026, via the second-install route: encryption completed, passphrase prompt at boot, verified working. Noah Petherbridge, kirsle.net. **Live USB needs m1n1 ≥ 1.9.1**: older m1n1 leaves U-Boot blind to USB storage — see [LIVE-USB.md](LIVE-USB.md#m3-m1n1-191-or-later) ([#4](https://github.com/doug445/AsahiLocker/issues/4)) |
 | | MacBook Pro 14" (2023) `j504` | laptop | C | Asahi M3 support landed September 2026 |
 | | iMac 24" (2023) `j433` / `j434` | desktop | C | |
 | **M3 Pro** `t6030` | MacBook Pro 14" / 16" `j514s` / `j516s` | laptop | C | |

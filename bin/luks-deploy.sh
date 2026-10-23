@@ -595,6 +595,38 @@ is_running_dev() {
     return 1
 }
 
+# M3 (t8122) behind m1n1 older than 1.9.1: U-Boot sees no USB mass storage at
+# all, so the live USB the installed-system warning sends the user for never
+# appears in bootflow (issue #4). Which m1n1 stage carries the fix is not yet
+# pinned down, so either stage below 1.9.1 warns. m1n1 writes both versions
+# into /chosen. A warning, never a stop: a second install needs no USB.
+M1N1_USB_MIN="1.9.1"
+m1n1_usb_check() {
+    local compat stage ver old=""
+    compat=$(tr '\0' ' ' 2>/dev/null < /proc/device-tree/compatible) || return 0
+    case "$compat" in *apple,t8122*) ;; *) return 0 ;; esac
+    for stage in 1 2; do
+        ver=$(tr -d '\0' 2>/dev/null < "/proc/device-tree/chosen/asahi,m1n1-stage${stage}-version") || ver=""
+        ver="${ver#v}"
+        # Missing or unparsable counts as old: m1n1 has written this property
+        # for years, so its absence means an old or broken boot object.
+        if [ -z "$ver" ] || ! [[ "$ver" =~ ^[0-9]+\.[0-9]+ ]] \
+           || [ "$(printf '%s\n' "$M1N1_USB_MIN" "$ver" | sort -V | head -n1)" != "$M1N1_USB_MIN" ]; then
+            old="${old:+$old, }stage ${stage}: ${ver:+v}${ver:-unknown}"
+        fi
+    done
+    [ -n "$old" ] || return 0
+    echo ""
+    warn "This is an M3 (t8122) running m1n1 ${old}."
+    warn "  Below m1n1 ${M1N1_USB_MIN}, U-Boot on the M3 finds no USB storage at all: a"
+    warn "  live USB will not appear in bootflow, whatever stick or port you use."
+    warn "  Stage 1: from macOS, run the Asahi installer, option 'm' (Upgrade m1n1)."
+    warn "    Only the dev installer (curl https://alx.sh/dev | sh) has 1.9.x today."
+    warn "  Stage 2: sudo dnf upgrade m1n1, then reboot."
+    warn "  Or skip the USB: a second install needs none (docs/SECOND-INSTALL.md)."
+    warn "  Details: docs/LIVE-USB.md, 'M3: m1n1 1.9.1 or later'."
+}
+
 # Live media vs. an installed system. A Fedora Asahi live USB is a real
 # installed system too (asahi-fedora-usb writes ext4/btrfs, not squashfs), so
 # fstype alone is not the tell — removability is.
@@ -629,6 +661,7 @@ if [ "$ENV_KIND" = "installed" ]; then
     warn "  below and cannot be chosen. If the install you want to encrypt is the"
     warn "  one you are sitting in, stop now: reboot into a live USB or a second"
     warn "  Asahi install and run this from there."
+    m1n1_usb_check
 fi
 
 # ─── Power / Battery Check ──────────────────────────────────────────────────
