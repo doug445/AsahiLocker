@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asahi Linux LUKS recovery: when the encrypted root will not boot — AsahiLocker</title>
+<meta name="description" content="Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/recovery/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Asahi Linux LUKS recovery: when the encrypted root will not boot — AsahiLocker">
+<meta property="og:description" content="Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/recovery/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-08-20">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/recovery/#article",
+      "headline": "Recovery: every failure mode of in-place LUKS2 encryption on Asahi, and the way out",
+      "description": "Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-08-20",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/recovery/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/recovery/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Asahi Linux LUKS recovery: when the encrypted root will not boot",
+          "item": "https://doug445.github.io/AsahiLocker/recovery/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/" aria-current="page">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Asahi Linux LUKS recovery: when the encrypted root will not boot</p>
+    <p class="eyebrow">Recovery · chroot · initramfs</p>
+    <h1>Recovery: every failure mode of in-place LUKS2 encryption on Asahi, and the way out</h1>
+    <p class="lede">Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md"><code>docs/RECOVERY.md</code></a> from the repository,
+      last changed 2026-08-20.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p>Every failure mode this tooling can produce, and how to get out of it.</p>
+<blockquote>
+<p><strong>Interactive-shell warning.</strong> These commands are typed by hand, often at 3am.
+Many shells alias <code>cp='cp -i'</code>, <code>rm='rm -i'</code>, <code>cat=bat</code>, <code>find=fd</code>. An
+interactive prompt you do not notice can silently skip a critical copy. Use
+absolute paths (<code>/usr/bin/cp -f</code>) or prefix with <code>command</code>.</p>
+</blockquote>
+<hr>
+<h2 id="first-what-state-are-you-in">First: what state are you in?</h2>
+<p>Boot the Fedora Asahi live USB (<a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a>) and look:</p>
+<div class="codeblock"><pre><code>lsblk -f
+sudo cryptsetup luksDump /dev/nvme0n1p6 <span class="pl-k">|</span> head -20</code></pre></div>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>State</th>
+<th>Go to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Root partition still <code>btrfs</code>, no LUKS header</td>
+<td>Encryption never started</td>
+<td><a href="#encryption-never-started--undo-the-btrfs-shrink">Undo the shrink</a></td>
+</tr>
+<tr>
+<td>
+<code>luksDump</code> shows a LUKS2 header <strong>and</strong> "online reencryption in progress"</td>
+<td>Interrupted mid-encryption</td>
+<td><a href="#encryption-was-interrupted">Resume</a></td>
+</tr>
+<tr>
+<td>Valid LUKS2 header, container opens fine, but the box will not boot</td>
+<td>Encryption fine, boot config wrong</td>
+<td><a href="#encrypted-fine-but-it-will-not-boot">Repair boot config</a></td>
+</tr>
+<tr>
+<td>Passphrase accepted, root mounts, then services fail en masse</td>
+<td>SELinux mislabels</td>
+<td><a href="#first-boot-fails-with-selinux-denials">Relabel</a></td>
+</tr>
+<tr>
+<td>
+<code>luksDump</code> fails / "device is not a valid LUKS device"</td>
+<td>Header damaged</td>
+<td><a href="#corrupt-or-missing-luks-header">Restore the header</a></td>
+</tr>
+<tr>
+<td>Boots to a GRUB <code>rescue&gt;</code> prompt</td>
+<td>ESP stub was overwritten</td>
+<td><a href="#grub-rescue-prompt--the-esp-stub-was-overwritten">Restore the ESP stub</a></td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2 id="encryption-never-started--undo-the-btrfs-shrink">Encryption never started — undo the btrfs shrink</h2>
+<p>Step 1 shrinks btrfs by 32 MB to make room for the LUKS header. If the script
+died between that and the encryption itself, the filesystem is intact but 32 MB
+short. Give it back:</p>
+<div class="codeblock"><pre><code>sudo mount /dev/nvme0n1p6 /mnt
+sudo btrfs filesystem resize max /mnt
+sudo umount /mnt</code></pre></div>
+<p>The system boots normally again. Nothing was lost.</p>
+<hr>
+<h2 id="encryption-was-interrupted">Encryption was interrupted</h2>
+<p>Power loss, a closed lid, a killed terminal. LUKS2 re-encryption is journaled
+with checksum resilience precisely for this — it can pick up where it stopped.</p>
+<p><strong>The easy way: just re-run <code>luks-deploy.sh</code>.</strong> It reads the LUKS2
+<code>online-reencrypt</code> requirement flag from the header, offers to resume, finishes
+the encryption with <code>cryptsetup reencrypt --resume-only</code>, and then runs the
+whole configuration + verification phase as if nothing had happened. You will
+be asked for the passphrase you set.</p>
+<p>By hand, the resume step alone is:</p>
+<div class="codeblock"><pre><code>sudo cryptsetup reencrypt --resume-only /dev/nvme0n1p6</code></pre></div>
+<p>If resume reports no re-encryption in progress but the header is valid, the data
+phase finished and only the config steps are missing → next section.</p>
+<hr>
+<h2 id="encrypted-fine-but-it-will-not-boot">Encrypted fine, but it will not boot</h2>
+<p>The container is good; something in the boot chain does not know about it.</p>
+<p><strong>The easy way: just re-run <code>luks-deploy.sh</code>.</strong> When it finds a complete LUKS
+header on the selected root, it offers a <strong>configuration-only mode</strong>: it unlocks
+the container, redoes every config step (crypttab, fstab, kernel cmdline, GRUB
+defaults, BLS entries, dracut config, all initramfs images — all idempotent) and
+re-runs the full verification gate. No data is touched.</p>
+<p>To do the same by hand instead: open, mount, chroot, and repair.</p>
+<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> 1. Open the container</span>
+sudo cryptsetup open /dev/nvme0n1p6 fedora_crypt
+
+<span class="pl-c"><span class="pl-c">#</span> 2. Confirm the filesystem inside is intact</span>
+sudo blkid /dev/mapper/fedora_crypt        <span class="pl-c"><span class="pl-c">#</span> → TYPE="btrfs"</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 3. Mount root (use the subvol from your fstab — usually 'root')</span>
+sudo mount -o subvol=root /dev/mapper/fedora_crypt /mnt
+
+<span class="pl-c"><span class="pl-c">#</span> 4. Mount the rest</span>
+sudo mount /dev/nvme0n1p5 /mnt/boot
+sudo mount /dev/nvme0n1p4 /mnt/boot/efi
+<span class="pl-k">for</span> <span class="pl-smi">i</span> <span class="pl-k">in</span> dev dev/pts proc sys run<span class="pl-k">;</span> <span class="pl-k">do</span> sudo mount --bind <span class="pl-s"><span class="pl-pds">"</span>/<span class="pl-smi">$i</span><span class="pl-pds">"</span></span> <span class="pl-s"><span class="pl-pds">"</span>/mnt/<span class="pl-smi">$i</span><span class="pl-pds">"</span></span><span class="pl-k">;</span> <span class="pl-k">done</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 5. Chroot</span>
+sudo chroot /mnt /bin/bash</code></pre></div>
+<p>Inside the chroot, check each of the five things that must be right:</p>
+<div class="codeblock"><pre><code>LUKS_UUID=<span class="pl-s"><span class="pl-pds">$(</span>cryptsetup luksUUID /dev/nvme0n1p6<span class="pl-pds">)</span></span>
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">"</span>LUKS UUID: <span class="pl-smi">$LUKS_UUID</span><span class="pl-pds">"</span></span>
+
+cat /etc/crypttab              <span class="pl-c"><span class="pl-c">#</span> → fedora_crypt UUID=&lt;LUKS_UUID&gt; none luks,discard</span>
+cat /etc/fstab                 <span class="pl-c"><span class="pl-c">#</span> → / and /home on /dev/mapper/fedora_crypt</span>
+cat /etc/kernel/cmdline        <span class="pl-c"><span class="pl-c">#</span> → contains rd.luks.uuid= and rd.luks.name=</span>
+grep rd.luks /boot/loader/entries/<span class="pl-k">*</span>.conf     <span class="pl-c"><span class="pl-c">#</span> → EVERY entry has both</span>
+cat /etc/dracut.conf.d/99-luks.conf          <span class="pl-c"><span class="pl-c">#</span> → add_dracutmodules+=" crypt dm btrfs "</span></code></pre></div>
+<p>Fix whatever is missing:</p>
+<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> crypttab</span>
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">"</span>fedora_crypt UUID=<span class="pl-smi">$LUKS_UUID</span> none luks,discard<span class="pl-pds">"</span></span> <span class="pl-k">&gt;&gt;</span> /etc/crypttab
+
+<span class="pl-c"><span class="pl-c">#</span> kernel cmdline (source of truth for future kernel installs)</span>
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">"</span> rd.luks.uuid=<span class="pl-smi">$LUKS_UUID</span> rd.luks.name=<span class="pl-smi">$LUKS_UUID</span>=fedora_crypt<span class="pl-pds">"</span></span> <span class="pl-k">&gt;&gt;</span> /etc/kernel/cmdline
+
+<span class="pl-c"><span class="pl-c">#</span> dracut modules</span>
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">'</span>add_dracutmodules+=" crypt dm btrfs "<span class="pl-pds">'</span></span> <span class="pl-k">&gt;</span> /etc/dracut.conf.d/99-luks.conf
+
+<span class="pl-c"><span class="pl-c">#</span> rebuild every initramfs</span>
+dracut --regenerate-all --force
+
+<span class="pl-c"><span class="pl-c">#</span> update every BLS entry</span>
+grubby --update-kernel=ALL \
+       --args=<span class="pl-s"><span class="pl-pds">"</span>rd.luks.uuid=<span class="pl-smi">$LUKS_UUID</span> rd.luks.name=<span class="pl-smi">$LUKS_UUID</span>=fedora_crypt<span class="pl-pds">"</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> regenerate the real grub.cfg — note the /boot path, NOT the ESP path</span>
+grub2-mkconfig -o /boot/grub2/grub.cfg</code></pre></div>
+<p>Then exit, unmount, reboot:</p>
+<div class="codeblock"><pre><code><span class="pl-c1">exit</span>
+sudo umount -R /mnt
+sudo cryptsetup close fedora_crypt
+sudo reboot</code></pre></div>
+<h3 id="the-two-mistakes-that-cause-most-non-booting-systems">The two mistakes that cause most non-booting systems</h3>
+<ol>
+<li>
+<strong><code>rd.luks.name</code> missing.</strong> <code>rd.luks.uuid</code> alone creates
+<code>/dev/mapper/luks-&lt;UUID&gt;</code>, but fstab says <code>/dev/mapper/fedora_crypt</code>. The
+names do not match, root never mounts. You need <em>both</em> parameters.</li>
+<li>
+<strong>BLS entries not updated.</strong> Fedora uses Boot Loader Specification entries.
+Editing <code>/etc/default/grub</code> and running <code>grub2-mkconfig</code> does <strong>not</strong> touch
+<code>/boot/loader/entries/*.conf</code>. Use <code>grubby --update-kernel=ALL</code>.</li>
+</ol>
+<hr>
+<h2 id="first-boot-fails-with-selinux-denials">First boot fails with SELinux denials</h2>
+<p>Files written from the live environment (crypttab, the dracut conf, edited
+fstab) can end up mislabeled — the live system's policy did the labeling, not
+the target's. <code>luks-deploy.sh</code> runs <code>restorecon</code> on everything it touched from
+inside the chroot, but if you edited files by hand during a manual repair, the
+boot can still die on denials (root mounts, then systemd units fail en masse,
+or the boot hangs after the passphrase).</p>
+<p>Fix: at the GRUB menu, press <code>e</code>, append <code>enforcing=0</code> to the <code>linux</code> line, and
+boot once. Then relabel and re-enable:</p>
+<div class="codeblock"><pre><code>sudo restorecon -RFv /etc /boot
+sudo setenforce 1</code></pre></div>
+<p>Then reboot normally. (For a full relabel instead: <code>sudo touch /.autorelabel &amp;&amp; sudo reboot</code> — takes a few minutes on first boot.)</p>
+<hr>
+<h2 id="corrupt-or-missing-luks-header">Corrupt or missing LUKS header</h2>
+<p>The header is 16 MB at the start of the partition holding your key slots. Without
+it the data is undecryptable — which is why this tooling backs it up in three
+places.</p>
+<p>Find a backup:</p>
+<div class="codeblock"><pre><code>ls /boot/luks-header-backup.img                      <span class="pl-c"><span class="pl-c">#</span> written by luks-deploy</span>
+ls /root/LUKS-RECOVERY-<span class="pl-k">*</span>/luks-header-<span class="pl-k">*</span>.img           <span class="pl-c"><span class="pl-c">#</span> the recovery bundle</span>
+ls <span class="pl-k">&lt;</span>live-usb<span class="pl-k">&gt;</span>/pre-luks-state-<span class="pl-k">*</span>/luks-header-backup.img</code></pre></div>
+<p>Restore it:</p>
+<div class="codeblock"><pre><code>sudo cryptsetup luksHeaderRestore /dev/nvme0n1p6 \
+     --header-backup-file /boot/luks-header-backup.img</code></pre></div>
+<blockquote>
+<p>A restored header restores the key slots <strong>as they were when it was backed up</strong>.
+If you changed your passphrase since, the <em>old</em> passphrase is what works now.</p>
+</blockquote>
+<hr>
+<h2 id="grub-rescue-prompt--the-esp-stub-was-overwritten">GRUB <code>rescue&gt;</code> prompt — the ESP stub was overwritten</h2>
+<p>Almost always caused by running <code>grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg</code>.
+On Asahi that file must stay a small chainload stub, not a full config.</p>
+<p>From the live USB, mount the EFI partition and restore the stub by hand:</p>
+<div class="codeblock"><pre><code>sudo mount /dev/nvme0n1p4 /mnt/efi
+sudo mount /dev/nvme0n1p5 /mnt/boot         <span class="pl-c"><span class="pl-c">#</span> to read the /boot UUID</span>
+BOOT_UUID=<span class="pl-s"><span class="pl-pds">$(</span>blkid -s UUID -o value /dev/nvme0n1p5<span class="pl-pds">)</span></span>
+
+sudo tee /mnt/efi/EFI/fedora/grub.cfg <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">STUB</span></span>
+<span class="pl-s">search --no-floppy --root-dev-only --fs-uuid --set=dev <span class="pl-smi">$BOOT_UUID</span></span>
+<span class="pl-s">set prefix=(<span class="pl-cce">\$</span>dev)/grub2</span>
+<span class="pl-s">export <span class="pl-cce">\$</span>prefix</span>
+<span class="pl-s">configfile <span class="pl-cce">\$</span>prefix/grub.cfg</span>
+<span class="pl-s"><span class="pl-k">STUB</span></span>
+sudo sync</code></pre></div>
+<p>Install <code>boot-guards/</code> afterwards so it cannot happen again.</p>
+<hr>
+<h2 id="passphrase-change">Passphrase change</h2>
+<p>If you mistyped during <code>luksFormat</code> and want to change it, <strong>pair the change with
+the same KDF flags</strong> — otherwise <code>cryptsetup</code> silently reverts that keyslot to
+its benchmarked defaults (sha256, machine-dependent memory):</p>
+<div class="codeblock"><pre><code>sudo cryptsetup luksChangeKey /dev/nvme0n1p6 \
+     --pbkdf argon2id \
+     --pbkdf-memory 4194304 \
+     --pbkdf-force-iterations 10 \
+     --pbkdf-parallel 4 \
+     --hash sha512</code></pre></div>
+<p>Verify afterwards with <code>cryptsetup luksDump</code>, and take a <strong>fresh header backup</strong> —
+your old backup no longer matches the current key slots.</p>
+<hr>
+<h2 id="emergency-get-the-data-out-without-fixing-the-boot">Emergency: get the data out without fixing the boot</h2>
+<p>If you only need your files back:</p>
+<div class="codeblock"><pre><code>sudo cryptsetup open /dev/nvme0n1p6 fedora_crypt
+sudo mount -o subvol=home /dev/mapper/fedora_crypt /mnt
+<span class="pl-c"><span class="pl-c">#</span> copy /mnt somewhere else, then:</span>
+sudo umount /mnt <span class="pl-k">&amp;&amp;</span> sudo cryptsetup close fedora_crypt</code></pre></div>
+<p>Mount with <code>-o subvolid=5</code> instead to see the top level with every subvolume.</p>
+<hr>
+<h2 id="nothing-here-worked">Nothing here worked</h2>
+<p>You cannot brick the Mac — Apple Silicon DFU / System Recovery always works, and
+macOS is on separate APFS partitions this tooling never touches. Worst case you
+reinstall Fedora Asahi and restore from the backup you took in Step 2.</p>
+<p>When asking for help, include:</p>
+<div class="codeblock"><pre><code>sudo cryptsetup luksDump /dev/nvme0n1p6 <span class="pl-k">|</span> head -30
+cat /etc/crypttab /etc/fstab /etc/kernel/cmdline
+grep options /boot/loader/entries/<span class="pl-k">*</span>.conf</code></pre></div>
+<p>plus the <code>luks-deploy-*.log</code> from the run.</p>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-08-20.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>

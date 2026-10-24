@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fedora Asahi Remix live USB: build and boot it on Apple Silicon — AsahiLocker</title>
+<meta name="description" content="How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/live-usb/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Fedora Asahi Remix live USB: build and boot it on Apple Silicon — AsahiLocker">
+<meta property="og:description" content="How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/live-usb/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-10-23">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/live-usb/#article",
+      "headline": "Build and boot a Fedora Asahi Remix live USB on an Apple Silicon Mac",
+      "description": "How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-10-23",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/live-usb/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/live-usb/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Fedora Asahi Remix live USB: build and boot it on Apple Silicon",
+          "item": "https://doug445.github.io/AsahiLocker/live-usb/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/" aria-current="page">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Fedora Asahi Remix live USB: build and boot it on Apple Silicon</p>
+    <p class="eyebrow">Live USB · asahi-fedora-usb · U-Boot</p>
+    <h1>Build and boot a Fedora Asahi Remix live USB on an Apple Silicon Mac</h1>
+    <p class="lede">How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/LIVE-USB.md"><code>docs/LIVE-USB.md</code></a> from the repository,
+      last changed 2026-10-23.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p><code>luks-deploy.sh</code> must run from outside the system it is encrypting — it refuses
+to encrypt the filesystem it is booted from. This is how to build that USB and
+boot it.</p>
+<p>If the stick will not boot, <strong>start with <a href="#if-the-usb-will-not-boot"><code>usb start</code></a></strong>;
+if that genuinely gets you nowhere, a second minimal Asahi install on the
+internal disk does the same job — see
+<a href="../second-install/">SECOND-INSTALL.md</a>.</p>
+<hr>
+<h2 id="the-apple-silicon-prerequisite">The Apple Silicon prerequisite</h2>
+<blockquote>
+<p><strong>A Mac with only macOS installed cannot boot a USB drive at all.</strong></p>
+</blockquote>
+<p>Apple's iBoot will not boot arbitrary removable media. USB booting only becomes
+possible once <strong>m1n1 + U-Boot</strong> are installed on the <em>internal</em> drive — which is
+exactly what the Asahi installer puts there.</p>
+<p>For this repo that is a non-issue: you already have Fedora Asahi installed, so
+m1n1 and U-Boot are already on the internal NVMe, and U-Boot can boot USB media.
+But it means you cannot use this tooling to encrypt a system that does not exist
+yet — install Fedora Asahi Remix first, then encrypt it.</p>
+<h3 id="m3-m1n1-191-or-later">M3: m1n1 1.9.1 or later</h3>
+<p>On an <strong>M3 MacBook Air</strong> with m1n1 1.6.x, U-Boot finds <strong>no USB mass storage
+at all</strong>: <code>usb start</code> reports no storage device, whatever stick and port you
+try. On the M3 the USB ports are reached over SPMI rather than I2C, and the
+m1n1 that understands this is <strong>1.9.1</strong>. Upgrading m1n1 fixes it; nothing in
+AsahiLocker or the stick is at fault. Reported and solved by
+<a href="https://github.com/ljrk0">@ljrk0</a> in
+<a href="https://github.com/doug445/AsahiLocker/issues/4">issue #4</a>.
+The MacBook Pro 14" M3 (<code>j504</code>) and the M3 iMac use the same chip (<code>t8122</code>)
+and are likely affected, but this is unconfirmed. The M3 Pro / Max / Ultra
+have not been reported either way.</p>
+<p>Check what you are running from Linux. m1n1 records both of its stages in the
+device tree:</p>
+<div class="codeblock"><pre><code><span class="pl-k">for</span> <span class="pl-smi">s</span> <span class="pl-k">in</span> 1 2<span class="pl-k">;</span> <span class="pl-k">do</span> tr -d <span class="pl-s"><span class="pl-pds">'</span>\0<span class="pl-pds">'</span></span> <span class="pl-k">&lt;</span> /proc/device-tree/chosen/asahi,m1n1-stage<span class="pl-smi">$s</span>-version<span class="pl-k">;</span> <span class="pl-c1">echo</span><span class="pl-k">;</span> <span class="pl-k">done</span></code></pre></div>
+<p>The two stages are upgraded separately, and <strong>they carry different risk</strong>.</p>
+<ol>
+<li>
+<p><strong>Stage 2 — do this first.</strong> It lives on the ESP and comes from Fedora's
+<code>m1n1</code> package: <code>sudo dnf upgrade m1n1</code>, then reboot. Fedora 44 has
+shipped 1.9.9 since October 2026. It is an ordinary package update. Then
+try the stick again.</p>
+</li>
+<li>
+<p><strong>Stage 1 — the fix reported on the M3 Air.</strong> It lives in the macOS-side
+boot stub and is only changed by the Asahi installer, run from macOS
+(option <strong><code>m</code> — Upgrade m1n1 on an existing OS</strong>). That option then
+repeats the installer's second step: shut down, boot the install from the
+boot picker, and approve it in recoveryOS. The fix in
+<a href="https://github.com/doug445/AsahiLocker/issues/4">issue #4</a> was this,
+using the development installer (<code>curl https://alx.sh/dev | sh</code>). As of
+<strong>October 2026</strong> the regular installer (v0.9.2) still bundles m1n1
+<strong>1.6.1</strong>.</p>
+<blockquote>
+<p><strong><g-emoji class="g-emoji" alias="warning">⚠️</g-emoji> This step can leave the install unbootable.</strong> On an <strong>M2 Max</strong> with
+system firmware 27 (macOS 27), the approval step showed a blue screen
+saying it was not the correct recoveryOS. It asked for a user name and
+password, rebooted, and showed the same screen again. It failed four
+times in a row. On the M3 Air in #4 the upgrade worked; which macOS
+version that was is not yet known. Read your system firmware version
+before you start:</p>
+<div class="codeblock"><pre><code>tr -d <span class="pl-s"><span class="pl-pds">'</span>\0<span class="pl-pds">'</span></span> <span class="pl-k">&lt;</span> /proc/device-tree/chosen/asahi,system-fw-version<span class="pl-k">;</span> <span class="pl-c1">echo</span></code></pre></div>
+<p>An older stage 2 m1n1 may print <code>unknown</code> here.</p>
+<p><strong>The way back:</strong> the upgrade does not delete the old stage 1. Pointing
+the boot back at it made the M2 Max bootable again. See
+<a href="#if-the-stage-1-upgrade-loops">If the stage 1 upgrade loops</a> below.</p>
+</blockquote>
+</li>
+<li>
+<p><strong>Or skip the USB altogether</strong> with the
+<a href="../second-install/">second-install route</a>. It is the route the first
+M3 MacBook Air encryption took.</p>
+</li>
+</ol>
+<p>It is not yet known whether stage 2 alone is enough. If it is, stage 1 never
+needs touching for this. <code>luks-deploy.sh</code> warns about all of this when it runs
+on an installed M3 system (the run that sends you here for a USB stick).</p>
+<h4 id="if-the-stage-1-upgrade-loops">If the stage 1 upgrade loops</h4>
+<p>This procedure recovered the M2 Max. It puts the <strong>old</strong> stage 1 back in use;
+it does not install the new one.</p>
+<p><strong>Why it works.</strong> Option <code>m</code> does not replace the installed m1n1. It writes
+the new one to <code>Finish Installation.app/Contents/Resources/boot.bin</code> on the
+stub. It then hides the stub as an unfinished install by renaming two files,
+so that the next boot of the stub runs step 2. Only step 2's
+<code>kmutil configure-boot</code> installs the new m1n1. Until that succeeds, the old one
+is still the boot object. When step 2 completes, its "Wrapping up" renames the
+two files back. Doing those two renames by hand returns the stub to its old,
+working m1n1. (Source: the installer's <code>stub.py</code> and <code>step2/step2.sh</code>.)</p>
+<p>Boot <strong>macOS</strong>: hold the power button and pick macOS in the startup picker.
+Then open Terminal. Set <code>V</code> to the Asahi stub volume, named as it appears in
+the startup picker (<code>ls /Volumes</code> lists them):</p>
+<div class="codeblock"><pre><code>V=<span class="pl-s"><span class="pl-pds">"</span>/Volumes/Fedora Asahi<span class="pl-pds">"</span></span></code></pre></div>
+<p><strong>Check first</strong>, so the fix is not applied to the wrong situation:</p>
+<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> 1. The stub is in the hidden state -- both files should exist:</span>
+ls -la <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/.IAPhysicalMedia<span class="pl-pds">"</span></span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/System/Library/CoreServices/SystemVersion-disabled.plist<span class="pl-pds">"</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> 2. The rename targets do not already exist -- both should say "No such file":</span>
+ls <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/IAPhysicalMedia-disabled.plist<span class="pl-pds">"</span></span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/System/Library/CoreServices/SystemVersion.plist<span class="pl-pds">"</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> 3. An m1n1 was installed before. Get the volume group ID, which the</span>
+<span class="pl-c"><span class="pl-c">#</span>    step 2 screen also prints:</span>
+grep <span class="pl-s"><span class="pl-pds">'</span>^VGID=<span class="pl-pds">'</span></span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/Finish Installation.app/Contents/Resources/step2.sh<span class="pl-pds">"</span></span>
+<span class="pl-c"><span class="pl-c">#</span>    ...then the "coih" line must show a hash, not "absent":</span>
+sudo bputil -d -v <span class="pl-k">&lt;</span>VGID<span class="pl-k">&gt;</span> <span class="pl-k">|</span> grep -E <span class="pl-s"><span class="pl-pds">"</span>coih|Security Mode<span class="pl-pds">"</span></span></code></pre></div>
+<p><strong>Check 3 is the important one.</strong> If <code>coih</code> is <code>absent</code>, the original install
+never finished step 2, so there is no old m1n1 to go back to. These commands
+will not help. Run the installer again and use its repair option (<code>p</code>).</p>
+<p><strong>Then undo the two renames.</strong> They are the same two that step 2's "Wrapping
+up" makes. Step 2's <code>kmutil configure-boot</code> is skipped, so the new m1n1 is
+never installed:</p>
+<div class="codeblock"><pre><code>sudo mount -u -w <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span><span class="pl-pds">"</span></span>
+sudo mv <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/.IAPhysicalMedia<span class="pl-pds">"</span></span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/IAPhysicalMedia-disabled.plist<span class="pl-pds">"</span></span>
+sudo mv <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/System/Library/CoreServices/SystemVersion-disabled.plist<span class="pl-pds">"</span></span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$V</span>/System/Library/CoreServices/SystemVersion.plist<span class="pl-pds">"</span></span></code></pre></div>
+<p>The stub's system volume mounts read-only; the <code>mount -u -w</code> makes it writable.</p>
+<p><strong>Afterwards</strong>, <code>bless --info --getBoot</code> should show the stub's system volume
+(<code>/dev/diskXs2</code>). If it does not, choose the Asahi volume as the startup disk
+in System Settings → General → Startup Disk. Then reboot.</p>
+<p>Good to know:</p>
+<ul>
+<li>
+<strong>It is safe to repeat.</strong> Running option <code>m</code> again hides the stub again, and
+the installer accepts either file name. The new m1n1 waits in
+<code>Finish Installation.app/Contents/Resources/boot.bin</code> until a step 2
+succeeds.</li>
+<li>
+<strong>The file dates are misleading.</strong> A rename does not change a file's
+modification time, so the files still show the original install date.
+<code>stat -f "%Sc" &lt;file&gt;</code> shows the change time, which is when option <code>m</code>
+renamed them.</li>
+<li>
+<strong>This does not update m1n1.</strong> It only puts the old one back. An M3 that
+needs the newer m1n1 for USB still has to get step 2 to complete, or use the
+<a href="../second-install/">second-install route</a> instead.</li>
+</ul>
+<hr>
+<h2 id="step-1--build-the-usb">Step 1 — Build the USB</h2>
+<p>Apple Silicon needs an aarch64 image with the Asahi kernel and firmware; a stock
+Fedora Everything ISO will not boot. The established tool is
+<strong><a href="https://github.com/leifliddy/asahi-fedora-usb">leifliddy/asahi-fedora-usb</a></strong>,
+which builds a minimal bootable Fedora Asahi system onto a USB drive with <code>mkosi</code>.</p>
+<p>You can build it <strong>from your existing Fedora Asahi install</strong> (or any aarch64
+Fedora box; on x86_64 you additionally need <code>qemu-user-static</code>).</p>
+<h3 id="1a-install-the-build-dependencies">1a. Install the build dependencies</h3>
+<div class="codeblock"><pre><code>sudo dnf install arch-install-scripts bubblewrap dosfstools e2fsprogs \
+                 gdisk mkosi openssl pandoc rsync systemd-container</code></pre></div>
+<blockquote>
+<p><code>mkosi</code> moves fast and the build script tracks specific versions. Check the
+upstream README for the currently supported range; if your distro's <code>mkosi</code> is
+too new, install a known-good version instead:</p>
+<div class="codeblock"><pre><code>python3 -m pip install --user git+https://github.com/systemd/mkosi.git@v25</code></pre></div>
+</blockquote>
+<h3 id="1b-clone-the-builder">1b. Clone the builder</h3>
+<div class="codeblock"><pre><code>git clone https://github.com/leifliddy/asahi-fedora-usb.git
+<span class="pl-c1">cd</span> asahi-fedora-usb</code></pre></div>
+<h3 id="1c-choosing-a-drive">1c. Choosing a drive</h3>
+<p>Not every USB stick works here, and the ones that fail do not fail gracefully —
+they build fine under Linux and are then simply absent from U-Boot. There is no
+list of blessed hardware; what there is, is experience:</p>
+<ul>
+<li>
+<strong>SanDisk drives have been the most reliable</strong> in practice. If you have a
+choice of sticks, start with one.</li>
+<li>
+<strong>Have a second stick ready.</strong> Swapping the drive is the cheapest test there
+is, and it resolves more of these than any amount of U-Boot poking.</li>
+<li>
+<strong>Try a different port</strong>, and a <strong>powered hub</strong> if you have one. Some sticks
+draw more at enumeration than the port will give them before U-Boot has
+initialised the controller.</li>
+<li>A drive that works perfectly on a PC tells you nothing about this. U-Boot's
+USB stack is not Linux's, and it is far less forgiving of slow or quirky
+controllers.</li>
+</ul>
+<p>None of that is a reason to give up on encrypting the machine: if no stick
+works, <a href="../second-install/">SECOND-INSTALL.md</a> gets you there without one.</p>
+<h3 id="1d-identify-your-usb-drive--carefully">1d. Identify your USB drive — carefully</h3>
+<div class="codeblock"><pre><code>lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,VENDOR,LABEL</code></pre></div>
+<p>Find the entry matching your USB stick by <strong>size and model</strong>. Confirm it is not
+<code>nvme0n1</code> — that is the internal drive with macOS and your Fedora install on it.</p>
+<blockquote>
+<p><strong>The build script repartitions and erases the entire target device.</strong> Naming
+the wrong device here destroys whatever is on it. Verify twice.</p>
+</blockquote>
+<h3 id="1e-build">1e. Build</h3>
+<p>Run as a real root shell — the script rejects <code>sudo</code> on itself:</p>
+<div class="codeblock"><pre><code>sudo su -
+<span class="pl-c1">cd</span> /path/to/asahi-fedora-usb
+./build.sh -d /dev/sda        <span class="pl-c"><span class="pl-c">#</span> ← substitute YOUR usb device</span></code></pre></div>
+<p>The build downloads a Fedora package set and installs it to the drive; expect
+10–30 minutes depending on your connection.</p>
+<p>To rebuild onto a drive you have already used, <code>-w</code> wipes it without
+repartitioning:</p>
+<div class="codeblock"><pre><code>./build.sh -wd /dev/sda</code></pre></div>
+<h3 id="what-you-get">What you get</h3>
+<p>A 3-partition USB (vfat EFI + ext4 boot + ext4 root) running Fedora Asahi with
+the 16 KB-page Asahi kernel. <strong>The root password is <code>fedora</code>.</strong></p>
+<p>It ships with everything <code>luks-deploy.sh</code> needs — <code>cryptsetup</code>, <code>btrfs-progs</code>,
+<code>dracut-asahi</code>, <code>grub2-efi-aa64</code>, <code>grubby</code>, <code>e2fsprogs</code> — plus two handy rescue
+helpers:</p>
+<div class="codeblock"><pre><code>/usr/local/sbin/chroot.asahi     <span class="pl-c"><span class="pl-c">#</span> mounts the internal Fedora install at /mnt and chroots in</span>
+/usr/local/sbin/umount.asahi     <span class="pl-c"><span class="pl-c">#</span> unmounts it again</span></code></pre></div>
+<p>To get online from the live USB:</p>
+<div class="codeblock"><pre><code>nmcli dev wifi connect <span class="pl-k">&lt;</span>ssid<span class="pl-k">&gt;</span> password <span class="pl-k">&lt;</span>password<span class="pl-k">&gt;</span></code></pre></div>
+<h3 id="1f-copy-this-tooling-onto-the-usb">1f. Copy this tooling onto the USB</h3>
+<p>While the drive is still mounted on your build machine:</p>
+<div class="codeblock"><pre><code>sudo ./build.sh mount
+sudo /usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
+sudo sync
+sudo ./build.sh umount</code></pre></div>
+<p>Note the absolute <code>/usr/bin/cp</code> — if your shell aliases <code>cp</code> to <code>cp -i</code>, an
+unnoticed prompt can silently skip files during a recursive copy.</p>
+<hr>
+<h2 id="step-2--boot-the-usb">Step 2 — Boot the USB</h2>
+<p>Three methods, easiest first.</p>
+<h3 id="method-a--add-it-to-the-internal-grub-menu-easiest">Method A — add it to the internal GRUB menu (easiest)</h3>
+<p>With the USB plugged in, run this <strong>on the installed system</strong>:</p>
+<div class="codeblock"><pre><code>sudo grub2-mkconfig -o /boot/grub2/grub.cfg</code></pre></div>
+<p><code>os-prober</code> picks up the USB and adds an entry (e.g. <code>/dev/sda3</code>) to your normal
+GRUB menu. Reboot, pick it, done.</p>
+<blockquote>
+<p><strong>If no USB entry appears</strong>, os-prober is probably disabled — recent Fedora
+defaults to <code>GRUB_DISABLE_OS_PROBER=true</code>. Set it to <code>false</code> in
+<code>/etc/default/grub</code> (and <code>sudo dnf install os-prober</code> if the tool is absent),
+re-run the command, and revert the setting afterwards if you prefer. Or skip
+this method entirely and use Method B or C below — they need no config change.</p>
+</blockquote>
+<blockquote>
+<p><strong>Watch the output path.</strong> <code>-o /boot/grub2/grub.cfg</code> is correct. Never run
+<code>grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg</code> — on Asahi that ESP file must
+stay a small chainload stub, and overwriting it drops an encrypted system into
+a GRUB rescue prompt. That is precisely what <code>boot-guards/</code> defends against.</p>
+</blockquote>
+<p>Re-run the same command after you are finished to drop the stale USB entry.</p>
+<h3 id="method-b--u-boot-eficonfig-persistent-boot-order">Method B — U-Boot <code>eficonfig</code> (persistent boot order)</h3>
+<p>Power on with the USB connected and interrupt the autoboot countdown (mash a key
+at <strong>"Hit any key to stop autoboot"</strong>) to reach the <code>=&gt;</code> prompt.</p>
+<pre lang="text"><code>=&gt; eficonfig
+</code></pre></div>
+<p>Then, in the menu:</p>
+<ol>
+<li>Choose <strong>"Change Boot Order"</strong>.</li>
+<li>Put <strong><code>usb0</code></strong> at the top. The reliable way is to deselect everything except
+<code>usb0</code>, hit <strong>Save</strong>, then re-enter "Change Boot Order" (now <code>usb0</code> is on top)
+and also select the first <strong><code>Fedora</code></strong> entry.</li>
+<li>
+<strong>Save</strong>, then <strong>Quit</strong> (or press Escape twice) to return to the <code>=&gt;</code> prompt.</li>
+<li>Boot with:</li>
+</ol>
+<pre lang="text"><code>=&gt; run bootcmd
+</code></pre></div>
+<p>or</p>
+<pre lang="text"><code>=&gt; bootd
+</code></pre></div>
+<p>You should land in the USB drive's GRUB menu. With this order saved, the machine
+boots the USB when it is plugged in and the internal drive when it is not.</p>
+<h3 id="method-c--u-boot-bootflow-one-shot-nothing-persisted">Method C — U-Boot <code>bootflow</code> (one-shot, nothing persisted)</h3>
+<p>Best when you want to boot the USB exactly once without changing any settings:</p>
+<pre lang="text"><code>=&gt; usb start
+=&gt; bootflow scan -l
+=&gt; bootflow select &lt;N&gt;     # the entry on usb0 — NOT nvme0, that's the internal disk
+=&gt; bootflow info           # sanity check before committing
+=&gt; bootflow boot
+</code></pre></div>
+<p>Full command reference: <strong><a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a></strong></p>
+<hr>
+<h2 id="if-the-usb-will-not-boot">If the USB will not boot</h2>
+<p><strong>Do <code>usb start</code> before you conclude anything.</strong> This is the single most common
+dead end, and it looks convincing: no activity LED on the stick, nothing in
+<code>bootflow scan -l</code>, the drive apparently unpowered until Linux boots later and
+lights it up. That is U-Boot's normal state — the USB subsystem is not
+initialised, and the port is not powered, until something asks for it. Nothing
+asks for it on its own.</p>
+<pre lang="text"><code>=&gt; usb start          # powers the port and enumerates; prints what it finds
+=&gt; usb tree           # the stick should be listed here now
+=&gt; bootflow scan -l   # re-scan only after usb start has reported a device
+</code></pre></div>
+<p>If <code>usb start</code> prints <code>0 Storage Device(s) found</code>, then work through:</p>
+<ol>
+<li>
+<strong>Check U-Boot can see it at all:</strong> <code>bootdev list</code>. If <code>usb0</code> is absent, the
+drive is invisible to U-Boot — no boot method will work.</li>
+<li>
+<strong>On an M3, check m1n1 first.</strong> m1n1 older than 1.9.1 leaves U-Boot
+with no USB storage on any stick or port — see
+<a href="#m3-m1n1-191-or-later">M3: m1n1 1.9.1 or later</a>.</li>
+<li>
+<strong>Diagnose:</strong> <code>bootflow scan -ale</code> lists entries <em>including</em> failures and why.</li>
+<li>
+<strong>Try another port</strong>, then <strong>another USB stick</strong> — and prefer a SanDisk if
+you have one, they have been the most consistently visible to U-Boot here.
+Plenty of drives enumerate fine under Linux and never appear to U-Boot at
+all; some are simply extremely slow. This is a firmware/controller quirk,
+not a problem with your build. A powered hub sometimes helps where a
+bus-powered stick does not. See
+<a href="#1c-choosing-a-drive">Choosing a drive</a>.</li>
+<li>
+<strong>Verify the build actually completed</strong> — re-run <code>./build.sh -wd /dev/sdX</code>.</li>
+</ol>
+<p>Still nothing? Do not give up on encrypting the machine — take the other route.
+A second, minimal Asahi install on the internal NVMe is a supported environment
+for <code>luks-deploy.sh</code>, and the script has explicit guards for the fact that the
+tool and its target then share a disk:
+<strong><a href="../second-install/">SECOND-INSTALL.md</a></strong>.</p>
+<h3 id="boot-starts-then-hangs-on-a-dev-disk-by-uuid-job">Boot starts, then hangs on a <code>dev-disk-by-uuid</code> job</h3>
+<p>GRUB appears, the kernel starts, and then boot stops on a line like:</p>
+<pre lang="text"><code>A start job is running for /dev/disk/by-uuid/d747cb2a-… (… / no limit)
+</code></pre></div>
+<p>where the UUID is the USB's root partition (<code>sdX3</code>). U-Boot read the stick
+fine — that is how the kernel and initramfs got loaded — but once Linux takes
+over, a USB device that was attached at power-on is never enumerated, so the
+initramfs waits forever for its root filesystem. This is an Asahi kernel/U-Boot
+bug, not a problem with your build:
+<a href="https://github.com/AsahiLinux/linux/issues/554">AsahiLinux/linux#554</a>.</p>
+<p><strong>Workaround: unplug the stick and plug it back in while it is hung.</strong> The
+replug makes Linux enumerate it, the job completes, and boot continues on its
+own. Root is not mounted yet, so this is safe.</p>
+<p>It has nothing to do with <code>resume=</code> — do not go editing the kernel command line
+for it. If the replug does not help, use
+<strong><a href="../second-install/">SECOND-INSTALL.md</a></strong>, which needs no USB at all.</p>
+<hr>
+<h2 id="once-booted">Once booted</h2>
+<p>Log in as <code>root</code> / <code>fedora</code>, then continue with
+<strong><a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#step-3--run-the-encryption">INSTALL.md → Step 3</a></strong>:</p>
+<div class="codeblock"><pre><code>sudo /root/AsahiLocker/bin/luks-deploy.sh</code></pre></div>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-23.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>
