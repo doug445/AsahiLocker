@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encrypt Asahi Linux from a second Fedora Asahi install — AsahiLocker</title>
+<meta name="description" content="Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/second-install/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Encrypt Asahi Linux from a second Fedora Asahi install — AsahiLocker">
+<meta property="og:description" content="Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/second-install/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-09-21">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/second-install/#article",
+      "headline": "Encrypting Fedora Asahi Remix from a second, minimal Asahi install",
+      "description": "Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-09-21",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/second-install/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/second-install/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Encrypt Asahi Linux from a second Fedora Asahi install",
+          "item": "https://doug445.github.io/AsahiLocker/second-install/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/" aria-current="page">Second install</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Encrypt Asahi Linux from a second Fedora Asahi install</p>
+    <p class="eyebrow">No live USB · second install · LUKS2</p>
+    <h1>Encrypting Fedora Asahi Remix from a second, minimal Asahi install</h1>
+    <p class="lede">Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/SECOND-INSTALL.md"><code>docs/SECOND-INSTALL.md</code></a> from the repository,
+      last changed 2026-09-21.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p>The live USB is the recommended way to run <code>luks-deploy.sh</code>. This is the other
+way: install a second, minimal Fedora Asahi alongside your real one, boot
+that, encrypt from there, then delete it and give the space back to macOS.</p>
+<p>It exists because the live USB route has a hard dependency on something Apple
+Silicon is not reliable about — U-Boot enumerating a USB mass storage device.
+When a stick never lights up at the U-Boot prompt, no amount of <code>bootflow</code>
+juggling helps, and a 20 GiB sibling install on the internal NVMe is the
+dependable way through.</p>
+<blockquote>
+<p><strong>Before you commit to this: try <code>usb start</code>.</strong>
+By far the most common reason a stick looks dead at the <code>=&gt;</code> prompt is that
+U-Boot has not enumerated (or powered) the port yet. It does not do so until
+something asks it to, so a drive with no activity LED and no entry in
+<code>bootflow scan -l</code> is the expected state <em>before</em> <code>usb start</code>, not evidence
+that the machine cannot boot USB.</p>
+<pre lang="text"><code>=&gt; usb start          # power + enumerate; prints the devices it finds
+=&gt; usb tree           # confirm the stick is actually there
+=&gt; bootflow scan -l   # now re-scan
+</code></pre></div>
+<p>Only if <code>usb start</code> reports no storage devices — after trying another port
+and another stick — is this document the right answer. See
+<a href="../live-usb/#if-the-usb-will-not-boot">LIVE-USB.md</a>.</p>
+</blockquote>
+<hr>
+<h2 id="what-you-are-building">What you are building</h2>
+<p>Your disk starts out looking roughly like this, and gains a third install in
+the middle:</p>
+<pre lang="text"><code>  macOS container            ~246 GB      ← shrink this by 20 GB
+  AsahiRecovery  EFI/boot/root  20 GB     ← the new minimal install
+  Fedora         EFI/boot/root ~256 GB    ← the system you want encrypted
+</code></pre></div>
+<p>The minimal install is disposable. It never holds your data, it gets deleted
+at the end, and macOS reclaims its space.</p>
+<hr>
+<h2 id="step-1--install-the-second-asahi">Step 1 — Install the second Asahi</h2>
+<p>Run the standard Asahi installer <strong>from macOS</strong>, exactly as you did the first
+time:</p>
+<div class="codeblock"><pre><code>curl https://alx.sh <span class="pl-k">|</span> sh</code></pre></div>
+<p>At the prompts:</p>
+<ul>
+<li>
+<strong>Resize the macOS container</strong> down by 20 GB. (The installer offers to do
+this; do not resize the Fedora container.)</li>
+<li>Choose <strong>Fedora Asahi Remix … Minimal</strong> into that free space.</li>
+<li>Name it something unmistakable — <code>AsahiRecovery</code> — so you can tell the two
+installs apart later, both in the boot picker and in the partition menus.</li>
+</ul>
+<p>20 GB is comfortable; the minimal image itself needs far less, and the
+installer will refuse a size it considers too small.</p>
+<p>The newly installed system becomes the <strong>default boot target</strong>. To boot
+anything else from now on, hold the <strong>power button</strong> through startup until
+"Loading startup options…" appears, then pick the one you want. That is also
+how you get back into macOS at the end.</p>
+<h2 id="step-2--bring-the-minimal-install-up">Step 2 — Bring the minimal install up</h2>
+<p>It drops you at a text console with a first-boot setup. A root password is
+enough; you do not need a user account.</p>
+<p>Then get networking and <code>git</code>:</p>
+<div class="codeblock"><pre><code>nmcli device                                          <span class="pl-c"><span class="pl-c">#</span> is the wifi radio there?</span>
+nmcli device wifi connect <span class="pl-k">&lt;</span>SSID<span class="pl-k">&gt;</span> password <span class="pl-s"><span class="pl-pds">'</span>&lt;secret&gt;<span class="pl-pds">'</span></span>  <span class="pl-c"><span class="pl-c">#</span> or: nmtui</span>
+dnf install -y git
+git clone https://github.com/doug445/AsahiLocker.git</code></pre></div>
+<h2 id="step-3--encrypt-the-other-install">Step 3 — Encrypt the <em>other</em> install</h2>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/luks-deploy.sh</code></pre></div>
+<p>This is the part that needs your attention, because for the first time both
+the tool and the target live on the same disk. The script knows it:</p>
+<ul>
+<li>
+<p>It reports <code>Environment: installed</code> and names the partition you booted from.</p>
+</li>
+<li>
+<p>Every partition this minimal install is using — its root, its <code>/boot</code>, its
+ESP, its swap — is listed as <strong><code>IN USE by this running system</code></strong>, is never
+the recommended default, and <strong>cannot be selected</strong>. Typing its device path
+in by hand is refused too.</p>
+</li>
+<li>
+<p><code>ROOT</code>, <code>BOOT</code> and <code>EFI</code> default to your real install. The root default
+prefers the larger of two same-labelled candidates; <code>BOOT</code> and <code>EFI</code> then
+default to the partitions immediately below the root you chose, which on an
+Asahi layout are that install's own.</p>
+</li>
+<li>
+<p>Before the KDF benchmark it prints both systems side by side and asks you to
+type <code>SIBLING</code>:</p>
+<pre lang="text"><code>  Running FROM  : /dev/nvme0n1p9  [fedora]  20G
+  Encrypting    : /dev/nvme0n1p6  [fedora]  250G
+</code></pre></div>
+<p>The second line is the system that will ask for a passphrase at boot. If
+they are the wrong way round, abort.</p>
+</li>
+<li>
+<p>Later, the target's own <code>/etc/fstab</code> is read and the <code>BOOT</code> and <code>EFI</code> UUIDs
+are cross-checked against it. Picking another install's boot partition stops
+the run.</p>
+</li>
+</ul>
+<p>Everything after that is identical to the live-USB route:
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#step-3--run-the-encryption">INSTALL.md → Step 3</a>.</p>
+<h2 id="step-4--get-the-recovery-material-off-this-install">Step 4 — Get the recovery material off this install</h2>
+<p><strong>Do this before you delete anything.</strong></p>
+<p>On the live-USB route the LUKS header backup, the pre-encryption state and the
+recovery key land on the stick, which you keep. Here they land in
+<code>AsahiLocker/pre-luks-state-&lt;timestamp&gt;/</code> on a partition you are about to
+erase.</p>
+<p>The script knows this. While the encrypted target is still mounted it copies
+that directory onto the target's own <code>/root/asahilocker-pre-luks-state-&lt;timestamp&gt;/</code>
+— readable only after the volume is unlocked — and the closing banner says
+whether that succeeded. It unmounts everything as it exits, so there is no
+moment afterwards in which you could make that copy yourself.</p>
+<p>That copy survives the cleanup in Step 6. But it lives <em>inside</em> the volume it
+unlocks, which makes the recovery key in it useless for the one case a
+recovery key exists for: a forgotten passphrase. So, before you erase this
+install, put the directory on a USB stick as well:</p>
+<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> on the rescue install, with a stick mounted at /run/media/$USER/STICK</span>
+/usr/bin/cp -a /root/AsahiLocker/pre-luks-state-<span class="pl-k">*</span> /run/media/<span class="pl-smi">$USER</span>/STICK/</code></pre></div>
+<p>The header backup is additionally at <code>/boot/luks-header-backup.img</code> on the
+target. See <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#step-6--secure-the-recovery-bundle">INSTALL.md → Step 6</a>.</p>
+<h2 id="step-5--verify-before-you-burn-the-bridge">Step 5 — Verify before you burn the bridge</h2>
+<p>Reboot (hold <strong>power</strong> to reach the boot picker) into the encrypted install,
+enter the passphrase, and finish the normal post-encryption steps. Only once
+it boots reliably on its own should you remove the minimal install — while it
+still exists it is a working rescue environment for exactly the problems a
+half-configured LUKS setup produces.</p>
+<h2 id="step-6--remove-the-minimal-install-from-macos">Step 6 — Remove the minimal install from macOS</h2>
+<p>Boot macOS by holding the <strong>power button</strong> through startup.</p>
+<p><strong>First, change the default boot target.</strong> System Settings → General →
+Startup Disk → pick your encrypted Fedora. If you delete the install that is
+still the default, you are left picking the boot target by hand every time.</p>
+<p>Then follow the Asahi Linux
+<a href="https://asahilinux.org/docs/platform/partitioning-cheatsheet/">Partitioning Cheat Sheet</a>.
+Use <code>diskutil</code> on the command line. <strong>Do not use the graphical Disk Utility</strong>
+— Asahi's documentation is explicit that it mishandles non-standard layouts
+and can damage them.</p>
+<div class="codeblock"><pre><code>diskutil list                <span class="pl-c"><span class="pl-c">#</span> read this carefully; do it before every command</span></code></pre></div>
+<p>The shape of it is:</p>
+<ol>
+<li>Delete the minimal install's <strong>stub APFS container</strong> — the synthesized
+<code>/dev/diskN</code> whose volume is named after that install:
+<code>diskutil apfs deleteContainer diskN</code>
+</li>
+<li>Erase its three <strong>partitions</strong> (EFI, boot, root) back to free space, one at
+a time: <code>diskutil eraseVolume free free disk0sN</code>
+</li>
+<li>Grow the macOS container into the gap:
+<code>diskutil apfs resizeContainer disk0s2 0</code>
+</li>
+</ol>
+<blockquote>
+<p><strong>Every one of those identifiers will be different on your machine, and
+macOS renumbers synthesized disks between boots.</strong> Re-run <code>diskutil list</code>
+and re-read it before each command. Each Asahi install owns its <em>own</em> stub
+container; deleting the wrong one takes out the bootloader of the install
+you meant to keep. Cross-check against <code>lsblk -f</code> from Linux, or against the
+partition list the Asahi installer prints, before you delete anything.</p>
+</blockquote>
+<p>Removing the partitions also removes the entry from Startup Options — Apple
+Silicon cleans those up with the container, so you are not left with a stale
+boot entry.</p>
+<hr>
+<h2 id="why-not-just-run-it-on-the-live-system">Why not just run it on the live system?</h2>
+<p>You cannot encrypt a filesystem from inside itself: <code>cryptsetup reencrypt</code>
+would be rewriting the blocks the running kernel is reading and writing, and
+the half-finished state is not recoverable by re-running anything. The script
+refuses outright — this is the one gate with no override word.</p>
+<h2 id="see-also">See also</h2>
+<ul>
+<li>
+<a href="../live-usb/">LIVE-USB.md</a> — the recommended route, and <code>usb start</code>
+</li>
+<li>
+<a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a> — getting to the <code>=&gt;</code> prompt</li>
+<li>
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">INSTALL.md</a> — the full walkthrough every route shares</li>
+<li>
+<a href="../recovery/">RECOVERY.md</a> — when something has already gone wrong</li>
+</ul>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-09-21.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>

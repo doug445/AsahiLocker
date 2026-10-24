@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asahi Linux disk encryption FAQ — AsahiLocker</title>
+<meta name="description" content="Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/faq/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Asahi Linux disk encryption FAQ — AsahiLocker">
+<meta property="og:description" content="Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/faq/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-10-14">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/faq/#article",
+      "headline": "Asahi Linux disk encryption: frequently asked questions",
+      "description": "Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-10-14",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/faq/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/faq/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Asahi Linux disk encryption FAQ",
+          "item": "https://doug445.github.io/AsahiLocker/faq/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/" aria-current="page">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Asahi Linux disk encryption FAQ</p>
+    <p class="eyebrow">FAQ · Fedora Asahi Remix · LUKS2</p>
+    <h1>Asahi Linux disk encryption: frequently asked questions</h1>
+    <p class="lede">Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/FAQ.md"><code>docs/FAQ.md</code></a> from the repository,
+      last changed 2026-10-14.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<h2 id="can-i-encrypt-fedora-asahi-remix-after-installing-it">Can I encrypt Fedora Asahi Remix <em>after</em> installing it?</h2>
+<p>Yes — that is exactly what this is for. The Asahi installer has no full-disk
+encryption option, so encrypting normally means starting over. <code>luks-deploy.sh</code>
+converts the existing btrfs root in place instead, so your installed system,
+subvolumes, snapshots and btrfs UUID all survive.</p>
+<h2 id="does-this-touch-or-wipe-macos">Does this touch or wipe macOS?</h2>
+<p>No. macOS lives on separate APFS partitions that this tooling never reads or
+writes. Only the btrfs Linux root partition is converted. Apple Silicon DFU and
+System Recovery remain available regardless.</p>
+<h2 id="why-do-i-have-to-type-a-passphrase-at-every-boot-cant-it-use-the-secure-enclave">Why do I have to type a passphrase at every boot? Can't it use the Secure Enclave?</h2>
+<p>There is no TPM on Apple Silicon, and Asahi has no interface to seal a key in the
+Secure Enclave, so there is nowhere to store an auto-unlock key that would still
+be safe. The KDF re-runs in the initramfs on every boot and you type the
+passphrase. That is a platform constraint, not a shortcoming of this kit — and
+it is why the KDF here is argon2id and the passphrase advice is not optional:
+<a href="../argon2id/#how-this-compares-with-filevault--the-kdf-macos-gives-the-same-disk">How this compares with FileVault</a>
+lays out what the Secure Enclave does for macOS and what stands in for it here.</p>
+<h2 id="which-kdf-does-this-use-and-can-i-change-it">Which KDF does this use, and can I change it?</h2>
+<p>argon2id, always — it is <em>memory-hard</em>, and that memory requirement is what caps
+how many guesses a GPU or ASIC can run at once. You can tune its memory,
+iteration and thread costs freely, at deploy time or on an existing volume; see
+<a href="../argon2id/#changing-the-kdf-on-a-volume-that-already-exists">Changing the KDF on a volume that already exists</a>.
+What you cannot sensibly do is swap the algorithm out — see
+<a href="../argon2id/#never-use-pbkdf2">Never use pbkdf2</a>.</p>
+<h2 id="why-is-boot-left-unencrypted">Why is <code>/boot</code> left unencrypted?</h2>
+<p>GRUB has to read the kernel and initramfs before anything is unlocked. The
+encrypted root is opened by the <em>initramfs</em>, not by GRUB, so keeping <code>/boot</code>
+plain avoids putting GRUB on the unlock path at all — where the KDF is limited
+by however much heap the <strong>firmware</strong> grants it, and where GRUB 2.12 (current
+in Fedora 44) has no argon2 support whatsoever. With GRUB 2.14 (which does
+support argon2id), that firmware limit has always been 1 GiB on x86 vendor
+UEFI; under Asahi's U-Boot it is higher — this project's self-built GRUB 2.14
+measured 2 GiB working on an M2 Max. Exceeding whatever the firmware affords
+does not mean a slow boot, it means no boot: GRUB fails to allocate. And at
+exactly 4 GiB it is worse than a failure — a 32-bit overflow in its
+<code>argon2_init</code> wraps the allocation to zero, so it proceeds instead of rejecting
+the parameters. The trade-off of keeping <code>/boot</code> plain is that it is unsigned;
+see <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#risks--read-this">Risks</a>.</p>
+<h2 id="what-happens-if-the-encryption-is-interrupted--power-loss-a-crash-a-closed-lid">What happens if the encryption is interrupted — power loss, a crash, a closed lid?</h2>
+<p>Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run
+<code>luks-deploy.sh</code> and it detects the interrupted state and resumes it
+(<code>--resume-only</code>), running <code>cryptsetup repair</code> first if the journal is dirty.
+That exact sequence — including a hard kill mid-reencrypt — is what the CI
+loopback test exercises on every push.</p>
+<h2 id="will-a-quantum-computer-break-this">Will a quantum computer break this?</h2>
+<p>No — not the part of the system this tool builds. The quantum threat is
+specific, and none of it lands on a LUKS2 volume at rest:</p>
+<ul>
+<li>
+<strong>Shor's algorithm breaks public-key cryptography</strong> — RSA, ECDH, ECDSA. LUKS2
+contains none: the header holds keyslots, salts and a digest, and the data
+is symmetric AES. There is no public key to factor, and nothing was ever
+transmitted, so "harvest now, decrypt later" — which is about recorded TLS
+key exchanges — has no analogue for a disk in a drawer.</li>
+<li>
+<strong>Grover's algorithm halves symmetric key strength</strong>, and that is the whole of
+its effect on AES. This tool uses AES-256-XTS (a 512-bit XTS key), so the
+theoretical quantum brute force is 2^128 operations — the same class as
+brute-forcing AES-128 classically, which is considered infeasible for the
+age of the universe. NIST rates AES-256 as quantum-safe at its highest
+category; it is the recommendation <em>for</em> the post-quantum era, not a victim
+of it.</li>
+<li>
+<strong>The sha512 in the header</strong> (anti-forensic splitter, volume-key digest) is a
+preimage target, not a collision target; Grover leaves it at 2^256.</li>
+<li>
+<strong>The passphrase is the only lever, and argon2id guards it.</strong> Grover could in
+principle square-root a passphrase search — but every one of those guesses
+is a full argon2id evaluation, 1 to 4 GiB of memory-hard, sequential work,
+and nobody has a design for running that inside a quantum computer at any
+useful rate. The memory cost that stops a GPU fleet stops this too. If you
+want margin anyway, the fix is available today and costs nothing: ten
+diceware words instead of eight.</li>
+</ul>
+<p>What quantum <em>will</em> eventually change, for context: TLS and SSH key exchange,
+GPG or age files encrypted to RSA/ECC public keys, and the RSA signatures that
+Secure Boot verifies — including on a UKI this tool re-signs. Those are the
+firmware and protocol ecosystems' migrations, they are not a way into the data
+on this disk, and the disk does not need to wait for them.</p>
+<h2 id="can-i-run-it-unattended-across-several-machines">Can I run it unattended across several machines?</h2>
+<p>Yes. <code>LUKS_PROFILE</code> or the <code>LUKS_PBKDF_*</code> variables pin the KDF,
+<code>LUKS_TARGET_ROOT</code> / <code>_BOOT</code> / <code>_EFI</code> pin the partitions, and
+<code>LUKS_PASSPHRASE_FILE</code> supplies the passphrase, so no menu appears. Read
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/FLEET.md">docs/FLEET.md</a> first — there is a real UUID-uniqueness footgun
+when imaging several boxes from one source.</p>
+<h2 id="will-this-work-on-an-m1-with-only-8-gb-of-ram">Will this work on an M1 with only 8 GB of RAM?</h2>
+<p>Yes, on any profile including <code>aggressive</code> at 4 GiB. The memory cost only has to
+be allocatable in the initramfs, which has the machine entirely to itself. A base
+M1 is slower than an M2 Max at identical parameters because argon2id is
+memory-bandwidth-bound — which is why the installer benchmarks your machine
+instead of quoting someone else's numbers.</p>
+<h2 id="does-it-work-on-anything-other-than-asahi">Does it work on anything other than Asahi?</h2>
+<p>No. AsahiLocker is for Fedora Asahi Remix on Apple Silicon (aarch64) only. The
+boot guards, the ESP stub handling and the U-Boot documentation are
+Apple-Silicon-specific, and Apple Silicon is the only platform it is developed
+and tested on.</p>
+<p>For anything else, use <strong><a href="https://github.com/doug445/LinuxLocker">LinuxLocker</a></strong>.
+Same in-place LUKS2 conversion, aimed at the rest of the world: it identifies
+the distro and package manager, resolves the filesystem tools once it knows
+what the target uses, handles systemd-boot as well as GRUB, and rebuilds and
+re-signs Unified Kernel Images for Secure Boot. AsahiLocker is the Apple
+Silicon sibling of it.</p>
+<h2 id="how-do-i-check-what-i-actually-ended-up-with">How do I check what I actually ended up with?</h2>
+<div class="codeblock"><pre><code>sudo cryptsetup luksDump /dev/nvme0n1p6</code></pre></div>
+<p>Look for <code>Cipher: aes-xts-plain64</code>, a 512-bit key, <code>PBKDF: argon2id</code> with
+the memory and iteration figures from the profile you chose, and under
+<em>Data segments</em> <code>sector: 4096 [bytes]</code>. A volume made by a release before
+1.12.0 shows <code>sector: 512 [bytes]</code> — it is exactly as secure, just doing eight
+XTS operations per filesystem block instead of one. It can be changed only by
+a full in-place re-encryption (<code>cryptsetup reencrypt --sector-size 4096 /dev/nvme0n1p6</code>, from the live USB, header backed up first — hours, and the
+same interrupt-and-resume rules as the original encryption); <code>luks-tune.sh</code>
+does not offer it, because it is not a KDF change.</p>
+<h2 id="changing-your-kdf-after-installation">Changing your KDF after installation</h2>
+<p>You are not stuck with the profile you picked. <code>luksConvertKey</code> re-wraps a
+keyslot's key under new argon2id parameters <strong>in place</strong> — no passphrase
+change, no re-encryption, not a byte of filesystem data touched, seconds of
+work. The header-backup step, commands for all four tiers (including
+<code>paranoid</code>), and the strength graph are in
+<a href="../argon2id/#changing-the-kdf-on-a-volume-that-already-exists">Changing the KDF on a volume that already exists</a>;
+the menu version is <a href="https://github.com/doug445/AsahiLocker/blob/main/bin/luks-tune.sh"><code>bin/luks-tune.sh</code></a>.</p>
+<hr>
+<p>More detail: <a href="../argon2id/">CRYPTO.md</a> for the KDF, <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">INSTALL.md</a> for
+the walkthrough, <a href="../recovery/">RECOVERY.md</a> when something has gone wrong, and
+the <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md">README</a> for the overview.</p>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-14.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>

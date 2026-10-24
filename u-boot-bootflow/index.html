@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U-Boot bootflow: boot a USB or kernel on an Apple Silicon Mac — AsahiLocker</title>
+<meta name="description" content="Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/u-boot-bootflow/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="U-Boot bootflow: boot a USB or kernel on an Apple Silicon Mac — AsahiLocker">
+<meta property="og:description" content="Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/u-boot-bootflow/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-09-18">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/u-boot-bootflow/#article",
+      "headline": "U-Boot bootflow: booting a USB stick or a specific kernel on Apple Silicon",
+      "description": "Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-09-18",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/u-boot-bootflow/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/u-boot-bootflow/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "U-Boot bootflow: boot a USB or kernel on an Apple Silicon Mac",
+          "item": "https://doug445.github.io/AsahiLocker/u-boot-bootflow/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/" aria-current="page">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › U-Boot bootflow: boot a USB or kernel on an Apple Silicon Mac</p>
+    <p class="eyebrow">U-Boot · bootflow · Asahi Linux</p>
+    <h1>U-Boot bootflow: booting a USB stick or a specific kernel on Apple Silicon</h1>
+    <p class="lede">Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/UBOOT-BOOTFLOW.md"><code>docs/UBOOT-BOOTFLOW.md</code></a> from the repository,
+      last changed 2026-09-18.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p>The boot chain is <strong>iBoot → m1n1 s1 → m1n1 s2 → U-Boot → bootflow → GRUB → Linux</strong>.
+<code>bootflow</code> (U-Boot's <em>bootstd</em> subsystem) is where you manually choose what to boot —
+e.g. the Fedora Asahi live USB you need in order to run <code>luks-deploy.sh</code>, or a specific kernel when GRUB/BLS
+is misbehaving.</p>
+<h2 id="get-to-the-u-boot-prompt">Get to the U-Boot prompt</h2>
+<p>Interrupt the autoboot countdown: spam a key (any key / <code>Esc</code> / <code>Ctrl-C</code>) at the
+<strong>"Hit any key to stop autoboot"</strong> line. You land at the <code>=&gt;</code> prompt.</p>
+<h2 id="core-sequence">Core sequence</h2>
+<pre lang="text"><code>bootflow scan -l        # scan every bootdev; list entries as they're found
+bootflow list           # re-show the table afterwards (add -e to include errors)
+bootflow select 3       # pick by NUMBER — or by NAME: bootflow select usb0.bootdev
+bootflow info           # confirm what's selected  (add -d to dump full details)
+bootflow boot           # boot the selected entry
+</code></pre></div>
+<h2 id="bootflow-scan-flags">
+<code>bootflow scan</code> flags</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>flag</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-l</code></td>
+<td>
+<strong>l</strong>ist bootflows as they are scanned</td>
+</tr>
+<tr>
+<td><code>-e</code></td>
+<td>show <strong>e</strong>rrors for entries that failed to load</td>
+</tr>
+<tr>
+<td><code>-a</code></td>
+<td>collect <strong>a</strong>ll bootflows, including ones that error</td>
+</tr>
+<tr>
+<td><code>-b</code></td>
+<td>
+<strong>b</strong>oot each valid bootflow as it is found</td>
+</tr>
+<tr>
+<td><code>-G</code></td>
+<td>skip <strong>G</strong>lobal bootmeths</td>
+</tr>
+</tbody>
+</table></div>
+<p>Handy combos:</p>
+<pre lang="text"><code>bootflow scan -lb       # scan, list, and boot the FIRST valid entry (just-boot-something)
+bootflow scan -ale      # DIAGNOSTIC: list everything incl. failures + why they failed
+bootflow scan usb0      # scope the scan to a single bootdev (see 'bootdev list')
+</code></pre></div>
+<h2 id="when-the-entry-you-want-isnt-listed">When the entry you want isn't listed</h2>
+<pre lang="text"><code>bootdev list            # which boot devices U-Boot sees (nvme0, usb0, mmc…)
+bootmeth list           # active boot methods (extlinux, efi, script, …)
+bootflow scan -ale      # show why a device's bootflow failed (missing bootmeth, no ESP, …)
+</code></pre></div>
+<h2 id="persist-the-boot-order">Persist the boot order</h2>
+<pre lang="text"><code>env print boot_targets              # current order
+env set boot_targets "usb nvme"     # try USB before internal NVMe
+env save                            # persist to U-Boot env
+</code></pre></div>
+<h2 id="where-the-efi-boot-entries-live-and-why-efibootmgr-lies-to-you">Where the EFI boot entries live (and why <code>efibootmgr</code> lies to you)</h2>
+<p><code>boot_targets</code> above is U-Boot's <em>own</em> environment. The <strong>EFI</strong> boot entries —
+<code>Boot####</code>, <code>BootOrder</code>, what <code>efibootmgr</code> shows under Linux — are a different
+store: U-Boot keeps them in one file on the EFI System Partition,
+<code>/boot/efi/ubootefi.var</code> (<code>lib/efi_loader/efi_var_file.c</code>), and picks that ESP
+by the PARTUUID the stub names in the device tree
+(<code>/chosen/asahi,efi-system-partition</code>; <code>arch/arm/mach-apple/board.c</code>). U-Boot
+reads the file at boot and writes it only from its own boot-time code: an
+entry shim's fallback registers at boot persists; an entry <code>efibootmgr</code>
+creates or deletes from Linux is a change to U-Boot's in-memory runtime copy
+and is gone at the next boot (<code>efi_set_variable_runtime</code>; Kconfig
+<code>EFI_RT_VOLATILE_STORE</code>: <em>"The OS will be responsible for syncing the RAM
+contents to the file, otherwise any changes made during runtime won't persist
+reboots"</em>).</p>
+<p>So: to remove a stale entry for good, edit the file —
+<code>boot-guards/bin/uboot-efivar.py</code> does (<code>list</code>, <code>stale</code>, <code>prune-stale</code>,
+<code>remove NNNN</code>), and the <code>clean-stale-efi-entries</code> guard runs it at every boot.
+With no <code>Boot####</code> entry that works, U-Boot's boot manager tries the default
+loader on the stub's own ESP before any other partition
+(<code>lib/efi_loader/efi_bootmgr.c</code>, <em>try EFI system partition</em>), so a deleted or
+unreadable <code>ubootefi.var</code> still boots — the ESP's <code>EFI/BOOT/BOOTAA64.EFI</code>
+(shim) runs, and shim's fallback writes the entry back.</p>
+<h2 id="the-flow-for-this-repo-boot-the-live-usb-to-encrypt">The flow for this repo (boot the live USB to encrypt)</h2>
+<pre lang="text"><code>=&gt; bootflow scan -l
+   # find the entry on the usb0 bootdev (NOT nvme0 = the internal disk)
+=&gt; bootflow select &lt;N&gt;       # the usb0 entry
+=&gt; bootflow info             # sanity check: it's the USB, not the NVMe
+=&gt; bootflow boot
+   # → boots Fedora Asahi live → sudo /root/AsahiLocker/bin/luks-deploy.sh
+</code></pre></div>
+<h2 id="notes--gotchas">Notes / gotchas</h2>
+<ul>
+<li>
+<strong><code>usb start</code> first</strong> if USB devices don't appear: some builds need
+<code>usb start</code> (or <code>usb reset</code>) before <code>bootflow scan</code> sees <code>usb0</code>.</li>
+<li>Selecting by <strong>name</strong> is more stable than by number across reboots — the
+numeric index can shift if a device appears/disappears.</li>
+<li>This is separate from GRUB. U-Boot is the UEFI firmware layer; once bootflow
+hands off to shim/GRUB, use GRUB's own menu and editor. Fedora Asahi normally
+drives GRUB from BLS entries in <code>/boot/loader/entries/</code> — which is why
+<code>luks-deploy.sh</code> updates those with <code>grubby</code> rather than relying on
+<code>grub2-mkconfig</code> alone.</li>
+<li>
+<code>bootflow boot</code> on a failed/partial entry returns to the <code>=&gt;</code> prompt with an
+error rather than hanging — re-scan with <code>-ale</code> to see the reason.</li>
+</ul>
+<h2 id="if-the-usb-never-shows-up">If the USB never shows up</h2>
+<p>Some U-Boot builds do not enumerate USB until told to, and some ports are simply
+not usable for boot. In order:</p>
+<ol>
+<li>
+<code>usb start</code> (or <code>usb reset</code>), then <code>bootflow scan -l</code> again.</li>
+<li>
+<code>bootdev list</code> — if <code>usb0</code> is absent entirely, U-Boot cannot see the drive.</li>
+<li>Try a different physical port, and a different USB stick. Some controllers
+(notably certain Phison-based drives) enumerate under Linux but stay invisible
+to U-Boot's <code>bootdev list</code>. That is a firmware/controller issue, not a problem
+with your install.</li>
+<li>
+<code>bootflow scan -ale</code> shows <em>why</em> a device's bootflow failed.</li>
+</ol>
+<p><em>Kept alongside the LUKS scripts so it is available on the live USB when you need it.</em></p>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-09-18.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>

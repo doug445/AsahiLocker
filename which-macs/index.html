@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Which Macs run Fedora Asahi Remix with LUKS encryption (M1–M3) — AsahiLocker</title>
+<meta name="description" content="Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/which-macs/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Which Macs run Fedora Asahi Remix with LUKS encryption (M1–M3) — AsahiLocker">
+<meta property="og:description" content="Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/which-macs/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-10-23">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/which-macs/#article",
+      "headline": "Which Apple Silicon Macs work: M1, M2 and M3 compatibility for AsahiLocker",
+      "description": "Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.",
+      "datePublished": "2026-10-24",
+      "dateModified": "2026-10-23",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/which-macs/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/which-macs/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Which Macs run Fedora Asahi Remix with LUKS encryption (M1–M3)",
+          "item": "https://doug445.github.io/AsahiLocker/which-macs/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../which-macs/" aria-current="page">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Which Macs run Fedora Asahi Remix with LUKS encryption (M1–M3)</p>
+    <p class="eyebrow">M1 · M2 · M3 · laptops and desktops</p>
+    <h1>Which Apple Silicon Macs work: M1, M2 and M3 compatibility for AsahiLocker</h1>
+    <p class="lede">Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/COMPATIBILITY.md"><code>docs/COMPATIBILITY.md</code></a> from the repository,
+      last changed 2026-10-23.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p>Every M-series Mac, laptop and desktop, and what is actually known about
+AsahiLocker on each. Nothing in the tooling is model-specific — partitions,
+subvolumes, the boot layout, the disk's sector size and the initramfs contents
+are all read at run time — so the question is never "does the script know this
+Mac" but "does Fedora Asahi Remix boot it, and has anyone run the encryption
+there".</p>
+<h2 id="how-to-read-the-tiers">How to read the tiers</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A — production</strong></td>
+<td>Encrypted by this tooling and used daily; the passphrase typed at every boot</td>
+</tr>
+<tr>
+<td><strong>B — reported</strong></td>
+<td>An end-to-end run written up by someone else, with the result stated</td>
+</tr>
+<tr>
+<td><strong>C — expected</strong></td>
+<td>Fedora Asahi Remix supports the machine, and no code path here depends on anything the machine does differently. Untested by this project</td>
+</tr>
+<tr>
+<td><strong>D — device tree only</strong></td>
+<td>The kernel this tooling runs on ships a device tree for the machine, but Asahi installer and boot-chain support is not confirmed here. Treat as unsupported until Asahi says otherwise</td>
+</tr>
+</tbody>
+</table></div>
+<p>The device-tree column is a fact about the shipped kernel: on Fedora Asahi
+Remix 44, <code>7.1.13-402.asahi</code>, <code>/usr/lib/modules/&lt;kver&gt;/dtb/apple/</code> carries
+one file per machine below. A device tree is necessary for Linux to boot the
+machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
+<h2 id="the-matrix">The matrix</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>SoC</th>
+<th>Machine</th>
+<th>Form</th>
+<th>Tier</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<strong>M1</strong> <code>t8103</code>
+</td>
+<td>MacBook Air (2020) <code>j313</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td>Asahi-supported since 2022</td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 13" (2020) <code>j293</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td>Asahi-supported since 2022</td>
+</tr>
+<tr>
+<td></td>
+<td>Mac mini (2020) <code>j274</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td>Asahi-supported since 2022</td>
+</tr>
+<tr>
+<td></td>
+<td>iMac 24" (2021) <code>j456</code> / <code>j457</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td>Asahi-supported since 2022</td>
+</tr>
+<tr>
+<td>
+<strong>M1 Pro</strong> <code>t6000</code>
+</td>
+<td>MacBook Pro 14" <code>j314s</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td>same SoC as the machine below</td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 16" <code>j316s</code>
+</td>
+<td>laptop</td>
+<td><strong>A</strong></td>
+<td>This project's M1 Pro: <code>apple,j316s</code>, 16k-page kernel, 4096-byte NVMe, btrfs sectorsize 4096, LUKS2 argon2id, passphrase at every boot</td>
+</tr>
+<tr>
+<td>
+<strong>M1 Max</strong> <code>t6001</code>
+</td>
+<td>MacBook Pro 14" / 16" <code>j314c</code> / <code>j316c</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>Mac Studio <code>j375c</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M1 Ultra</strong> <code>t6002</code>
+</td>
+<td>Mac Studio <code>j375d</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M2</strong> <code>t8112</code>
+</td>
+<td>MacBook Air 13" (2022) <code>j413</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Air 15" (2023) <code>j415</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 13" (2022) <code>j493</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>Mac mini (2023) <code>j473</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M2 Pro</strong> <code>t6020</code>
+</td>
+<td>MacBook Pro 14" / 16" <code>j414s</code> / <code>j416s</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>Mac mini (2023) <code>j474s</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M2 Max</strong> <code>t6021</code>
+</td>
+<td>MacBook Pro 14" <code>j414c</code>
+</td>
+<td>laptop</td>
+<td><strong>A</strong></td>
+<td>The author's daily machine — see <a href="../which-macs/#tested-systems">TESTED-SYSTEMS.md</a>: production volume plus the 1.12.1 end-to-end run on a test image</td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 16" <code>j416c</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td>same SoC</td>
+</tr>
+<tr>
+<td></td>
+<td>Mac Studio <code>j475c</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M2 Ultra</strong> <code>t6022</code>
+</td>
+<td>Mac Studio <code>j475d</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>Mac Pro (2023) <code>j180d</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td>See the Mac Pro note below</td>
+</tr>
+<tr>
+<td>
+<strong>M3</strong> <code>t8122</code>
+</td>
+<td>MacBook Air 13" / 15" (2024) <code>j613</code> / <code>j615</code>
+</td>
+<td>laptop</td>
+<td><strong>B</strong></td>
+<td>M3 MacBook Air, September 2026, via the second-install route: encryption completed, passphrase prompt at boot, verified working. Noah Petherbridge, kirsle.net. <strong>Live USB needs m1n1 ≥ 1.9.1</strong>: older m1n1 leaves U-Boot blind to USB storage — see <a href="../live-usb/#m3-m1n1-191-or-later">LIVE-USB.md</a> (<a href="https://github.com/doug445/AsahiLocker/issues/4">#4</a>)</td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 14" (2023) <code>j504</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td>Asahi M3 support landed September 2026</td>
+</tr>
+<tr>
+<td></td>
+<td>iMac 24" (2023) <code>j433</code> / <code>j434</code>
+</td>
+<td>desktop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M3 Pro</strong> <code>t6030</code>
+</td>
+<td>MacBook Pro 14" / 16" <code>j514s</code> / <code>j516s</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M3 Max</strong> <code>t6031</code> / <code>t6034</code>
+</td>
+<td>MacBook Pro 14" / 16" <code>j514c</code> / <code>j516c</code> / <code>j514m</code> / <code>j516m</code>
+</td>
+<td>laptop</td>
+<td>C</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M3 Ultra</strong> <code>t6032</code>
+</td>
+<td>Mac Studio (2025) <code>j575d</code>
+</td>
+<td>desktop</td>
+<td>D</td>
+<td>device tree shipped; not confirmed further here</td>
+</tr>
+<tr>
+<td>
+<strong>M4</strong> <code>t8132</code>
+</td>
+<td>MacBook Air 13" / 15" (2025) <code>j713</code> / <code>j715</code>
+</td>
+<td>laptop</td>
+<td>D</td>
+<td>device tree shipped; not confirmed further here</td>
+</tr>
+<tr>
+<td></td>
+<td>MacBook Pro 14" (2024) <code>j773g</code>
+</td>
+<td>laptop</td>
+<td>D</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>Mac mini (2024) <code>j623</code>
+</td>
+<td>desktop</td>
+<td>D</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td>iMac 24" (2024) <code>j604</code>
+</td>
+<td>desktop</td>
+<td>D</td>
+<td></td>
+</tr>
+<tr>
+<td>
+<strong>M4 Pro / M4 Max</strong> <code>t6040</code> / <code>t6041</code>
+</td>
+<td>MacBook Pro, Mac mini, Mac Studio</td>
+<td>—</td>
+<td><strong>none</strong></td>
+<td>No device tree in the shipped kernel. Linux does not boot these yet</td>
+</tr>
+</tbody>
+</table></div>
+<p>Model names are matched to the <code>j</code>-codes from Asahi's platform list. If a
+specific code matters to you, confirm it against <code>/proc/device-tree/model</code> on
+the machine.</p>
+<h2 id="what-the-tooling-actually-touches-and-why-none-of-it-is-model-specific">What the tooling actually touches, and why none of it is model-specific</h2>
+<ul>
+<li>
+<strong>Disk.</strong> Apple's internal NVMe presents 4096-byte logical sectors on every
+M-series Mac, which is what the 4096-byte LUKS sector logic is built around.
+The script reads the sector size and the btrfs sectorsize at run time and
+never assumes either.</li>
+<li>
+<strong>Keyboard at the passphrase prompt.</strong> Fedora Asahi's dracut ships the whole
+Apple input stack in every initramfs regardless of which Mac built it —
+<code>spi-hid-apple</code> + <code>spi-apple</code> (M1 laptops), <code>dockchannel-hid</code> (M2 and later
+laptops), <code>hid-apple</code>, <code>dwc3-apple</code> + <code>xhci-plat-hcd</code> (USB). Verified by
+<code>lsinitrd</code> on the M1 Pro above. The deploy's own dracut config adds only
+<code>crypt dm btrfs</code> and pins <code>dm-crypt</code>; it leaves input to the distro, and its
+verification pass checks that an input driver is present.</li>
+<li>
+<strong>Power.</strong> The battery check walks <code>/sys/class/power_supply</code> and applies only
+where a battery exists. On a desktop it finds none and moves on.</li>
+<li>
+<strong>Boot chain.</strong> m1n1 → U-Boot → GRUB, the ESP stub, <code>ubootefi.var</code>, BLS
+entries: identical across the line. The boot guards do not look at the model.</li>
+</ul>
+<h2 id="desktops-read-this-before-you-start">Desktops: read this before you start</h2>
+<p>The laptops are where this has been run. Desktops share every code path, but
+they change the operating conditions in ways the script cannot detect:</p>
+<ol>
+<li>
+<strong>A Bluetooth keyboard cannot type the passphrase.</strong> There is no Bluetooth
+stack in the initramfs. An Apple Magic Keyboard paired over Bluetooth — the
+default on an iMac, and common on a Mac mini or Studio — is a brick wall at
+the LUKS prompt. <strong>Plug a keyboard in over USB</strong> (a Magic Keyboard on its
+charging cable enumerates as USB HID and works) before the first encrypted
+boot, and keep one within reach after. The deploy's initramfs check will
+report <code>OK</code> here, because the USB driver <em>is</em> present; it has no way to know
+your only keyboard is wireless.</li>
+<li>
+<strong>No battery means no buffer.</strong> The script refuses to run on a laptop below
+50% without AC because power loss mid-encryption is the worst case. A desktop
+has no battery at all: a mains dip is an instant interruption. The encryption
+is resumable — re-run the script and it finishes with <code>--resume-only</code> — but
+a UPS turns a recovery exercise into a non-event. Use one.</li>
+<li>
+<strong>Have a display attached for the first encrypted boot.</strong> The prompt is on
+the console. A headless Mac mini or Studio can still be unlocked blind over a
+USB keyboard, but you want to see the first one. On M3 and later, external
+display support through DCP is still maturing in Asahi; check that your
+monitor works under Linux <em>before</em> encrypting, not after.</li>
+<li>
+<strong>Extra disks score like the internal one.</strong> A Mac Pro with PCIe NVMe cards,
+or any Mac with a Thunderbolt NVMe enclosure, presents more than one
+<code>nvme*</code> device, and the partition menu's NVMe preference applies to all of
+them. The label scoring and the fstab cross-check still identify the right
+install; read the menu rather than pressing Enter on reflex.</li>
+</ol>
+<p><strong>Mac Pro (2023).</strong> Same M2 Ultra as the Mac Studio and the same device tree
+family; the differences are the PCIe slots and their contents. Nothing here
+cares, but nothing here has been run on one either.</p>
+<h2 id="what-would-move-a-machine-up-a-tier">What would move a machine up a tier</h2>
+<p>A run on any C or D machine, written up like the M2 Max entry in
+<a href="../which-macs/#tested-systems">TESTED-SYSTEMS.md</a>: the model string, the kernel, what the
+deploy reported for sector sizes, the <code>ALL CHECKS PASSED</code> line, and whether the
+passphrase prompt took keystrokes from the keyboard you actually use. Open an
+issue or a PR with it.</p>
+
+<h2 id="tested-systems">Tested systems</h2>
+<p>The machines behind the ✅ claims: every row here has had a real in-place
+encryption by <code>luks-deploy.sh</code> and boots from it, or an end-to-end run of the
+script on a disk image that was then booted — with what was found on the way.
+Nothing is listed on the strength of a dry run or a unit test alone. Same
+format as <a href="https://github.com/doug445/linux-backup-system/blob/main/docs/TESTED-SYSTEMS.md">linux-backup-system's</a>.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Distro (arch)</th>
+<th>Machine</th>
+<th>Layout</th>
+<th>Verified</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fedora Asahi Remix 44 (aarch64)</td>
+<td>2023 MacBook Pro 14" (M2 Max, 12 cores, 32 GB RAM, 8 TB Apple NVMe with 4096-byte sectors, Broadcom BCM4388 Wi-Fi; macOS 13.5 firmware, m1n1 1.6.1, U-Boot 2026.07)</td>
+<td>btrfs root (<code>root</code> + <code>home</code> subvolumes) on LUKS2 argon2id <strong><code>aggressive</code></strong> (4 GiB × 10, 4 threads, sha512 AF hash and volume-key digest; <strong>512-byte encryption sectors — a volume made before 1.12.0</strong>), unlocked by passphrase in the initramfs by dracut + systemd-cryptsetup (<code>rd.luks.uuid=</code>), ext4 <code>/boot</code>, ESP at <code>/boot/efi</code> beside the Asahi stub (<code>m1n1/</code>, <code>vendorfw/</code>, <code>ubootefi.var</code>), shim → GRUB 2.12 on <code>arm64-efi</code> behind m1n1/U-Boot, BLS entries, 16k-page kernel 7.1.13, SELinux enforcing, KDE Plasma 6.7 on Wayland</td>
+<td>
+<strong>in-place encryption ✅ — production</strong>: the author's daily machine, the passphrase typed at every boot. <strong>End-to-end run on a test image ✅ — 2026-09-19, 1.12.1</strong>: a 60 GiB loop image on a USB drive holding a plain, unencrypted copy of this very system (booted in QEMU first — login in 50 s — to prove the rig), then <code>luks-deploy.sh</code> for real: <code>fast</code> profile, recovery key, the partition's end moved down 3,584 bytes so 4096-byte sectors were possible (the GPT reserved tail), in-place encryption, <code>ALL CHECKS PASSED (12-point gate)</code>, then booted in QEMU with the passphrase to a login prompt in <strong>40 s</strong>; passphrase and recovery key both open it; <code>save-luks-recovery-bundle.sh --target /mnt</code> bundled it. <strong>Found and fixed on the way</strong>: 4096-byte sectors had been unreachable on any partition ending on the GPT tail (now the typed <code>ALIGN</code> choice); the recovery bundle in live-USB mode had copied every LUKS header plugged into the rescue system, and on a rescue system whose own root is encrypted it had bundled the rescue machine (<code>--target</code> added). Not a run on this Mac's own disk — that volume predates 1.12.0 and keeps its 512-byte sectors</td>
+</tr>
+<tr>
+<td>Fedora Asahi Remix (aarch64)</td>
+<td>MacBook Pro (M1 Pro)</td>
+<td>btrfs root on LUKS2 argon2id <strong><code>aggressive</code></strong> (4 GiB × 10) — <strong>9.5 s unlock measured from the boot journal</strong>, the figure the KDF profile table is built on — GRUB on <code>arm64-efi</code> behind m1n1/U-Boot</td>
+<td>
+<strong>in-place encryption ✅ — production</strong>, the development platform since August 2026. Once left unbootable by an earlier release: <code>main</code> had been rewound behind the v1.8.2/1.8.3 tags, so the machine ran a <code>luks-deploy.sh</code> without the issue #2 fix (a <code>grep</code> for <code>GRUB_CMDLINE_LINUX</code> — a line Fedora Asahi Remix does not have — exiting stage 6c silently under <code>pipefail</code>); recovered from the live USB in configuration-only mode, and the fix is on <code>main</code> since 2026-09-02</td>
+</tr>
+</tbody>
+</table></div>
+<p>The loopback suite (<code>tests/loopback-core-test.sh</code>, 36 checks) runs on every
+push on aarch64 runners: shrink, in-place reencrypt with the
+script's exact flags, header and content survival, recovery-key enrolment
+with the AF hash pinned, resume after <code>--init-only</code> and after a hard kill
+(<code>cryptsetup repair</code>), 4096-byte sectors on a 4Kn and a 512-byte device, and
+the GPT-tail alignment run by the script's own function. It is not a boot.</p>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-23.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>
