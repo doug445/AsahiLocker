@@ -315,6 +315,10 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
   right after GRUB, it is probably waiting — type the passphrase and press Enter.
   (The deploy strips the boot splash, and `post-encryption-setup.sh` restores
   it, precisely so this prompt stays visible on the first encrypted boots.)
+- By selecting 4GB Argon2id, you openly open yourself to "rubber hose cryptography"
+  A non-democratic adversary will beat you to death to get the passphrase. Consider
+  using VeraCrypt for plausible deniability, or claim your LUKS passphrase is on
+  on USB drive that you cannot find (tested, works).
 
 ---
 
