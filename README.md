@@ -374,6 +374,15 @@ Every question and its full answer is in **[docs/FAQ.md](docs/FAQ.md)**:
 
 ## Documentation
 
+Seven of these are also published as pages of the guide site, easier to read and
+search: [live USB](https://doug445.github.io/AsahiLocker/live-usb/) ·
+[U-Boot bootflow](https://doug445.github.io/AsahiLocker/u-boot-bootflow/) ·
+[second install](https://doug445.github.io/AsahiLocker/second-install/) ·
+[which Macs](https://doug445.github.io/AsahiLocker/which-macs/) ·
+[argon2id and AES-XTS](https://doug445.github.io/AsahiLocker/argon2id/) ·
+[recovery](https://doug445.github.io/AsahiLocker/recovery/) ·
+[FAQ](https://doug445.github.io/AsahiLocker/faq/).
+
 | Doc | Covers |
 |-----|--------|
 | [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Every M-series Mac, laptop and desktop, tiered by evidence — and what a desktop changes at the passphrase prompt |
