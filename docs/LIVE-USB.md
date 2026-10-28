@@ -264,14 +264,23 @@ nmcli dev wifi connect <ssid> password <password>
 
 ### 1f. Copy this tooling onto the USB
 
-While the drive is still mounted on your build machine:
+Still in the root shell from 1e — no `sudo`:
 
 ```bash
-sudo ./build.sh mount
-sudo /usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
-sudo sync
-sudo ./build.sh umount
+./build.sh mount
+findmnt mnt_usb          # must print a line; if it prints nothing, stop here
+/usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
+ls mnt_usb/root/AsahiLocker/bin/luks-deploy.sh
+sync
+./build.sh umount
 ```
+
+**Do not put `sudo` in front of `build.sh`.** It refuses to run under
+`sudo`, prints a one-line notice and exits *successfully*. Nothing is
+mounted, and the `cp` then quietly creates `mnt_usb/root/` as an ordinary
+folder on your build machine. The stick boots fine with no AsahiLocker on it
+([issue #3](https://github.com/doug445/AsahiLocker/issues/3)). The `findmnt`
+line catches that.
 
 Note the absolute `/usr/bin/cp` — if your shell aliases `cp` to `cp -i`, an
 unnoticed prompt can silently skip files during a recursive copy.
@@ -422,3 +431,8 @@ Log in as `root` / `fedora`, then continue with
 ```bash
 sudo /root/AsahiLocker/bin/luks-deploy.sh
 ```
+
+If that says `command not found`, the copy in [1f](#1f-copy-this-tooling-onto-the-usb)
+never reached the stick.
+[INSTALL.md → Step 3](INSTALL.md#step-3--run-the-encryption) shows how to fetch it from the
+internal disk without rebuilding.
