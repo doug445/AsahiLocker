@@ -98,12 +98,22 @@ The root password on the resulting USB is **`fedora`**.
 
 ### Copy this tooling onto the USB
 
+Stay in the root shell you built from — no `sudo`:
+
 ```bash
-sudo ./build.sh mount
-sudo /usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
-sudo sync
-sudo ./build.sh umount
+./build.sh mount
+findmnt mnt_usb          # must print a line; if it prints nothing, stop here
+/usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
+ls mnt_usb/root/AsahiLocker/bin/luks-deploy.sh
+sync
+./build.sh umount
 ```
+
+> **Do not put `sudo` in front of `build.sh`.** It refuses to run under
+> `sudo`, prints a one-line notice and exits *successfully*. Nothing is
+> mounted, and the `cp` then quietly creates `mnt_usb/root/` as an ordinary
+> folder on your build machine. The stick boots fine with no AsahiLocker on
+> it. The `findmnt` line catches that.
 
 > **Why put it on the USB** rather than run it from the internal disk? Otherwise
 > the script sits on the very filesystem it is about to encrypt. On the USB it
@@ -112,8 +122,8 @@ sudo ./build.sh umount
 > Note the absolute `/usr/bin/cp` — if your shell aliases `cp` to `cp -i`, an
 > unnoticed prompt can silently skip files during a recursive copy.
 
-Alternatively you can run it from the mounted (not-yet-encrypted) target after
-booting the live USB — see Step 3.
+Forgot, or it did not land? You can still fetch it from the internal disk
+after booting the live USB — see Step 3.
 
 ---
 
@@ -158,12 +168,25 @@ From the live environment:
 sudo /root/AsahiLocker/bin/luks-deploy.sh
 ```
 
-Or, if you did not copy it to the USB, mount the target and run it from there:
+**`command not found`?** The copy never reached the stick. Fetch it from
+your installed system instead. From the live USB, as root:
 
 ```bash
-sudo mount -o subvol=root /dev/nvme0n1p6 /mnt
-sudo /mnt/home/<user>/AsahiLocker/bin/luks-deploy.sh
+lsblk -f /dev/nvme0n1                     # your Fedora root: the btrfs partition
+mount -o subvol=home /dev/nvme0n1pN /mnt  # N from the line above
+find /mnt -name luks-deploy.sh            # note the folder that holds bin/
+/usr/bin/cp -a /mnt/<user>/AsahiLocker /root/
+umount /mnt
+/root/AsahiLocker/bin/luks-deploy.sh
 ```
+
+Two things to know:
+
+- **Use `subvol=home`, not `subvol=root`.** Fedora Asahi keeps `/home` in its
+  own subvolume, so under `subvol=root` the `home` folder is empty.
+- **Copy it, do not run it from `/mnt`.** The script has to unmount the
+  target before it can encrypt it, and it cannot do that while it is running
+  from it.
 
 The script will ask you to choose a KDF profile (see the prompt table below); no
 flags are needed. To pick one non-interactively instead:
