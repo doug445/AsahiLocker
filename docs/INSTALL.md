@@ -168,8 +168,22 @@ From the live environment:
 sudo /root/AsahiLocker/bin/luks-deploy.sh
 ```
 
-**`command not found`?** The copy never reached the stick. Fetch it from
-your installed system instead. From the live USB, as root:
+**`command not found`?** The copy never reached the stick. Download it
+straight onto the stick instead; the live image has `wget` and `tar`. From the
+live USB, as root, set `V` to the latest version on the
+[Releases page](https://github.com/doug445/AsahiLocker/releases):
+
+```bash
+nmcli dev wifi connect <ssid> password <password>
+V=2.0.3
+cd /root
+wget https://github.com/doug445/AsahiLocker/archive/refs/tags/v$V.tar.gz
+tar xzf v$V.tar.gz && mv AsahiLocker-$V AsahiLocker
+/root/AsahiLocker/bin/luks-deploy.sh
+```
+
+No network on the stick? If you cloned AsahiLocker into your home folder on
+the installed system, copy it from there:
 
 ```bash
 lsblk -f /dev/nvme0n1                     # your Fedora root: the btrfs partition
@@ -180,7 +194,7 @@ umount /mnt
 /root/AsahiLocker/bin/luks-deploy.sh
 ```
 
-Two things to know:
+Two things to know about that route:
 
 - **Use `subvol=home`, not `subvol=root`.** Fedora Asahi keeps `/home` in its
   own subvolume, so under `subvol=root` the `home` folder is empty.
