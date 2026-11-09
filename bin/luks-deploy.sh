@@ -535,7 +535,9 @@ while [ -b "$RUNNING_ROOT_BASE" ] \
     _depth=$((_depth + 1))
 done
 unset _depth _next
-RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)
+# || true: in a RAM rescue / is "rootfs", not a block device, and lsblk exits 32,
+# which set -e + pipefail would turn into a silent script exit.
+RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1 || true)
 log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($RUNNING_ROOT_DEV)"
 RUNNING_ROOT_NOTE=""
 if [ "$RUNNING_ROOT_BASE" != "$RUNNING_ROOT_DEV" ]; then
@@ -633,7 +635,7 @@ m1n1_usb_check() {
 # fstype alone is not the tell — removability is.
 ENV_KIND="installed"
 case "$CURRENT_ROOT_FSTYPE" in
-    overlay|tmpfs|ramfs|squashfs|iso9660|erofs) ENV_KIND="live" ;;
+    overlay|tmpfs|ramfs|rootfs|squashfs|iso9660|erofs) ENV_KIND="live" ;;
 esac
 if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
     [ "$(cat "/sys/block/$RUNNING_ROOT_DISK/removable" 2>/dev/null || echo 0)" = "1" ] \
@@ -1736,6 +1738,7 @@ else
         --reduce-device-size 32M \
         --resilience checksum \
         --verbose \
+        --force-password \
         "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
         "$TARGET_ROOT"
 
@@ -1937,7 +1940,10 @@ case "$RK_CHOICE" in
             # --hash sha512: a new keyslot gets its own AF hash, and without an
             # explicit value cryptsetup stamps its compiled-in sha256 — the
             # same silent downgrade luks-tune.sh had, verified on cryptsetup 2.8.
+            # --force-password: skip pwquality's cracklib dictionary check; the
+            # dictionary isn't in a RAM rescue image and its absence fails the call.
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
+                   --force-password \
                    --hash sha512 \
                    --pbkdf argon2id \
                    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
