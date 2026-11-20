@@ -368,6 +368,49 @@ kdf_fmt_ms() {
     else awk -v m="$ms" 'BEGIN{ printf "%.1f s", m/1000 }'; fi
 }
 
+# ─── cracklib dictionary helpers ─────────────────────────────────────────────
+# cryptsetup runs a passphrase typed at the terminal through libpwquality, and
+# its dictionary check needs a cracklib dictionary on disk. Where the running
+# environment has none (the dracut RAM rescue, docs/RAM-RESCUE.md), discovery
+# lends this run the target install's own copy (under /run, plus a
+# pwquality.conf.d drop-in); see "Passphrase quality dictionary" below.
+# Defined up here because cleanup() removes both.
+
+# The dictionary base path libpwquality uses under root $1 ("" = the running
+# system): dictpath from pwquality.conf, else cracklib's compiled-in default.
+# libpwquality reads pwquality.conf.d/*.conf first and pwquality.conf last,
+# each overriding the one before, so the last dictpath in that order wins.
+pwq_dict_base() {
+    local root="${1:-}" d
+    d=$(sed -n 's/^[[:space:]]*dictpath[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+            "$root"/etc/security/pwquality.conf.d/*.conf \
+            "$root/etc/security/pwquality.conf" 2>/dev/null \
+        | tail -n 1 || true)
+    echo "${d:-/usr/share/cracklib/pw_dict}"
+}
+
+# True when cracklib can open the dictionary at base $1: the index (.pwi) and
+# the word file (.pwd, or .pwd.gz where cracklib is built with zlib). The .hwm
+# file is optional to cracklib.
+pwq_dict_present() {
+    [ -f "$1.pwi" ] && { [ -f "$1.pwd" ] || [ -f "$1.pwd.gz" ]; }
+}
+
+PWQ_BORROWED=()          # files written for this run (dictionary copy, drop-in)
+PWQ_BORROWED_DIRS=()     # directories made for them, deepest first
+pwq_unborrow() {
+    local f
+    for f in ${PWQ_BORROWED[@]+"${PWQ_BORROWED[@]}"}; do
+        rm -f "$f" 2>/dev/null || true
+    done
+    # rmdir, never rm -r: only a directory this run made, and only if empty.
+    for f in ${PWQ_BORROWED_DIRS[@]+"${PWQ_BORROWED_DIRS[@]}"}; do
+        rmdir "$f" 2>/dev/null || true
+    done
+    PWQ_BORROWED=()
+    PWQ_BORROWED_DIRS=()
+}
+
 # ─── Cleanup Trap ────────────────────────────────────────────────────────────
 cleanup() {
     local exit_code=$?
@@ -392,6 +435,7 @@ cleanup() {
     umount /mnt 2>/dev/null || true
     cryptsetup close ${LUKS_NAME} 2>/dev/null || true
     rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+    pwq_unborrow
     if [ $exit_code -ne 0 ]; then
         echo ""
         echo "Recovery options:"
@@ -1236,6 +1280,94 @@ if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     [ -d "/mnt_temp/${HOME_SUBVOL}" ] || warn "Home subvolume '$HOME_SUBVOL' directory not found — may be nested."
 fi
 
+# ─── Passphrase quality dictionary ──────────────────────────────────────────
+# Without a cracklib dictionary, cryptsetup refuses EVERY typed passphrase with
+# "error loading dictionary". The dracut RAM rescue carries none, but the
+# install being encrypted almost always does (Fedora: cracklib-dicts), and its
+# root is mounted read-only right here. Lend it to this run, so the quality
+# check stays ON:
+#   - the dictionary is copied to a fresh directory under /run (tmpfs). Not
+#     into /usr: systemd mounts /usr read-only in an initrd, and a live
+#     system's /usr is not this script's to change;
+#   - a drop-in, $PWQ_DROPIN, points libpwquality's dictpath at the copy.
+#     libpwquality reads the drop-ins in name order and pwquality.conf last,
+#     so a dictpath set in pwquality.conf itself still wins: the result is
+#     checked, and undone unless libpwquality will really use the copy.
+# Only a fresh encryption sets a new passphrase, and only a typed one is
+# checked (never LUKS_PASSPHRASE_FILE). Only on live media, never on an
+# installed sibling; never over an existing file. cleanup() removes the copy,
+# the drop-in and every directory made for them, on every exit. If nothing can
+# be lent, the reencrypt step falls back to --force-password and says so.
+# Verified in a Fedora Asahi 45 RAM rescue (cryptsetup 2.8.8): with the
+# drop-in, luksFormat rejects "password1" as a dictionary word; without it,
+# every passphrase fails with "error loading dictionary".
+PWQ_DROPIN="/etc/security/pwquality.conf.d/zz-asahilocker-dict.conf"
+if [ "$DEPLOY_MODE" = "encrypt" ] && [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+    _pwq_have=$(pwq_dict_base "")
+    if ! pwq_dict_present "$_pwq_have"; then
+        _pwq_root="/mnt_temp/${ROOT_SUBVOL}"
+        _pwq_src="${_pwq_root}$(pwq_dict_base "$_pwq_root")"
+        _pwq_why=""
+        if [ "$ENV_KIND" != "live" ]; then
+            _pwq_why="AsahiLocker does not change an installed system's configuration"
+        elif ! pwq_dict_present "$_pwq_src"; then
+            _pwq_why="the target install has none either"
+        # The index header opens with cracklib's magic 0x70775631, stored in
+        # host byte order: proof the copy is a dictionary this machine reads.
+        elif [ "$(od -An -tx4 -N4 "$_pwq_src.pwi" 2>/dev/null | tr -d ' \n')" != "70775631" ]; then
+            _pwq_why="the target's index $_pwq_src.pwi is not a cracklib dictionary this machine can read"
+        elif [ -e "$PWQ_DROPIN" ]; then
+            _pwq_why="$PWQ_DROPIN already exists, and is left alone"
+        fi
+        if [ -n "$_pwq_why" ]; then
+            log "  No cracklib dictionary at $_pwq_have, and $_pwq_why."
+        elif [ "$DRY_RUN" = "1" ]; then
+            log "  [dry-run] would lend the target's cracklib dictionary ($_pwq_src) to this run"
+            log "  [dry-run]   (a copy under /run + $PWQ_DROPIN), keeping the passphrase quality check on."
+        else
+            _pwq_ok=0
+            if _pwq_dir=$(mktemp -d /run/asahilocker-dict.XXXXXX 2>/dev/null); then
+                PWQ_BORROWED_DIRS+=("$_pwq_dir")
+                _pwq_ok=1
+                for _pwq_ext in pwd pwd.gz pwi hwm; do
+                    [ -f "$_pwq_src.$_pwq_ext" ] || continue
+                    # Recorded before the copy, so a half-written file goes too.
+                    PWQ_BORROWED+=("$_pwq_dir/pw_dict.$_pwq_ext")
+                    cp "$_pwq_src.$_pwq_ext" "$_pwq_dir/pw_dict.$_pwq_ext" 2>/dev/null \
+                        || { _pwq_ok=0; break; }
+                done
+            else
+                _pwq_dir="/run"
+            fi
+            if [ "$_pwq_ok" = "1" ]; then
+                # Note every directory level mkdir -p is about to create,
+                # deepest first, so cleanup() can take them all away again.
+                _pwq_d=$(dirname "$PWQ_DROPIN")
+                while [ "$_pwq_d" != "/" ] && [ ! -e "$_pwq_d" ]; do
+                    PWQ_BORROWED_DIRS+=("$_pwq_d")
+                    _pwq_d=$(dirname "$_pwq_d")
+                done
+                PWQ_BORROWED+=("$PWQ_DROPIN")
+                { mkdir -p "$(dirname "$PWQ_DROPIN")" \
+                    && printf '# Written by AsahiLocker luks-deploy.sh for one run; removed at exit.\ndictpath = %s\n' \
+                        "$_pwq_dir/pw_dict" > "$PWQ_DROPIN"; } 2>/dev/null || _pwq_ok=0
+            fi
+            if [ "$_pwq_ok" = "1" ] && [ "$(pwq_dict_base "")" = "$_pwq_dir/pw_dict" ] \
+               && pwq_dict_present "$_pwq_dir/pw_dict"; then
+                log "  Lent the target's cracklib dictionary ($_pwq_src) to this run,"
+                log "    via $_pwq_dir and $PWQ_DROPIN:"
+                log "    cryptsetup's passphrase quality check stays on. Both are removed at exit."
+            else
+                pwq_unborrow
+                log "  Could not lend the target's cracklib dictionary to this run (tried $_pwq_dir)."
+            fi
+            unset _pwq_ok _pwq_ext _pwq_d _pwq_dir
+        fi
+        unset _pwq_root _pwq_src _pwq_why
+    fi
+    unset _pwq_have
+fi
+
 # Capture UUIDs before encryption. In config-only mode the raw partition
 # holds the LUKS header, so the btrfs UUID must be read from the open mapper.
 if [ "$DEPLOY_MODE" = "config-only" ]; then
@@ -1756,23 +1888,23 @@ else
     fi
 
     # cryptsetup runs a typed passphrase through libpwquality, whose dictionary
-    # check needs the cracklib dictionary on disk. A minimal image (a dracut RAM
-    # rescue) does not carry it, and then EVERY passphrase is refused with
-    # "error loading dictionary". --force-password skips the quality check, so
-    # it is passed only when the dictionary really is absent: wherever it is
-    # present, a weak passphrase is still rejected. A passphrase read from
+    # check needs the cracklib dictionary on disk; without one EVERY passphrase
+    # is refused with "error loading dictionary". Discovery has already
+    # borrowed the target's own dictionary where this environment had none
+    # ("Passphrase quality dictionary"). --force-password is the fallback for
+    # when that was not possible: it skips the quality check, so it is passed
+    # only when the dictionary really is still absent, and wherever it is
+    # present a weak passphrase is still rejected. A passphrase read from
     # LUKS_PASSPHRASE_FILE is never quality-checked, so that route needs nothing.
     CRYPT_PWQ_ARGS=()
     if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
-        PWQ_DICT=$(sed -n 's/^[[:space:]]*dictpath[[:space:]]*=[[:space:]]*//p' \
-            /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null \
-            | tail -n 1 || true)
-        PWQ_DICT="${PWQ_DICT:-/usr/share/cracklib/pw_dict}"
-        if ! compgen -G "${PWQ_DICT}.pwd*" >/dev/null; then
+        PWQ_DICT=$(pwq_dict_base "")
+        if ! pwq_dict_present "$PWQ_DICT"; then
             CRYPT_PWQ_ARGS=(--force-password)
-            warn "  No cracklib dictionary here (${PWQ_DICT}.pwd): cryptsetup's"
-            warn "  passphrase quality check is OFF for this run, and a weak"
-            warn "  passphrase will be accepted without complaint. Choose a strong one."
+            warn "  No cracklib dictionary here (${PWQ_DICT}.pwi/.pwd), and none could be"
+            warn "  borrowed from the target: cryptsetup's passphrase quality check is"
+            warn "  OFF for this run, and a weak passphrase will be accepted without"
+            warn "  complaint. Choose a strong one."
             echo ""
         fi
         unset PWQ_DICT
