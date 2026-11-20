@@ -44,6 +44,18 @@ Releases are published only here, and the guide only at
 [doug445.github.io/AsahiLocker](https://doug445.github.io/AsahiLocker/). This
 tool rewrites your root partition, so take it from the source.
 
+**Use the official tooling for every route.** Wrappers, forks and repackaged
+copies are outside this project's tests and audits, and they can be missing
+fixes that decide whether the machine boots. One measured example: a rescue
+image that finds the root partition by its *filesystem* UUID cannot find it
+again after a power cut in mid-encryption, because that UUID disappears the
+moment the LUKS header is written — and a half-encrypted root does not boot
+until the encryption is resumed. The built-in
+[`ram-rescue.sh`](docs/RAM-RESCUE.md) finds the root by GPT partition UUID and
+resumes. If another build has left you there, nothing is lost: boot the
+official RAM rescue or a live USB and run `luks-deploy.sh`; it finds the
+interrupted encryption and finishes it.
+
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
 > verified backup. See [Risks](#risks--read-this).
