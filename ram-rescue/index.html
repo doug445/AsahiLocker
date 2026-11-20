@@ -115,14 +115,14 @@ is one image in <code>/boot</code> and one GRUB entry in a file of its own, and
 <code>ram-rescue.sh remove</code> takes both away again.</p>
 <hr>
 <h2 id="how-it-works">How it works</h2>
-<pre lang="text"><code>  GRUB entry "AsahiLocker RAM rescue (encrypt in place)"
+<div class="codeblock"><pre><code>  GRUB entry "AsahiLocker RAM rescue (encrypt in place)"
     └─ your kernel + /boot/initramfs-asahilocker-rescue.img
          (dracut image: luks-deploy.sh, cryptsetup, btrfs-progs, sgdisk,
           the cracklib dictionary, the `asahilocker` launcher)
     └─ rd.break=pre-mount  →  a root shell in RAM; nothing on the disk mounted
          └─ asahilocker  →  luks-deploy.sh, with root, /boot and EFI pinned
                             by GPT partition UUID  →  in-place encryption
-</code></pre>
+</code></pre></div>
 <p><code>/boot</code> is a separate ext4 partition and is never encrypted, so the rescue
 entry stays bootable at every stage. That is what makes this route survive a
 power cut: boot the rescue entry again and type <code>asahilocker</code>. The script
@@ -197,9 +197,10 @@ a shell inside it (unlocking it first if it is encrypted) and puts everything
 back when you leave.</p>
 <ul>
 <li>
-<strong>A weak passphrase is refused</strong> ("it is based on a dictionary word"). The
-run then stops, after the btrfs shrink and before anything is encrypted.
-Type <code>asahilocker</code> again: the shrink is not repeated.</li>
+<strong>A weak passphrase is refused</strong> ("it is based on a dictionary word"), and
+so are two entries that do not match. Nothing has been written at that
+point; the script checks the partition to prove it, then asks <code>Try again?</code>.
+Press Enter and choose another (three attempts in all).</li>
 <li>
 <strong>An early warning that the script directory is held in RAM.</strong> It is: the
 log, the pre-encryption state and the recovery key live there until the end

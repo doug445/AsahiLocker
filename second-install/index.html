@@ -119,7 +119,7 @@ U-Boot has not enumerated (or powered) the port yet. It does not do so until
 something asks it to, so a drive with no activity LED and no entry in
 <code>bootflow scan -l</code> is the expected state <em>before</em> <code>usb start</code>, not evidence
 that the machine cannot boot USB.</p>
-<pre lang="text"><code>=&gt; usb start          # power + enumerate; prints the devices it finds
+<div class="codeblock"><pre><code>=&gt; usb start          # power + enumerate; prints the devices it finds
 =&gt; usb tree           # confirm the stick is actually there
 =&gt; bootflow scan -l   # now re-scan
 </code></pre></div>
@@ -131,7 +131,7 @@ and another stick — is this document the right answer. See
 <h2 id="what-you-are-building">What you are building</h2>
 <p>Your disk starts out looking roughly like this, and gains a third install in
 the middle:</p>
-<pre lang="text"><code>  macOS container            ~246 GB      ← shrink this by 20 GB
+<div class="codeblock"><pre><code>  macOS container            ~246 GB      ← shrink this by 20 GB
   AsahiRecovery  EFI/boot/root  20 GB     ← the new minimal install
   Fedora         EFI/boot/root ~256 GB    ← the system you want encrypted
 </code></pre></div>
@@ -188,7 +188,7 @@ Asahi layout are that install's own.</p>
 <li>
 <p>Before the KDF benchmark it prints both systems side by side and asks you to
 type <code>SIBLING</code>:</p>
-<pre lang="text"><code>  Running FROM  : /dev/nvme0n1p9  [fedora]  20G
+<div class="codeblock"><pre><code>  Running FROM  : /dev/nvme0n1p9  [fedora]  20G
   Encrypting    : /dev/nvme0n1p6  [fedora]  250G
 </code></pre></div>
 <p>The second line is the system that will ask for a passphrase at boot. If

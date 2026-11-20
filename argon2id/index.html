@@ -105,7 +105,7 @@
 
 <main class="wrap doc">
 <p>Everything behind the summary in the
-<a href="../README.md#crypto-parameters--aes-256-xts-and-argon2id">README</a>: how to pick
+<a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#crypto-parameters--aes-256-xts-and-argon2id">README</a>: how to pick
 an argon2id profile and why <code>aggressive</code> is the right default, how to change the
 KDF on a volume that already exists, why nothing here uses pbkdf2, what
 FileVault does with the same disk, how much your passphrase actually
@@ -290,7 +290,7 @@ byte of filesystem data. It takes seconds.</p>
 iteration count) and <code>Threads:</code>. Every keyslot carries its own parameters — a
 passphrase slot and a keyfile slot on the same volume are commonly different.</p>
 <p>There is an ncurses front-end for all of this if you would rather not hand-type
-the parameters — <a href="../bin/luks-tune.sh"><code>bin/luks-tune.sh</code></a> offers the four tiers
+the parameters — <a href="https://github.com/doug445/AsahiLocker/blob/main/bin/luks-tune.sh"><code>bin/luks-tune.sh</code></a> offers the four tiers
 below plus a custom option, shows the measured unlock time and the strength
 graph below for whatever you pick before you commit, and takes the header
 backup for you:</p>
@@ -355,7 +355,7 @@ between <code>aggressive</code> and <code>paranoid</code>.</p>
 the table completely — not "makes it hard", removes it as an avenue. Against a
 fleet of a thousand top-end GPUs, each running the six concurrent guesses that
 4 GiB per guess allows, at the per-guess cost measured on real hardware:</p>
-<pre><code>                                  time to search half the keyspace
+<div class="codeblock"><pre><code>                                  time to search half the keyspace
                                   (log scale — each block ≈ 1.5 orders of magnitude)
 
  weak / reused password  ~30 bit  ▏                          12 days
@@ -367,7 +367,7 @@ fleet of a thousand top-end GPUs, each running the six concurrent guesses that
 
  the universe is         ~10^10 years old  ────────┤ everything below this line
                                                      already outlives it
-</code></pre>
+</code></pre></div>
 <p>No budget closes that gap. Money buys an attacker hardware, and hardware scales
 the cost <em>linearly</em> while your passphrase scales the keyspace <em>exponentially</em> —
 adding two diceware words costs you four seconds of typing and multiplies their
@@ -380,7 +380,7 @@ you, or from a keylogger, or from a camera above your desk. They image the
 machine while it is running, where the key sits in RAM. They find the backup you
 made to an unencrypted disk. Set your KDF so that brute force is hopeless — it
 already is, at every tier here — and then spend your remaining attention on the
-attacks that actually work. See <a href="../README.md#risks--read-this">Risks</a>.</p>
+attacks that actually work. See <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#risks--read-this">Risks</a>.</p>
 <p>That top row is the one to look at twice. At ~30 bits, <code>paranoid</code> buys you
 twelve days. <strong>The KDF cannot rescue a weak passphrase, and no tier on this page
 tries to pretend otherwise</strong> — see
@@ -719,14 +719,14 @@ diceware over symbol soup on a boot passphrase specifically.</li>
 <li>
 <strong>Watch Caps Lock.</strong> <code>cryptsetup</code> confirms a new passphrase by asking twice,
 so an inverted one verifies happily and fails only at the next boot. The
-deploy script warns when the kernel reports Caps Lock on at the confirmation
-gate.</li>
+deploy script makes you type <code>yes</code> in lower case immediately before the
+passphrase prompts: a word that cannot be entered with Caps Lock on.</li>
 <li>
 <strong>Write it down until it is memorised.</strong> The realistic way to lose a
 correctly-configured encrypted volume is forgetting the passphrase, not
 someone breaking it. Paper in a safe beats a fifth backup of the header.
 Enrol a recovery key in a second keyslot as well — see
-<a href="../README.md#recovery-key">Recovery key</a>.</li>
+<a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#recovery-key">Recovery key</a>.</li>
 </ul>
 <hr>
 <h2 id="grub-and-argon2id">GRUB and argon2id</h2>

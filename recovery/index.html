@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-08-20">
+<meta property="article:modified_time" content="2026-11-20">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Recovery: every failure mode of in-place LUKS2 encryption on Asahi, and the way out",
       "description": "Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-08-20",
+      "dateModified": "2026-11-20",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md"><code>docs/RECOVERY.md</code></a> from the repository,
-      last changed 2026-08-20.</p>
+      last changed 2026-11-20.</p>
   </div>
 </header>
 
@@ -113,7 +113,11 @@ absolute paths (<code>/usr/bin/cp -f</code>) or prefix with <code>command</code>
 </blockquote>
 <hr>
 <h2 id="first-what-state-are-you-in">First: what state are you in?</h2>
-<p>Boot the Fedora Asahi live USB (<a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a>) and look:</p>
+<p>Boot the Fedora Asahi live USB (<a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a>), or
+the <a href="../ram-rescue/">RAM rescue</a> entry in the GRUB menu if you built one, and
+look. The quick answer:</p>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/luks-deploy.sh --list     <span class="pl-c"><span class="pl-c">#</span> in the RAM rescue: luks-mount list</span></code></pre></div>
+<p>It prints each install's state: <code>not encrypted</code>, <code>encrypted</code>, or <code>encryption INTERRUPTED</code>. In more detail:</p>
 <div class="codeblock"><pre><code>lsblk -f
 sudo cryptsetup luksDump /dev/nvme0n1p6 <span class="pl-k">|</span> head -20</code></pre></div>
 <div class="table-scroll"><table>
@@ -190,6 +194,13 @@ the container, redoes every config step (crypttab, fstab, kernel cmdline, GRUB
 defaults, BLS entries, dracut config, all initramfs images — all idempotent) and
 re-runs the full verification gate. No data is touched.</p>
 <p>To do the same by hand instead: open, mount, chroot, and repair.</p>
+<p><code>luks-mount.sh</code> does steps 1 to 5 below in one command. It unlocks the
+container, mounts root and <code>/home</code>, takes <code>/boot</code> and EFI from the install's
+own fstab, binds <code>/dev</code>, <code>/proc</code>, <code>/sys</code> and <code>/run</code>, and gives you a shell
+inside; when you leave the shell it unmounts everything and locks the volume
+again:</p>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/luks-mount.sh chroot /dev/nvme0n1p6    <span class="pl-c"><span class="pl-c">#</span> RAM rescue: luks-mount chroot /dev/nvme0n1p6</span></code></pre></div>
+<p>Or step by step:</p>
 <div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> 1. Open the container</span>
 sudo cryptsetup open /dev/nvme0n1p6 fedora_crypt
 
@@ -283,10 +294,13 @@ If you changed your passphrase since, the <em>old</em> passphrase is what works 
 <h2 id="grub-rescue-prompt--the-esp-stub-was-overwritten">GRUB <code>rescue&gt;</code> prompt — the ESP stub was overwritten</h2>
 <p>Almost always caused by running <code>grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg</code>.
 On Asahi that file must stay a small chainload stub, not a full config.</p>
-<p>From the live USB, mount the EFI partition and restore the stub by hand:</p>
-<div class="codeblock"><pre><code>sudo mount /dev/nvme0n1p4 /mnt/efi
-sudo mount /dev/nvme0n1p5 /mnt/boot         <span class="pl-c"><span class="pl-c">#</span> to read the /boot UUID</span>
-BOOT_UUID=<span class="pl-s"><span class="pl-pds">$(</span>blkid -s UUID -o value /dev/nvme0n1p5<span class="pl-pds">)</span></span>
+<p>From the live USB, mount the EFI partition and restore the stub by hand. The
+stub needs the UUID of the <code>/boot</code> filesystem, which <code>blkid</code> reads straight
+from the partition:</p>
+<div class="codeblock"><pre><code>sudo mkdir -p /mnt/efi
+sudo mount /dev/nvme0n1p4 /mnt/efi
+BOOT_UUID=<span class="pl-s"><span class="pl-pds">$(</span>sudo blkid -s UUID -o value /dev/nvme0n1p5<span class="pl-pds">)</span></span>
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$BOOT_UUID</span><span class="pl-pds">"</span></span>                           <span class="pl-c"><span class="pl-c">#</span> must print a UUID; stop if it is empty</span>
 
 sudo tee /mnt/efi/EFI/fedora/grub.cfg <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">STUB</span></span>
 <span class="pl-s">search --no-floppy --root-dev-only --fs-uuid --set=dev <span class="pl-smi">$BOOT_UUID</span></span>
@@ -294,7 +308,7 @@ sudo tee /mnt/efi/EFI/fedora/grub.cfg <span class="pl-k">&gt;</span>/dev/null <s
 <span class="pl-s">export <span class="pl-cce">\$</span>prefix</span>
 <span class="pl-s">configfile <span class="pl-cce">\$</span>prefix/grub.cfg</span>
 <span class="pl-s"><span class="pl-k">STUB</span></span>
-sudo sync</code></pre></div>
+sudo umount /mnt/efi</code></pre></div>
 <p>Install <code>boot-guards/</code> afterwards so it cannot happen again.</p>
 <hr>
 <h2 id="passphrase-change">Passphrase change</h2>
@@ -311,7 +325,12 @@ its benchmarked defaults (sha256, machine-dependent memory):</p>
 your old backup no longer matches the current key slots.</p>
 <hr>
 <h2 id="emergency-get-the-data-out-without-fixing-the-boot">Emergency: get the data out without fixing the boot</h2>
-<p>If you only need your files back:</p>
+<p>If you only need your files back, <code>luks-mount.sh</code> mounts the whole install
+read-only (root, <code>/home</code>, <code>/boot</code>) and puts it back afterwards:</p>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/luks-mount.sh mount --ro /dev/nvme0n1p6 /mnt
+<span class="pl-c"><span class="pl-c">#</span> copy what you need from /mnt/home, then:</span>
+sudo ./AsahiLocker/bin/luks-mount.sh umount /mnt</code></pre></div>
+<p>By hand:</p>
 <div class="codeblock"><pre><code>sudo cryptsetup open /dev/nvme0n1p6 fedora_crypt
 sudo mount -o subvol=home /dev/mapper/fedora_crypt /mnt
 <span class="pl-c"><span class="pl-c">#</span> copy /mnt somewhere else, then:</span>
@@ -339,7 +358,7 @@ grep options /boot/loader/entries/<span class="pl-k">*</span>.conf</code></pre><
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-08-20.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
   </div>
 </footer>
 

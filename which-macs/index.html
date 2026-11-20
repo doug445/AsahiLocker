@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-10-23">
+<meta property="article:modified_time" content="2026-11-20">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Which Apple Silicon Macs work: M1, M2 and M3 compatibility for AsahiLocker",
       "description": "Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-10-23",
+      "dateModified": "2026-11-20",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption: the M1, M2 and M3 compatibility matrix, what is verified, what changes on a desktop, and the machines actually tested.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/COMPATIBILITY.md"><code>docs/COMPATIBILITY.md</code></a> from the repository,
-      last changed 2026-10-23.</p>
+      last changed 2026-11-20.</p>
   </div>
 </header>
 
@@ -293,7 +293,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
 </td>
 <td>laptop</td>
 <td><strong>A</strong></td>
-<td>The author's daily machine — see <a href="../which-macs/#tested-systems">TESTED-SYSTEMS.md</a>: production volume plus the 1.12.1 end-to-end run on a test image</td>
+<td>The author's daily machine — see <a href="#tested-systems">TESTED-SYSTEMS.md</a>: production volume plus the 1.12.1 end-to-end run on a test image</td>
 </tr>
 <tr>
 <td></td>
@@ -492,11 +492,10 @@ family; the differences are the PCIe slots and their contents. Nothing here
 cares, but nothing here has been run on one either.</p>
 <h2 id="what-would-move-a-machine-up-a-tier">What would move a machine up a tier</h2>
 <p>A run on any C or D machine, written up like the M2 Max entry in
-<a href="../which-macs/#tested-systems">TESTED-SYSTEMS.md</a>: the model string, the kernel, what the
+<a href="#tested-systems">TESTED-SYSTEMS.md</a>: the model string, the kernel, what the
 deploy reported for sector sizes, the <code>ALL CHECKS PASSED</code> line, and whether the
 passphrase prompt took keystrokes from the keyboard you actually use. Open an
 issue or a PR with it.</p>
-
 <h2 id="tested-systems">Tested systems</h2>
 <p>The machines behind the ✅ claims: every row here has had a real in-place
 encryption by <code>luks-deploy.sh</code> and boots from it, or an end-to-end run of the
@@ -527,14 +526,27 @@ format as <a href="https://github.com/doug445/linux-backup-system/blob/main/docs
 <td>
 <strong>in-place encryption ✅ — production</strong>, the development platform since August 2026. Once left unbootable by an earlier release: <code>main</code> had been rewound behind the v1.8.2/1.8.3 tags, so the machine ran a <code>luks-deploy.sh</code> without the issue #2 fix (a <code>grep</code> for <code>GRUB_CMDLINE_LINUX</code> — a line Fedora Asahi Remix does not have — exiting stage 6c silently under <code>pipefail</code>); recovered from the live USB in configuration-only mode, and the fix is on <code>main</code> since 2026-09-02</td>
 </tr>
+<tr>
+<td>Fedora Asahi Remix 45 Minimal (aarch64)</td>
+<td>
+<strong>A virtual machine, not a Mac</strong>: a KVM guest on the M2 Max above, running the official Fedora Asahi Remix 45 Minimal image (with a login user, a serial console and <code>gdisk</code> added) on a 4096-byte-sector virtio disk, as Apple NVMe presents, 16k-page kernel 7.2.12-402.asahi, SELinux enforcing, edk2 firmware in place of m1n1/U-Boot</td>
+<td>the stock Asahi layout exactly as the installer writes it: vfat EFI, ext4 <code>/boot</code>, btrfs root with <code>root</code> + <code>home</code> subvolumes, shim → GRUB, BLS entries, dracut</td>
+<td>
+<strong>end-to-end ✅ — 2026-11-20, 2.2.1</strong>: <code>ram-rescue.sh build --arm</code>, reboot into the RAM rescue, <code>asahilocker --defaults</code> with a deliberately mismatched passphrase first (asked again, nothing written), <code>aggressive</code> profile in 4096-byte sectors, <code>ALL CHECKS PASSED (12-point gate)</code>, encrypted boot with the passphrase, <code>post-encryption-setup.sh</code>, the boot guards, <code>ram-rescue.sh remove</code>. <strong>2.1.0, 2026-11-19</strong>: the same route with the power cut in mid-encryption, then repair and resume from the rescue. The third audit's thirteen findings were reproduced and verified fixed here, released script and fixed script side by side. What a VM cannot show is the Apple boot chain: m1n1, U-Boot and the internal keyboard are not in it, and the RAM rescue has not yet been run on Apple hardware by this project</td>
+</tr>
 </tbody>
 </table></div>
-<p>The loopback suite (<code>tests/loopback-core-test.sh</code>, 36 checks) runs on every
-push on aarch64 runners: shrink, in-place reencrypt with the
-script's exact flags, header and content survival, recovery-key enrolment
-with the AF hash pinned, resume after <code>--init-only</code> and after a hard kill
-(<code>cryptsetup repair</code>), 4096-byte sectors on a 4Kn and a 512-byte device, and
-the GPT-tail alignment run by the script's own function. It is not a boot.</p>
+<p>Five suites run on every push, more than 100 checks in all. The loopback suite
+(<code>tests/loopback-core-test.sh</code>, 43 checks, aarch64 runners): shrink, in-place
+reencrypt with the script's exact flags, header and content survival,
+recovery-key enrolment with the AF hash pinned, resume after <code>--init-only</code> and
+after a hard kill (<code>cryptsetup repair</code>), 4096-byte sectors on a 4Kn and a
+512-byte device, the GPT-tail alignment run by the script's own function, and
+a passphrase refused at the prompt, which must write nothing. With it:
+<code>multi-install-selection-test.sh</code> (the partition menus on a two-install disk,
+12), <code>luks-mount-test.sh</code> (a loop-image install, plain and encrypted, 13),
+<code>cli-smoke-test.sh</code> (every script's command line, 26) and
+<code>uboot-efivar-test.sh</code> (14). None of these is a boot.</p>
 
 <p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
 </main>
@@ -547,7 +559,7 @@ the GPT-tail alignment run by the script's own function. It is not a boot.</p>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-23.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
   </div>
 </footer>
 

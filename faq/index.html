@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-10-14">
+<meta property="article:modified_time" content="2026-11-20">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Asahi Linux disk encryption: frequently asked questions",
       "description": "Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-10-14",
+      "dateModified": "2026-11-20",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/FAQ.md"><code>docs/FAQ.md</code></a> from the repository,
-      last changed 2026-10-14.</p>
+      last changed 2026-11-20.</p>
   </div>
 </header>
 
@@ -148,6 +148,10 @@ see <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#risks--r
 (<code>--resume-only</code>), running <code>cryptsetup repair</code> first if the journal is dirty.
 That exact sequence — including a hard kill mid-reencrypt — is what the CI
 loopback test exercises on every push.</p>
+<p>A mistyped passphrase is not an interruption at all: <code>cryptsetup</code> asks for it
+before it writes anything, so if the two entries differ, or it refuses the
+passphrase as too weak, the script checks that the partition is untouched and
+asks again.</p>
 <h2 id="will-a-quantum-computer-break-this">Will a quantum computer break this?</h2>
 <p>No — not the part of the system this tool builds. The quantum threat is
 specific, and none of it lands on a LUKS2 volume at rest:</p>
@@ -240,7 +244,7 @@ the <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md">README<
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-14.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
   </div>
 </footer>
 

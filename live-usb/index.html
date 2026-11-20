@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-10-23">
+<meta property="article:modified_time" content="2026-10-28">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Build and boot a Fedora Asahi Remix live USB on an Apple Silicon Mac",
       "description": "How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-10-23",
+      "dateModified": "2026-10-28",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/LIVE-USB.md"><code>docs/LIVE-USB.md</code></a> from the repository,
-      last changed 2026-10-23.</p>
+      last changed 2026-10-28.</p>
   </div>
 </header>
 
@@ -306,11 +306,19 @@ helpers:</p>
 <p>To get online from the live USB:</p>
 <div class="codeblock"><pre><code>nmcli dev wifi connect <span class="pl-k">&lt;</span>ssid<span class="pl-k">&gt;</span> password <span class="pl-k">&lt;</span>password<span class="pl-k">&gt;</span></code></pre></div>
 <h3 id="1f-copy-this-tooling-onto-the-usb">1f. Copy this tooling onto the USB</h3>
-<p>While the drive is still mounted on your build machine:</p>
-<div class="codeblock"><pre><code>sudo ./build.sh mount
-sudo /usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
-sudo sync
-sudo ./build.sh umount</code></pre></div>
+<p>Still in the root shell from 1e — no <code>sudo</code>:</p>
+<div class="codeblock"><pre><code>./build.sh mount
+findmnt mnt_usb          <span class="pl-c"><span class="pl-c">#</span> must print a line; if it prints nothing, stop here</span>
+/usr/bin/cp -a /path/to/AsahiLocker mnt_usb/root/
+ls mnt_usb/root/AsahiLocker/bin/luks-deploy.sh
+sync
+./build.sh umount</code></pre></div>
+<p><strong>Do not put <code>sudo</code> in front of <code>build.sh</code>.</strong> It refuses to run under
+<code>sudo</code>, prints a one-line notice and exits <em>successfully</em>. Nothing is
+mounted, and the <code>cp</code> then quietly creates <code>mnt_usb/root/</code> as an ordinary
+folder on your build machine. The stick boots fine with no AsahiLocker on it
+(<a href="https://github.com/doug445/AsahiLocker/issues/3">issue #3</a>). The <code>findmnt</code>
+line catches that.</p>
 <p>Note the absolute <code>/usr/bin/cp</code> — if your shell aliases <code>cp</code> to <code>cp -i</code>, an
 unnoticed prompt can silently skip files during a recursive copy.</p>
 <hr>
@@ -338,7 +346,7 @@ a GRUB rescue prompt. That is precisely what <code>boot-guards/</code> defends a
 <h3 id="method-b--u-boot-eficonfig-persistent-boot-order">Method B — U-Boot <code>eficonfig</code> (persistent boot order)</h3>
 <p>Power on with the USB connected and interrupt the autoboot countdown (mash a key
 at <strong>"Hit any key to stop autoboot"</strong>) to reach the <code>=&gt;</code> prompt.</p>
-<pre lang="text"><code>=&gt; eficonfig
+<div class="codeblock"><pre><code>=&gt; eficonfig
 </code></pre></div>
 <p>Then, in the menu:</p>
 <ol>
@@ -350,16 +358,16 @@ and also select the first <strong><code>Fedora</code></strong> entry.</li>
 <strong>Save</strong>, then <strong>Quit</strong> (or press Escape twice) to return to the <code>=&gt;</code> prompt.</li>
 <li>Boot with:</li>
 </ol>
-<pre lang="text"><code>=&gt; run bootcmd
+<div class="codeblock"><pre><code>=&gt; run bootcmd
 </code></pre></div>
 <p>or</p>
-<pre lang="text"><code>=&gt; bootd
+<div class="codeblock"><pre><code>=&gt; bootd
 </code></pre></div>
 <p>You should land in the USB drive's GRUB menu. With this order saved, the machine
 boots the USB when it is plugged in and the internal drive when it is not.</p>
 <h3 id="method-c--u-boot-bootflow-one-shot-nothing-persisted">Method C — U-Boot <code>bootflow</code> (one-shot, nothing persisted)</h3>
 <p>Best when you want to boot the USB exactly once without changing any settings:</p>
-<pre lang="text"><code>=&gt; usb start
+<div class="codeblock"><pre><code>=&gt; usb start
 =&gt; bootflow scan -l
 =&gt; bootflow select &lt;N&gt;     # the entry on usb0 — NOT nvme0, that's the internal disk
 =&gt; bootflow info           # sanity check before committing
@@ -374,7 +382,7 @@ dead end, and it looks convincing: no activity LED on the stick, nothing in
 lights it up. That is U-Boot's normal state — the USB subsystem is not
 initialised, and the port is not powered, until something asks for it. Nothing
 asks for it on its own.</p>
-<pre lang="text"><code>=&gt; usb start          # powers the port and enumerates; prints what it finds
+<div class="codeblock"><pre><code>=&gt; usb start          # powers the port and enumerates; prints what it finds
 =&gt; usb tree           # the stick should be listed here now
 =&gt; bootflow scan -l   # re-scan only after usb start has reported a device
 </code></pre></div>
@@ -407,7 +415,7 @@ tool and its target then share a disk:
 <strong><a href="../second-install/">SECOND-INSTALL.md</a></strong>.</p>
 <h3 id="boot-starts-then-hangs-on-a-dev-disk-by-uuid-job">Boot starts, then hangs on a <code>dev-disk-by-uuid</code> job</h3>
 <p>GRUB appears, the kernel starts, and then boot stops on a line like:</p>
-<pre lang="text"><code>A start job is running for /dev/disk/by-uuid/d747cb2a-… (… / no limit)
+<div class="codeblock"><pre><code>A start job is running for /dev/disk/by-uuid/d747cb2a-… (… / no limit)
 </code></pre></div>
 <p>where the UUID is the USB's root partition (<code>sdX3</code>). U-Boot read the stick
 fine — that is how the kernel and initramfs got loaded — but once Linux takes
@@ -426,6 +434,10 @@ for it. If the replug does not help, use
 <p>Log in as <code>root</code> / <code>fedora</code>, then continue with
 <strong><a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#step-3--run-the-encryption">INSTALL.md → Step 3</a></strong>:</p>
 <div class="codeblock"><pre><code>sudo /root/AsahiLocker/bin/luks-deploy.sh</code></pre></div>
+<p>If that says <code>command not found</code>, the copy in <a href="#1f-copy-this-tooling-onto-the-usb">1f</a>
+never reached the stick.
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#step-3--run-the-encryption">INSTALL.md → Step 3</a> shows how to fetch it from the
+internal disk without rebuilding.</p>
 
 <p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
 </main>
@@ -438,7 +450,7 @@ for it. If the replug does not help, use
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-23.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-28.</p>
   </div>
 </footer>
 

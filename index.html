@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Encrypt Fedora Asahi Remix with LUKS2, in place (Apple Silicon) — AsahiLocker</title>
-<meta name="description" content="How to encrypt an installed Fedora Asahi Remix system on an Apple Silicon Mac with LUKS2 and argon2id — in place, without reinstalling or touching macOS. A 2026 guide to AsahiLocker.">
+<meta name="description" content="Encrypt an installed Fedora Asahi Remix system on an Apple Silicon Mac with LUKS2 and argon2id: in place, in one command, no reinstall, no USB stick needed, macOS untouched. AsahiLocker: audited three times, tested on every push.">
 <link rel="canonical" href="https://doug445.github.io/AsahiLocker/">
 <meta name="author" content="William MacKinnon">
 <meta name="robots" content="index, follow, max-image-preview:large">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="AsahiLocker">
 <meta property="og:title" content="Encrypt Fedora Asahi Remix with LUKS2, in place (Apple Silicon M1–M3) — AsahiLocker">
-<meta property="og:description" content="Encrypt an installed Fedora Asahi Remix system on Apple Silicon with LUKS2 + argon2id. No reinstall, macOS untouched, a 12-point check before you reboot.">
+<meta property="og:description" content="Encrypt an installed Fedora Asahi Remix system on Apple Silicon with LUKS2 + argon2id, in one command. No reinstall, no USB stick needed, macOS untouched. Audited three times; a 12-point check before you reboot.">
 <meta property="og:url" content="https://doug445.github.io/AsahiLocker/">
 <meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
 <meta property="og:image:width" content="1280">
@@ -35,7 +35,7 @@
       "description": "In-place LUKS2 encryption of the root filesystem of an installed Fedora Asahi Remix system on Apple Silicon Macs (M1, M2, M3).",
       "applicationCategory": "SecurityApplication",
       "operatingSystem": "Fedora Asahi Remix (Linux, aarch64)",
-      "softwareVersion": "2.2.0",
+      "softwareVersion": "3.0.0",
       "license": "https://opensource.org/licenses/MIT",
       "url": "https://doug445.github.io/AsahiLocker/",
       "downloadUrl": "https://github.com/doug445/AsahiLocker",
@@ -70,7 +70,7 @@
         {
           "@type": "Question",
           "name": "Can I encrypt Fedora Asahi Remix after installing it?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Yes. The Asahi installer has no disk encryption option, but AsahiLocker converts the existing btrfs root partition into a LUKS2 container in place, from a Fedora Asahi live USB or a second minimal Asahi install. Your files, subvolumes, snapshots and btrfs UUID survive; nothing is reinstalled." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. The Asahi installer has no disk encryption option, but AsahiLocker converts the existing btrfs root partition into a LUKS2 container in place, in one command, from its built-in RAM rescue (no USB stick needed), a Fedora Asahi live USB, or a second minimal Asahi install. Your files, subvolumes, snapshots and btrfs UUID survive; nothing is reinstalled." }
         },
         {
           "@type": "Question",
@@ -90,7 +90,7 @@
         {
           "@type": "Question",
           "name": "What happens if the encryption is interrupted?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run luks-deploy.sh and it detects the interrupted state and resumes it, running cryptsetup repair first if the journal is dirty. A hard kill mid-reencrypt is part of the test suite that runs in CI." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run luks-deploy.sh and it detects the interrupted state and resumes it, running cryptsetup repair first if the journal is dirty. A hard kill mid-reencrypt is part of the test suite that runs in CI, and a power cut in mid-encryption has been run end to end in a virtual machine on the official Fedora Asahi Remix image." }
         },
         {
           "@type": "Question",
@@ -132,14 +132,19 @@
   <div class="wrap">
     <img src="asahilocker-logo.jpg" width="1280" height="720" fetchpriority="high"
          alt="AsahiLocker logo: a faceted pink and silver polyhedron bearing the Fedora mark and the Asahi Linux 'A', on a dark platform lit with magenta and blue neon">
-    <p class="eyebrow">Fedora Asahi Remix · Apple Silicon · LUKS2 · updated 24 October 2026</p>
+    <p class="eyebrow">Fedora Asahi Remix · Apple Silicon · LUKS2 · updated 20 November 2026</p>
     <h1>Encrypt Fedora Asahi Remix with LUKS2, in place: no reinstall, on any M1, M2 or M3 Mac</h1>
     <p class="lede">
       The Fedora Asahi Remix installer has no disk encryption option. <strong>AsahiLocker</strong>
-      adds it afterwards. It converts the btrfs root of a system you have already installed into a
-      LUKS2 container holding that same filesystem, rewrites every piece of boot configuration that
-      has to change, and refuses to let you reboot until a 12-point verification gate passes. macOS
-      is never touched.
+      adds it afterwards, <strong>in one command</strong>. It converts the btrfs root of a system
+      you have already installed into a LUKS2 container holding that same filesystem, rewrites
+      every piece of boot configuration that has to change, and refuses to let you reboot until a
+      12-point verification gate passes. No reinstall. No USB stick needed. macOS is never touched.
+    </p>
+    <p class="lede">
+      It is the complete job, with the strongest key derivation <code>cryptsetup</code> can write,
+      <a href="#proof">audited in full three times</a> and tested with more than 100 checks on
+      every push.
     </p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/doug445/AsahiLocker">Get it on GitHub</a>
@@ -147,13 +152,17 @@
       <a class="btn" href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">Full install docs</a>
     </div>
     <ul class="facts" aria-label="At a glance">
-      <li>v2.2.0</li>
+      <li>v3.0.0</li>
       <li>Free and open source</li>
       <li>MIT licence</li>
       <li>M1 · M2 · M3</li>
-      <li>argon2id, never pbkdf2</li>
+      <li>One command</li>
+      <li>No USB stick needed</li>
+      <li>argon2id at 4 GiB, never pbkdf2</li>
       <li>AES-256-XTS</li>
-      <li>Resumable</li>
+      <li>Resumable after a power cut</li>
+      <li>Audited three times</li>
+      <li>100+ checks on every push</li>
       <li>Unofficial: not an Asahi Linux or Fedora project</li>
     </ul>
   </div>
@@ -167,6 +176,7 @@
     <li><a href="#why">Why Asahi needs this</a></li>
     <li><a href="#options">Your options in 2026</a></li>
     <li><a href="#what-it-does">What AsahiLocker does</a></li>
+    <li><a href="#proof">The evidence: audits, tests, machines</a></li>
     <li><a href="#how-it-boots">How the encrypted boot works</a></li>
     <li><a href="#before">Before you start</a></li>
     <li><a href="#step-by-step">Step by step</a></li>
@@ -175,7 +185,7 @@
     <li><a href="#macs">Which Macs</a></li>
     <li><a href="#risks">Risks</a></li>
     <li><a href="#faq">FAQ</a></li>
-    <li><a href="#guides">Guides: live USB, U-Boot, second install, Macs, argon2id, recovery, FAQ</a></li>
+    <li><a href="#guides">Guides: RAM rescue, live USB, U-Boot, second install, Macs, argon2id, recovery, FAQ</a></li>
     <li><a href="#further">Credits and further reading</a></li>
   </ol>
 </nav>
@@ -208,8 +218,9 @@
   </li>
   <li>
     <strong>Run a tool that does the same steps for you, with checks.</strong> That is what
-    AsahiLocker is. It automates the hand-editing, then verifies the result before you reboot. The
-    rest of this page covers it.
+    AsahiLocker is. It automates the hand-editing, verifies the result before you reboot, resumes
+    by itself if it is interrupted, and is the only one of the three that does not need a USB
+    stick. The rest of this page covers it.
   </li>
   <li>
     <strong>Wait for the installer.</strong> Encryption at install time has been requested of the
@@ -244,6 +255,11 @@
     when you leave.</li>
   <li><strong>Resumable after any interruption.</strong> LUKS2 re-encryption is journaled. Lose
     power, close the lid, kill the terminal: re-run the script and it finishes the job.</li>
+  <li><strong>Forgiving where it is safe to be.</strong> Mistype the passphrase, or choose one
+    <code>cryptsetup</code> refuses as too weak, and it asks again, after proving on the partition
+    that nothing was written. Start it on the system you are sitting in, without
+    <code>sudo</code>, or from the wrong place, and it tells you what to run instead, before
+    anything has happened.</li>
   <li><strong>A <code>--dry-run</code> that really is dry.</strong> Detection, menus, fstab
     cross-checks and the KDF benchmark all run, and it prints the exact
     <code>cryptsetup reencrypt</code> command it would issue, then stops before changing anything.</li>
@@ -253,6 +269,43 @@
     from overwriting the ESP stub and dropping you into <code>grub rescue&gt;</code>. The other
     clears stale U-Boot EFI entries from <code>ubootefi.var</code>, the file they actually live
     in.</li>
+</ul>
+
+<h2 id="proof">The evidence: audits, tests, machines</h2>
+<p>
+  A tool that rewrites your root partition should not be taken on trust, so here is what stands
+  behind this one.
+</p>
+<ul>
+  <li><strong>Three full audits.</strong> Every script, every test and every document, three
+    times over. One rule each time: nothing counts as a finding until it has been reproduced,
+    against the code, on a loop device, in a virtual machine, or on a running Mac. The third
+    (November 2026) reproduced thirteen findings on the released code, fixed every one, and then
+    encrypted a fresh system from the RAM rescue and booted it.
+    <a href="https://github.com/doug445/AsahiLocker/releases/tag/v3.0.0">Version 3.0.0</a> marks
+    that audited state. The record, findings included, is in the
+    <a href="https://github.com/doug445/AsahiLocker#audit">README</a>.</li>
+  <li><strong>More than 100 automated checks on every push.</strong> The real
+    <code>cryptsetup</code> sequence the script runs, against a loop device: encrypt, hard-kill in
+    mid-reencrypt, repair, resume, recovery key, 4096-byte sectors. A passphrase refused at the
+    prompt, which must write nothing. The partition menus on a disk carrying two installs.
+    <code>luks-mount.sh</code> on a plain and an encrypted install. The command line of every
+    script.</li>
+  <li><strong>Run end to end before release.</strong> Since 2.1.0 every release has been run in a
+    virtual machine on the official Fedora Asahi Remix image, including a power cut in
+    mid-encryption followed by a resume. A VM is not a Mac, and the
+    <a href="which-macs/#tested-systems">tested-systems table</a> says exactly what each run did
+    and did not show.</li>
+  <li><strong>In daily use.</strong> The author's MacBook Pro 16" (M1 Pro) and 14" (M2 Max) were
+    encrypted with it and have asked for the passphrase at every boot since.</li>
+  <li><strong>Stronger than stock, enforced.</strong> The default profile does five times the
+    work per guess of a plain <code>luksFormat</code> on the same Mac. The script measures what
+    <code>cryptsetup</code> would have chosen on your machine and will not write anything
+    weaker. There is no flag to turn that off.</li>
+  <li><strong>Nothing hidden.</strong> <code>--dry-run</code> prints every action without taking
+    it, every script answers <code>--help</code>, and the
+    <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INTERNALS.md">internals</a>
+    document every file changed and every check in the gate.</li>
 </ul>
 
 <h2 id="how-it-boots">How the encrypted boot works on Apple Silicon</h2>
@@ -286,10 +339,10 @@
   <li>A <strong>verified backup</strong>: one you have actually browsed or restored from. In-place
     re-encryption rewrites every sector of the root partition.</li>
   <li>Somewhere to run the encryption <em>from</em>. The script will not encrypt the filesystem it
-    is booted from, and has no override for that. Use a
-    <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/LIVE-USB.md">Fedora Asahi live USB</a>
-    (a stock Fedora ISO will not boot on Apple Silicon) or, if your Mac will not boot USB,
-    <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/SECOND-INSTALL.md">a second minimal Asahi install</a>.</li>
+    is booted from, and has no override for that. Three ways, all supported: the built-in
+    <a href="ram-rescue/">RAM rescue</a> (nothing to plug in, nothing to install), a
+    <a href="live-usb/">Fedora Asahi live USB</a> (a stock Fedora ISO will not boot on Apple
+    Silicon), or <a href="second-install/">a second minimal Asahi install</a>.</li>
   <li>The charger plugged in, and 15–60 minutes for the encryption itself (60–90 minutes all in).</li>
   <li>A passphrase you have chosen <em>in advance</em> and written down somewhere physically safe.
     There is no TPM on Apple Silicon: the passphrase, or the optional recovery key, is the only way
@@ -353,7 +406,8 @@ sudo /root/AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults</code></pre>
       target's own <code>fstab</code>, offers a read-only <code>btrfs check</code>, benchmarks your
       Mac, and asks you to pick a KDF profile. It then shows a pre-flight summary. Read it, and type
       <code>ENCRYPT</code> to begin. Caps Lock is checked for you: an inverted passphrase verifies
-      fine twice and only fails at the boot prompt.</p>
+      fine twice and only fails at the boot prompt. Mistype the passphrase and it asks again; you
+      do not start over.</p>
     <p>Encryption takes 15–60 minutes. Then come eight configuration steps and the 12-point gate.
       <strong>If any check fails it says so and refuses to declare success.</strong> Do not reboot
       until it passes.</p>
@@ -382,7 +436,7 @@ systemctl --failed</code></pre></div>
 </ol>
 <p>
   Something went wrong? Nothing is lost yet. The
-  <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md">recovery guide</a>
+  <a href="recovery/">recovery guide</a>
   starts with a table: what you see, what state that means, and what to do. It covers an
   interrupted encryption, a box that will not boot, SELinux denials, a damaged header and a
   <code>grub rescue&gt;</code> prompt.
@@ -412,8 +466,7 @@ systemctl --failed</code></pre></div>
   All three use 4 threads, AES-256-XTS and sha512. All three are safe on any Asahi-supported Mac,
   including an 8 GB M1, because the memory only has to be allocatable in the initramfs. You can
   re-cost a keyslot later without re-encrypting anything, using <code>bin/luks-tune.sh</code>. The
-  full reasoning is in
-  <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/CRYPTO.md">CRYPTO.md</a>,
+  full reasoning is in the <a href="argon2id/">argon2id guide</a>,
   including how this compares with FileVault's KDF on the same disk.
 </p>
 
@@ -426,6 +479,9 @@ systemctl --failed</code></pre></div>
     <tr><td>Boot config</td><td>Edit crypttab, fstab, cmdline, GRUB defaults and every BLS entry by hand</td><td>All rewritten, including every BLS entry and every initramfs</td></tr>
     <tr><td>Did it work?</td><td>You find out at reboot</td><td>12-point gate refuses the reboot until it passes</td></tr>
     <tr><td>Interrupted run</td><td>You debug the header state</td><td>Detected and resumed; <code>cryptsetup repair</code> handled</td></tr>
+    <tr><td>Mistyped passphrase</td><td><code>cryptsetup</code> exits; you start again</td><td>Proves nothing was written, then asks again</td></tr>
+    <tr><td>Needs a USB stick</td><td>Yes, or a second install</td><td>No: built-in RAM rescue</td></tr>
+    <tr><td>Tested</td><td>On your disk, by you</td><td>100+ checks on every push; three full audits</td></tr>
     <tr><td>SELinux</td><td>Relabel yourself, or boot into AVC denials</td><td>Relabelled and verified</td></tr>
     <tr><td>Recovery</td><td>Whatever you thought to save</td><td>Header backups + a labelled bundle of every changed file</td></tr>
     <tr><td>Asahi footguns</td><td><code>grub2-mkconfig</code> clobbering the ESP stub; stale U-Boot entries</td><td>Boot guards prevent both</td></tr>
@@ -448,7 +504,7 @@ systemctl --failed</code></pre></div>
 </ul>
 <p>
   Desktop owners should read the
-  <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/COMPATIBILITY.md">compatibility notes</a>
+  <a href="which-macs/">compatibility notes</a>
   first: a Bluetooth keyboard cannot type the passphrase at boot.
 </p>
 
@@ -498,7 +554,7 @@ systemctl --failed</code></pre></div>
 </details>
 <details>
   <summary>What if the encryption is interrupted: power loss, a crash, a closed lid?</summary>
-  <p>Nothing fatal. LUKS2 re-encryption is journaled. Boot the live USB, re-run
+  <p>Nothing fatal. LUKS2 re-encryption is journaled. Boot the live USB or the RAM rescue, re-run
     <code>luks-deploy.sh</code>, and it detects the interrupted state and resumes, running
     <code>cryptsetup repair</code> first if needed. A hard kill mid-reencrypt is part of the
     loopback test suite that runs in CI on every push.</p>
@@ -511,10 +567,12 @@ systemctl --failed</code></pre></div>
 </details>
 <details>
   <summary>My Mac won't boot from USB. Am I stuck?</summary>
-  <p>Try <code>usb start</code> at the U-Boot prompt first. If it really will not, install a second
-    minimal Asahi on the internal disk, encrypt from there, then remove it. The script refuses to
-    target the system it is running from. See
-    <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/SECOND-INSTALL.md">SECOND-INSTALL.md</a>.</p>
+  <p>No, and you do not need USB at all. The built-in <a href="ram-rescue/">RAM rescue</a> boots
+    your own kernel from RAM and encrypts in place:
+    <code>sudo ./AsahiLocker/bin/ram-rescue.sh build --arm</code>, reboot, type
+    <code>asahilocker</code>. If you would rather use a stick, try <code>usb start</code> at the
+    U-Boot prompt first; and a <a href="second-install/">second minimal Asahi install</a> on the
+    internal disk is the third supported route.</p>
 </details>
 <details>
   <summary>Can I deploy it across several Macs unattended?</summary>
@@ -526,10 +584,12 @@ systemctl --failed</code></pre></div>
   <summary>How do I know it is safe to run?</summary>
   <p>Don't take it on trust. Run <code>--dry-run</code> and read what it would do;
     <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INTERNALS.md">INTERNALS.md</a>
-    documents every file it changes and every gate check. The loopback suite runs the exact encrypt,
-    resume and recovery-key sequence against a throwaway loop device on every push. The audits so
-    far, and who did them, are recorded in the
-    <a href="https://github.com/doug445/AsahiLocker#audit">README</a>.</p>
+    documents every file it changes and every gate check. More than 100 automated checks run on
+    every push, among them the exact encrypt, hard-kill, repair and resume sequence against a
+    throwaway loop device. It has been audited in full three times, every finding reproduced
+    before it was fixed; the record is in the
+    <a href="https://github.com/doug445/AsahiLocker#audit">README</a>, and
+    <a href="#proof">the evidence</a> is summarised above.</p>
 </details>
 <details>
   <summary>I'm not on Apple Silicon. Is there a version for my PC?</summary>
@@ -570,7 +630,7 @@ systemctl --failed</code></pre></div>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20 October 2026.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
   </div>
 </footer>
 
