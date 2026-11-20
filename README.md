@@ -38,6 +38,12 @@ not claimed: the kernel ships its device trees, but Asahi does not boot it yet.
 place](https://doug445.github.io/AsahiLocker/), walks through the whole job
 start to finish.
 
+**Official source.** The official AsahiLocker is
+[github.com/doug445/AsahiLocker](https://github.com/doug445/AsahiLocker).
+Releases are published only here, and the guide only at
+[doug445.github.io/AsahiLocker](https://doug445.github.io/AsahiLocker/). This
+tool rewrites your root partition, so take it from the source.
+
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
 > verified backup. See [Risks](#risks--read-this).
