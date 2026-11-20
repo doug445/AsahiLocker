@@ -175,7 +175,7 @@ live USB, as root, set `V` to the latest version on the
 
 ```bash
 nmcli dev wifi connect <ssid> password <password>
-V=2.0.3
+V=2.0.4
 cd /root
 wget https://github.com/doug445/AsahiLocker/archive/refs/tags/v$V.tar.gz
 tar xzf v$V.tar.gz && mv AsahiLocker-$V AsahiLocker
