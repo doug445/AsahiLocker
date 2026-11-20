@@ -113,9 +113,10 @@ encrypting anything: `luks-mount list`, then `luks-mount chroot /dev/...` opens
 a shell inside it (unlocking it first if it is encrypted) and puts everything
 back when you leave.
 
-- **A weak passphrase is refused** ("it is based on a dictionary word"). The
-  run then stops, after the btrfs shrink and before anything is encrypted.
-  Type `asahilocker` again: the shrink is not repeated.
+- **A weak passphrase is refused** ("it is based on a dictionary word"), and
+  so are two entries that do not match. Nothing has been written at that
+  point; the script checks the partition to prove it, then asks `Try again?`.
+  Press Enter and choose another (three attempts in all).
 - **An early warning that the script directory is held in RAM.** It is: the
   log, the pre-encryption state and the recovery key live there until the end
   of the run.

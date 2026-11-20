@@ -11,7 +11,16 @@ Every failure mode this tooling can produce, and how to get out of it.
 
 ## First: what state are you in?
 
-Boot the Fedora Asahi live USB ([UBOOT-BOOTFLOW.md](UBOOT-BOOTFLOW.md)) and look:
+Boot the Fedora Asahi live USB ([UBOOT-BOOTFLOW.md](UBOOT-BOOTFLOW.md)), or
+the [RAM rescue](RAM-RESCUE.md) entry in the GRUB menu if you built one, and
+look. The quick answer:
+
+```bash
+sudo ./AsahiLocker/bin/luks-deploy.sh --list     # in the RAM rescue: luks-mount list
+```
+
+It prints each install's state: `not encrypted`, `encrypted`, or `encryption
+INTERRUPTED`. In more detail:
 
 ```bash
 lsblk -f
@@ -78,6 +87,18 @@ defaults, BLS entries, dracut config, all initramfs images — all idempotent) a
 re-runs the full verification gate. No data is touched.
 
 To do the same by hand instead: open, mount, chroot, and repair.
+
+`luks-mount.sh` does steps 1 to 5 below in one command. It unlocks the
+container, mounts root and `/home`, takes `/boot` and EFI from the install's
+own fstab, binds `/dev`, `/proc`, `/sys` and `/run`, and gives you a shell
+inside; when you leave the shell it unmounts everything and locks the volume
+again:
+
+```bash
+sudo ./AsahiLocker/bin/luks-mount.sh chroot /dev/nvme0n1p6    # RAM rescue: luks-mount chroot /dev/nvme0n1p6
+```
+
+Or step by step:
 
 ```bash
 # 1. Open the container
@@ -207,12 +228,15 @@ sudo cryptsetup luksHeaderRestore /dev/nvme0n1p6 \
 Almost always caused by running `grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg`.
 On Asahi that file must stay a small chainload stub, not a full config.
 
-From the live USB, mount the EFI partition and restore the stub by hand:
+From the live USB, mount the EFI partition and restore the stub by hand. The
+stub needs the UUID of the `/boot` filesystem, which `blkid` reads straight
+from the partition:
 
 ```bash
+sudo mkdir -p /mnt/efi
 sudo mount /dev/nvme0n1p4 /mnt/efi
-sudo mount /dev/nvme0n1p5 /mnt/boot         # to read the /boot UUID
-BOOT_UUID=$(blkid -s UUID -o value /dev/nvme0n1p5)
+BOOT_UUID=$(sudo blkid -s UUID -o value /dev/nvme0n1p5)
+echo "$BOOT_UUID"                           # must print a UUID; stop if it is empty
 
 sudo tee /mnt/efi/EFI/fedora/grub.cfg >/dev/null <<STUB
 search --no-floppy --root-dev-only --fs-uuid --set=dev $BOOT_UUID
@@ -220,7 +244,7 @@ set prefix=(\$dev)/grub2
 export \$prefix
 configfile \$prefix/grub.cfg
 STUB
-sudo sync
+sudo umount /mnt/efi
 ```
 
 Install `boot-guards/` afterwards so it cannot happen again.
@@ -249,7 +273,16 @@ your old backup no longer matches the current key slots.
 
 ## Emergency: get the data out without fixing the boot
 
-If you only need your files back:
+If you only need your files back, `luks-mount.sh` mounts the whole install
+read-only (root, `/home`, `/boot`) and puts it back afterwards:
+
+```bash
+sudo ./AsahiLocker/bin/luks-mount.sh mount --ro /dev/nvme0n1p6 /mnt
+# copy what you need from /mnt/home, then:
+sudo ./AsahiLocker/bin/luks-mount.sh umount /mnt
+```
+
+By hand:
 
 ```bash
 sudo cryptsetup open /dev/nvme0n1p6 fedora_crypt

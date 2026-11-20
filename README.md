@@ -108,9 +108,12 @@ sudo ./AsahiLocker/boot-guards/install.sh
 `--defaults` takes the recommended answer to every question that has one: the
 btrfs check, the `aggressive` KDF, a recovery key. `/boot` and EFI come from
 your install's own `/etc/fstab`. What stays is what protects you: you type
-`ENCRYPT`, confirm Caps Lock is off, and choose the passphrase. If anything is
-interrupted, power cut included, run the same command again and it picks up
-where it stopped.
+`ENCRYPT`, confirm Caps Lock is off, and choose the passphrase. Mistype the
+passphrase, or pick one `cryptsetup` refuses as too weak, and it asks again
+instead of making you start over. If anything is interrupted, power cut
+included, run the same command again and it picks up where it stopped.
+
+Every script answers `--help`, and none of them needs root for that.
 
 Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
@@ -172,7 +175,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
 | `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
 | `extras/` | Optional `luks-fetch-cache`: an aligned LUKS/BitLocker status readout for fastfetch. Public header metadata only, no key material. |
-| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (aarch64); safe to run locally with sudo. |
+| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`, and a passphrase refused at `cryptsetup`'s prompt, which must leave the device untouched. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (aarch64); safe to run locally with sudo. `luks-mount-test.sh`: builds a three-partition loop image laid out like an Asahi install, plain and encrypted, and checks `luks-mount.sh` mounts `/boot` and EFI parent first from the install's own fstab, honours `--ro`, and leaves nothing mounted or unlocked however the directory is spelled. `cli-smoke-test.sh` needs no root: every script answers `--help`, refuses an option it does not know, and stops in one line without `sudo`. `uboot-efivar-test.sh` covers the U-Boot variable-file editor. |
 | `docs/` | [COMPATIBILITY](docs/COMPATIBILITY.md) · [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RAM-RESCUE](docs/RAM-RESCUE.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) · [Release history](docs/RELEASE-HISTORY.md) |
 | `tools/boot-probe/` | **Research only, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
 
@@ -383,7 +386,11 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
 - An **already-installed** Fedora Asahi Remix system with a **btrfs** root.
 - Somewhere to run the encryption **from** — the script refuses to encrypt the
   filesystem it is booted from, and there is no override for that one.
-  Either works:
+  Any of the three works:
+  - the **built-in RAM rescue**: nothing to plug in and nothing to install.
+    `ram-rescue.sh build --arm` on the system you want encrypted, reboot, type
+    `asahilocker` — see [docs/RAM-RESCUE.md](docs/RAM-RESCUE.md). It needs
+    `gdisk` and about 200 MiB free on `/boot`.
   - a **Fedora Asahi live USB**. A stock Fedora ISO will not boot on Apple
     Silicon; build one with
     [`asahi-fedora-usb`](https://github.com/leifliddy/asahi-fedora-usb) as
@@ -485,11 +492,13 @@ argon2 into a local prefix, for anyone working on the `/boot` question.
 
 ## Audit
 
-**AsahiLocker has been code-audited in full twice, for coding excellence** —
+**AsahiLocker has been code-audited in full three times, for coding excellence** —
 every script, the test suites and the documentation, checked for correctness,
 safety and code quality, as independent code review of in-place LUKS2
-full-disk encryption on Apple Silicon. One rule held both times: nothing counted as a finding until it had
-been reproduced against the code or on a running Mac.
+full-disk encryption on Apple Silicon. One rule held every time: nothing
+counted as a finding until it had been reproduced — against the code, on a
+loop device, in a virtual machine running the official Fedora Asahi Remix
+image, or on a running Mac.
 
 **2026-09-05 — Claude Fable 5.1 (Anthropic).** The first complete audit of the
 encryption path for Fedora Asahi Remix. Findings shipped as v1.10.0–v1.10.2 —
@@ -505,6 +514,47 @@ automounting could block. The same pass verified the tooling against every
 M-series Mac the Asahi kernel boots — MacBook Air, MacBook Pro, Mac mini, Mac
 Studio, iMac and Mac Pro, M1 through M3 — and recorded the result, machine by
 machine, in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+**2026-11-20 — Claude Fable 5.2 (Anthropic).** A third full audit, by
+Anthropic's most capable generally available model, in the week 2.1.0 and 2.2.0
+added the RAM rescue, `luks-mount.sh` and one-command encryption. It read every
+script, test and document for ease of use as much as for safety: what a person
+actually meets when they mistype, forget `sudo`, or run a script from the wrong
+place. Thirteen findings, each reproduced before it was fixed — on a loop device
+or in a KVM guest running the official Fedora Asahi Remix 45 image, released
+script and fixed script side by side — and the fixed tree then encrypted that
+guest from the RAM rescue, passed the 12-point gate and booted. Among them:
+
+- a passphrase mistyped at `cryptsetup`'s prompt (two entries that differ, one
+  refused as too weak, a lower-case `yes`) ended the whole run, after every
+  other prompt and a `btrfs check` of up to half an hour. `cryptsetup` stops
+  there before writing anything; the script now proves that on the partition
+  and asks again;
+- a partition menu whose input had closed went round its loop for ever,
+  writing to the deploy log on every pass: 1.5 GB in six minutes;
+- both installers treated any argument they did not know as "install", so
+  `install.sh --help` installed;
+- run from a drive mounted on `/mnt`, the script mounted the target over its
+  own directory and stopped *after* the encryption, unable to write the header
+  copy; and on any exit, a dry run included, it unmounted whatever the
+  operator had on `/mnt`;
+- `luks-mount.sh mount /dev/X /mnt/` followed by `umount /mnt` left the volume
+  unlocked, with a stale record; and in a UTF-8 locale it tried `/boot/efi`
+  before `/boot`, so a maintenance chroot silently had no EFI partition;
+- `post-encryption-setup.sh` warned that it "could not confirm crypt support"
+  in the initramfs of every correctly encrypted system;
+- from an install that AsahiLocker had itself encrypted, a second install
+  could not be encrypted at all: the first one's mapper name was reported as a
+  leftover from a previous run, with no way forward on offer.
+
+The rest: a forgotten `sudo` that produced a log file and a page of recovery
+advice for an encryption that never started, a silent exit in the
+sector-alignment path, a summary that reported 4096-byte sectors for a
+512-byte volume, and two tracebacks in `uboot-efivar.py`. Every script now
+answers `--help` without root and refuses an option it does not know, and
+four additions to the tests keep all of it that way: `tests/cli-smoke-test.sh`,
+`tests/luks-mount-test.sh`, the refused passphrase in the loopback suite, and
+the closed-stdin menu.
 
 The design decisions are the author's; the audits check that the code keeps
 them. Nothing here has changed hands.

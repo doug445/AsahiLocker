@@ -56,6 +56,11 @@ Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run
 That exact sequence — including a hard kill mid-reencrypt — is what the CI
 loopback test exercises on every push.
 
+A mistyped passphrase is not an interruption at all: `cryptsetup` asks for it
+before it writes anything, so if the two entries differ, or it refuses the
+passphrase as too weak, the script checks that the partition is untouched and
+asks again.
+
 ## Will a quantum computer break this?
 
 No — not the part of the system this tool builds. The quantum threat is

@@ -55,6 +55,17 @@ ok(){   echo -e "  ${G}[ok]${N} $*"; }
 warn(){ echo -e "  ${Y}[warn]${N} $*"; }
 err(){  echo -e "  ${RED}[fail]${N} $*"; }
 
+# Strict arguments: anything unrecognised used to fall through to a full
+# install, so "install.sh --help", or a mistyped --uninstall, installed.
+case "${1:-}" in
+    ""|--uninstall) ;;
+    -h|--help)
+        /usr/bin/sed -n '/^# boot-guards\/install.sh —/,/^# All tools called by absolute path/p' "${BASH_SOURCE[0]}" | /usr/bin/sed 's/^# \{0,1\}//'
+        exit 0 ;;
+    *) err "unknown option: $1 (no argument installs; --uninstall removes; --help)"; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { err "unexpected argument: $2"; exit 2; }
+
 [ "$(id -u)" -eq 0 ] || { err "run as root: sudo $0"; exit 1; }
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

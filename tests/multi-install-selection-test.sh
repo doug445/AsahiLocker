@@ -45,6 +45,8 @@
 #   4. a device-mapper candidate is matched through /dev/mapper/<name>, so an
 #      already-encrypted rescue root is recognised as in-use rather than
 #      quietly offered back as a target
+#   5. a menu that cannot be answered, because stdin has closed, stops with
+#      an error instead of going round its loop for ever
 #
 # No real disk is touched; the image is sparse, so the 230 GiB layout costs a
 # few MiB. Safe to run in CI.
@@ -121,6 +123,7 @@ fatal() { err "$@"; exit 1; }
 # mounts are never targets. The simulated disk IS a loop device, so that one
 # line is dropped here; everything else is the shipped code, verbatim.
 eval "$(sed -n '/^partition_number() {/,/^}$/p' "$SRC")"
+eval "$(sed -n '/^pick_no_input() {/,/^}$/p' "$SRC")"
 eval "$(sed -n '/^pick_partition() {/,/^}$/p' "$SRC" | grep -v 'grep -q "\^loop" && continue')"
 
 # ...and keep the host's own disks out of the menus, so the assertions below
@@ -236,6 +239,43 @@ if command -v dmsetup >/dev/null; then
     fi
 else
     echo "  SKIP: dmsetup not available"
+fi
+
+echo "=== 5. a menu nobody can answer stops; it does not spin ==="
+# Every root in use, so there is no default to fall back on, and stdin closed:
+# read fails at once, every time. The loop used to go round on that for ever
+# (and, in the real script, write a line to the deploy log on every pass).
+# Run in the background with a deadline, so a regression fails here in
+# seconds instead of hanging the suite.
+lsblk() {
+    if [ "${1:-}" = "-P" ]; then command lsblk "$@" | grep "${LOOP#/dev/}"
+    else command lsblk "$@"; fi
+}
+RUNNING_DEVS=("${LOOP}p3" "${LOOP}p6")
+set_env installed "${LOOP#/dev/}"
+stage "pick with stdin closed"
+# Inside $( ), as luks-deploy.sh calls it: bash switches errexit off in a
+# command substitution, so the failing read does not end the function by
+# itself, and that is the only reason the loop could spin.
+# shellcheck disable=SC2086,SC2034
+( NI_SEL=$(pick_partition $ROOT_ARGS </dev/null 2>"$WORK/noinput.err") ) &
+NI_PID=$!
+NI_LEFT=20
+while kill -0 "$NI_PID" 2>/dev/null && [ "$NI_LEFT" -gt 0 ]; do sleep 0.5; NI_LEFT=$((NI_LEFT - 1)); done
+if kill -0 "$NI_PID" 2>/dev/null; then
+    # The loop runs in the $( ) subshell, a CHILD of $NI_PID: kill that first,
+    # or it lives on as an orphan, still spinning and still holding stdout.
+    pkill -9 -P "$NI_PID" 2>/dev/null || true
+    kill -9 "$NI_PID" 2>/dev/null || true
+    wait "$NI_PID" 2>/dev/null || true
+    fail "the menu was still looping after 10 s with stdin closed ($(wc -l < "$WORK/noinput.err") lines of output)"
+else
+    NI_RC=0; wait "$NI_PID" || NI_RC=$?
+    if [ "$NI_RC" -ne 0 ] && grep -q 'No input' "$WORK/noinput.err"; then
+        pass "closed stdin, no default: the menu stops with an error (exit $NI_RC)"
+    else
+        fail "closed stdin: exit $NI_RC, message: $(tail -1 "$WORK/noinput.err")"
+    fi
 fi
 
 echo ""

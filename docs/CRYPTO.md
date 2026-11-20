@@ -521,8 +521,8 @@ appropriate for a volume you expect to outlive the hardware.
   diceware over symbol soup on a boot passphrase specifically.
 - **Watch Caps Lock.** `cryptsetup` confirms a new passphrase by asking twice,
   so an inverted one verifies happily and fails only at the next boot. The
-  deploy script warns when the kernel reports Caps Lock on at the confirmation
-  gate.
+  deploy script makes you type `yes` in lower case immediately before the
+  passphrase prompts: a word that cannot be entered with Caps Lock on.
 - **Write it down until it is memorised.** The realistic way to lose a
   correctly-configured encrypted volume is forgetting the passphrase, not
   someone breaking it. Paper in a safe beats a fifth backup of the header.

@@ -95,14 +95,20 @@ afterwards; it does not touch any real disk:
 ```bash
 sudo bash tests/loopback-core-test.sh
 sudo bash tests/multi-install-selection-test.sh
+sudo bash tests/luks-mount-test.sh
+bash tests/cli-smoke-test.sh          # no sudo: --help, unknown options, the no-root path
+bash tests/uboot-efivar-test.sh       # no sudo
 ```
 
 `0 failed` is the invariant; the pass counts move as stages are added.
-`loopback-core-test.sh` reports 36 passes with every stage reachable — a `SKIP`
+`loopback-core-test.sh` reports 43 passes with every stage reachable — a `SKIP`
 or `NOTE` line in stage 5b is normal and lowers the count without any failure,
 because that stage races a hard kill against a live re-encryption and reports
-honestly when it did not manage to build the state it wanted.
-`multi-install-selection-test.sh` reports 11, and its stage 4 skips when
+honestly when it did not manage to build the state it wanted. Stage 9 answers
+cryptsetup's passphrase prompts on a pty (it needs `python3`) and skips its
+weak-passphrase check where there is no cracklib dictionary.
+`luks-mount-test.sh` reports 13 (its encrypted leg also needs `python3`).
+`multi-install-selection-test.sh` reports 12, and its stage 4 skips when
 `dmsetup` is unavailable.
 
 ### Run the CI lint checks
@@ -228,6 +234,10 @@ ls -la ~/Projects/grub-argon2-build/install-root/lib/grub/arm64-efi/argon2.mod
 - **Match the surrounding style.** The existing scripts use explicit stage
   banners, `set -euo pipefail`, and cleanup traps that print a recovery command
   list on failure. Keep that.
+- **Every script answers `--help` without root and refuses an option it does
+  not know.** `tests/cli-smoke-test.sh` checks both for every script; add yours
+  to its list. An installer that treats an unknown argument as "install" is a
+  bug, not a convenience.
 - **Anything touching the encrypt path needs a test** in
   `tests/loopback-core-test.sh`. Build the state you want to assert against
   deterministically — do not race a `kill` and then guess what state you

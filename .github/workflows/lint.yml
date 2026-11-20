@@ -29,6 +29,15 @@ jobs:
             boot-guards/bin/esp-grub-stub-rebaseline \
             extras/bin/luks-fetch-cache
 
+  cli:
+    # --help, unknown options and the no-root path of every script: no root,
+    # no device.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: command-line smoke test
+        run: bash tests/cli-smoke-test.sh
+
   uboot-efivar:
     runs-on: ubuntu-latest
     steps:
@@ -64,3 +73,5 @@ jobs:
         # timeout, so a blocked helper fails the step in five minutes rather
         # than holding a runner for an hour, which it did once on x86.
         run: sudo timeout 300 bash tests/multi-install-selection-test.sh
+      - name: luks-mount.sh on a loop-image install, plain and encrypted
+        run: sudo timeout 300 bash tests/luks-mount-test.sh

@@ -42,6 +42,12 @@
 #      resume  (best-effort: the kill is inherently timing-dependent, so
 #      unreachable states are reported and skipped, never asserted against)
 #   6. btrfs resize max reclaims the container
+#   7. 4096-byte encryption sectors, on a 4Kn device and a 512-byte one
+#   8. the partition-end alignment (align_partition_end out of luks-deploy.sh)
+#   9. a passphrase cryptsetup refuses at the prompt (two entries that differ,
+#      a dictionary word, a lower-case "yes") ends it BEFORE anything is
+#      written: no LUKS header, btrfs intact, and the next attempt encrypts.
+#      luks-deploy.sh asks again in that case, and this is what makes it safe
 #
 # Run as root:  sudo bash tests/loopback-core-test.sh
 # Requires: cryptsetup >= 2.4, btrfs-progs, util-linux (losetup).
@@ -332,6 +338,89 @@ if L8=$(losetup --show -f --partscan "$IMG8" 2>/dev/null) && sleep 1 && [ -b "${
     losetup -d "$L8"
 else
     echo "  SKIP: cannot create a partitioned loop device here"
+fi
+
+echo "== 9. a refused passphrase writes nothing (what luks-deploy's 'Try again?' relies on) =="
+# cryptsetup only verifies and quality-checks a passphrase typed at a terminal,
+# so this stage answers its prompts on a pty.
+if command -v python3 >/dev/null 2>&1; then
+    truncate -s 400M "$WORK/disk9.img"
+    L9=$(losetup --show -f "$WORK/disk9.img")
+    LOOPS_EXTRA="${LOOPS_EXTRA:-} $L9"
+    mkfs.btrfs -q -f "$L9"
+    mount "$L9" "$WORK/mnt"; echo "refusal-sentinel" > "$WORK/mnt/f"
+    btrfs -q filesystem resize -32M "$WORK/mnt"; umount "$WORK/mnt"
+
+    typed_reencrypt() { # $1 = answer to "Are you sure?", $2 / $3 = the two passphrase entries, $4.. = extra options
+        python3 - "$1" "$2" "$3" cryptsetup reencrypt --encrypt --type luks2 \
+            --cipher aes-xts-plain64 --key-size 512 "${KDF[@]}" --hash sha512 \
+            --reduce-device-size 32M --resilience checksum "${@:4}" "$L9" <<'PYEOF'
+import os, pty, re, select, sys, time
+answers = [(rb"capital letters", sys.argv[1]), (rb"Enter passphrase", sys.argv[2]), (rb"Verify passphrase", sys.argv[3])]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[4], sys.argv[4:])
+buf, pos, deadline = b"", 0, time.time() + 300
+while time.time() < deadline:
+    if not select.select([fd], [], [], 1)[0]:
+        continue
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        break
+    if not data:
+        break
+    buf += data
+    if answers:
+        m = re.search(answers[0][0], buf[pos:])
+        if m:
+            pos += m.end(); time.sleep(0.3)
+            os.write(fd, answers.pop(0)[1].encode() + b"\n")
+else:
+    os.kill(pid, 9)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+PYEOF
+    }
+    untouched() { # $1 = what was refused, $2 = cryptsetup's exit code
+        if [ "$2" -ne 0 ] && ! cryptsetup isLuks "$L9" 2>/dev/null \
+           && [ "$(blkid -p -s TYPE -o value "$L9")" = "btrfs" ] \
+           && ! compgen -G "$WORK/LUKS2-temp-*" >/dev/null; then
+            pass "$1: refused (exit $2), no LUKS header, still btrfs, no temp file"
+        else
+            fail "$1: exit $2, isLuks=$(cryptsetup isLuks "$L9" 2>/dev/null && echo yes || echo no), type=$(blkid -p -s TYPE -o value "$L9")"
+        fi
+    }
+    # cryptsetup writes its temporary header in the current directory.
+    pushd "$WORK" >/dev/null
+    RC9=0; typed_reencrypt YES "Corvid-Lantern-Basalt-71" "Corvid-Lantern-Basalt-72" || RC9=$?
+    untouched "two entries that differ" "$RC9"
+    # luks-deploy.sh offers the retry for exit 1 and 2 only.
+    [ "$RC9" -eq 2 ] && pass "a mismatch exits 2" || fail "a mismatch exits $RC9, luks-deploy.sh expects 2"
+    RC9=0; typed_reencrypt yes unused unused || RC9=$?
+    untouched "a lower-case yes" "$RC9"
+    [ "$RC9" -eq 1 ] && pass "a declined YES exits 1" || fail "a declined YES exits $RC9, luks-deploy.sh expects 1"
+    if [ -f /usr/share/cracklib/pw_dict.pwi ]; then
+        RC9=0; typed_reencrypt YES password1 password1 || RC9=$?
+        untouched "a dictionary word" "$RC9"
+        [ "$RC9" -eq 2 ] && pass "a refused weak passphrase exits 2" || fail "a weak passphrase exits $RC9, luks-deploy.sh expects 2"
+    else
+        echo "  SKIP: no cracklib dictionary here, so cryptsetup cannot refuse a weak passphrase"
+    fi
+    # --force-password: where cryptsetup is built with a quality check but the
+    # runner has no dictionary, every typed passphrase would be refused.
+    if typed_reencrypt YES "Corvid-Lantern-Basalt-71" "Corvid-Lantern-Basalt-71" --force-password; then
+        printf 'Corvid-Lantern-Basalt-71' > "$WORK/pass9"
+        cryptsetup open --key-file "$WORK/pass9" "$L9" "$MAP2" \
+            && mount "/dev/mapper/$MAP2" "$WORK/mnt" && grep -q refusal-sentinel "$WORK/mnt/f" \
+            && pass "the next attempt encrypts, and the content is intact" || fail "content lost after the refusals"
+        umount "$WORK/mnt" 2>/dev/null || true
+        cryptsetup close "$MAP2" 2>/dev/null || true
+    else
+        fail "a good passphrase after the refusals did not encrypt"
+    fi
+    popd >/dev/null
+else
+    echo "  SKIP: python3 not available to answer cryptsetup's prompts on a pty"
 fi
 
 echo ""

@@ -294,6 +294,11 @@ case "$CHOICE" in
         case "$MIB"      in ''|*[!0-9]*) die "Memory must be a whole number of MiB." ;; esac
         case "$NEW_ITER" in ''|*[!0-9]*) die "Iterations must be a whole number." ;; esac
         case "$NEW_PAR"  in ''|*[!0-9]*) die "Threads must be a whole number." ;; esac
+        # cryptsetup's own limits, checked here rather than discovered after
+        # the header backup has been written and the passphrase typed.
+        [ "$MIB" -le 4096 ] || die "$MIB MiB is above argon2id's maximum in LUKS2: 4096 MiB (4 GiB).\n\nPast 4 GiB, only iterations raise the cost."
+        [ "$NEW_PAR" -ge 1 ] && [ "$NEW_PAR" -le 4 ] || die "Threads must be 1 to 4: cryptsetup allows no more than 4."
+        [ "$NEW_ITER" -ge 1 ] || die "Iterations must be at least 1."
         NEW_MEM=$((MIB * 1024))
         ;;
 esac

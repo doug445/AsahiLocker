@@ -56,7 +56,7 @@ warn()  { echo "${YEL}[WARN]${NC} $*" >&2; }
 fatal() { echo "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 usage() {
-    grep -E '^#   sudo \./bin/luks-mount\.sh' "$(readlink -f "$0")" | sed 's/^# \{0,1\}//'
+    sed -n '/^#   sudo \.\/bin\/luks-mount\.sh list/,/^# mount --ro mounts/p' "$(readlink -f "$0")" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -109,6 +109,16 @@ mapper_of() {
     return 1
 }
 
+# True when the LUKS2 header on $1 still requires reencryption: an in-place
+# encryption that was interrupted. The dump goes into a variable first, as in
+# luks-deploy.sh: piped straight into grep -q under pipefail, a producer cut
+# short by SIGPIPE reads as "no flag".
+reencrypt_pending() {
+    local dump
+    dump=$(cryptsetup luksDump "$1" 2>/dev/null) || return 1
+    grep -q 'online-reencrypt' <<< "$dump"
+}
+
 # ─── list ────────────────────────────────────────────────────────────────────
 cmd_list() {
     need_root
@@ -123,9 +133,9 @@ cmd_list() {
         [ -b "$dev" ] || continue
         [ "$(lsblk -dno TYPE "$dev" 2>/dev/null)" = part ] || continue
         if is_running "$dev"; then
-            state="this system (running — cannot be encrypted from here)"
+            state="this system, running (to encrypt it: ram-rescue.sh, or a live USB)"
         elif [ "$FSTYPE" = crypto_LUKS ]; then
-            if cryptsetup luksDump "$dev" 2>/dev/null | grep -q 'online-reencrypt'; then
+            if reencrypt_pending "$dev"; then
                 state="encryption INTERRUPTED — run luks-deploy.sh on it to resume"
             else
                 state="encrypted"
@@ -145,6 +155,10 @@ cmd_list() {
 }
 
 # ─── mount ───────────────────────────────────────────────────────────────────
+# One spelling per directory: "/mnt/", "/mnt" and "mnt" typed in / are the same
+# place, and must find the same record. (They did not: mount /dev/X /mnt/ then
+# umount /mnt left the volume unlocked and a stale record behind.)
+canon_dir() { readlink -m "$1" 2>/dev/null || echo "$1"; }
 state_file() { echo "$STATE_DIR/$(printf '%s' "$1" | tr '/' '_')"; }
 
 # The fstab of the install mounted at $1: prints "MOUNTPOINT SPEC OPTIONS" for
@@ -164,7 +178,8 @@ spec_to_dev() {
 
 do_mount() {
     # $1 = root partition, $2 = target dir, $3 = 1 for read-only
-    local root dir="$2" ro="$3" fstype dev opened="" sub cand top mp spec opts bdev mo
+    local root dir ro="$3" fstype dev opened="" sub cand top mp spec opts bdev mo
+    dir=$(canon_dir "$2")
     root=$(readlink -f "$1")
     [ -b "$root" ] || fatal "$1 is not a block device."
     [ "$(lsblk -dno TYPE "$root")" = part ] || fatal "$root is not a partition. Give the root partition, e.g. /dev/nvme0n1p6 (see: list)."
@@ -178,7 +193,7 @@ do_mount() {
     fstype=$(blkid -s TYPE -o value "$root" 2>/dev/null || true)
     case "$fstype" in
         crypto_LUKS)
-            if cryptsetup luksDump "$root" 2>/dev/null | grep -q 'online-reencrypt'; then
+            if reencrypt_pending "$root"; then
                 fatal "$root is in the middle of an interrupted encryption. Resume it with luks-deploy.sh first."
             fi
             if dev=$(mapper_of "$root"); then
@@ -217,7 +232,8 @@ do_mount() {
                 local hsub
                 hsub=$(printf '%s' "$opts" | tr ',' '\n' | sed -n 's/^subvol=\/\{0,1\}//p' | head -1)
                 [ -n "$hsub" ] || continue
-                mount -o "$mo,subvol=$hsub" "$dev" "$dir/home" && log "  /home (subvol=$hsub)" ;;
+                if mount -o "$mo,subvol=$hsub" "$dev" "$dir/home"; then log "  /home (subvol=$hsub)"
+                else warn "  /home (subvol=$hsub) could not be mounted"; fi ;;
             /boot|/boot/efi)
                 bdev=$(spec_to_dev "$spec" || true)
                 if [ -z "$bdev" ] || [ ! -b "$bdev" ]; then
@@ -226,25 +242,34 @@ do_mount() {
                 if is_running "$bdev"; then
                     warn "  $mp: $bdev is the running system's own $mp; not mounted"; continue
                 fi
-                mount -o "$mo" "$bdev" "$dir$mp" && log "  $mp ($bdev, from the install's fstab)" ;;
+                if mount -o "$mo" "$bdev" "$dir$mp"; then log "  $mp ($bdev, from the install's fstab)"
+                else warn "  $mp ($bdev) could not be mounted"; fi ;;
         esac
-    done < <(fstab_entries "$dir" | sort)
+    # LC_ALL=C, on the mountpoint alone: parents before children. In a UTF-8
+    # locale sort ignores punctuation at first, which put "/boot/efi UUID=.."
+    # BEFORE "/boot UUID=..": the EFI mount then failed for want of its
+    # mountpoint, nothing said so, and the chroot had no ESP.
+    done < <(fstab_entries "$dir" | LC_ALL=C sort -k1,1)
 }
 
 cmd_mount() {
-    need_root
     local ro=0 args=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --ro|--read-only) ro=1 ;;
             -h|--help) usage 0 ;;
+            -*) fatal "Unknown option: $1 (mount takes --ro)" ;;
             *) args+=("$1") ;;
         esac
         shift
     done
     [ ${#args[@]} -ge 1 ] || fatal "Which install? Give its root partition (see: list)."
-    do_mount "${args[0]}" "${args[1]:-/mnt}" "$ro"
-    log "${BLD}Done.${NC} Mounted on ${args[1]:-/mnt}. Undo with: $0 umount ${args[1]:-/mnt}"
+    [ ${#args[@]} -le 2 ] || fatal "Too many arguments: mount ROOT [DIR]"
+    need_root
+    local dir
+    dir=$(canon_dir "${args[1]:-/mnt}")
+    do_mount "${args[0]}" "$dir" "$ro"
+    log "${BLD}Done.${NC} Mounted on $dir. Undo with: $0 umount $dir"
 }
 
 # ─── chroot ──────────────────────────────────────────────────────────────────
@@ -285,7 +310,13 @@ do_umount() {
     if [ -f "$sf" ]; then
         mapper=$(sed -n 's/^mapper=//p' "$sf")
         if [ -n "$mapper" ] && [ -b "/dev/mapper/$mapper" ]; then
-            cryptsetup close "$mapper" && { [ -n "$quiet" ] || log "Locked /dev/mapper/$mapper again"; }
+            # Keep the record if the volume will not lock: without it a later
+            # umount would have nothing to close.
+            cryptsetup close "$mapper" || {
+                warn "Could not lock /dev/mapper/$mapper again; it is still open. Retry: $0 umount $dir"
+                return 1
+            }
+            [ -n "$quiet" ] || log "Locked /dev/mapper/$mapper again"
         fi
         rm -f "$sf"
     fi
@@ -293,8 +324,12 @@ do_umount() {
 }
 cmd_umount() {
     need_root
-    local dir="${1:-/mnt}"
-    mountpoint -q "$dir" || [ -f "$(state_file "$dir")" ] || fatal "Nothing of ours is mounted on $dir."
+    local dir
+    dir=$(canon_dir "${1:-/mnt}")
+    # Only what mount recorded. Without a record this is somebody else's
+    # mountpoint, and "umount -R" on it (on "/", say) is not ours to run.
+    [ -f "$(state_file "$dir")" ] \
+        || fatal "Nothing mounted by luks-mount.sh on $dir (see: status). For any other mount, use umount itself."
     do_umount "$dir" && log "${BLD}Done.${NC}"
 }
 

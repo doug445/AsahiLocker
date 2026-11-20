@@ -71,7 +71,7 @@ warn()  { echo "${YEL}[WARN]${NC}   $*" >&2; }
 fatal() { echo "${RED}[ERROR]${NC}  $*" >&2; exit 1; }
 
 usage() {
-    grep -E '^#   sudo \./bin/ram-rescue\.sh' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
+    sed -n '/^#   sudo \.\/bin\/ram-rescue\.sh build/,/^# itself go to/p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -89,9 +89,13 @@ EXTRA_TOOLS="dd truncate uniq less vi dmsetup wipefs e2fsck fuser"
 # ─── Small helpers ───────────────────────────────────────────────────────────
 src_dev() {
     # The block device a mountpoint lives on, with any btrfs [/subvol] removed.
+    # Prints nothing, and still returns 0, when nothing is mounted there: the
+    # callers test the result, and a non-zero status inside root_dev=$(...)
+    # would end the script under set -e before their error message.
     local s
     s=$(findmnt -no SOURCE "$1" 2>/dev/null | sed 's/\[.*//') || true
-    [ -n "$s" ] && readlink -f "$s"
+    [ -n "$s" ] || return 0
+    readlink -f "$s"
 }
 
 snippet_kver() {
@@ -186,6 +190,7 @@ cmd_build() {
     [ -x "$REPO_DIR/bin/luks-deploy.sh" ] || fatal "$REPO_DIR/bin/luks-deploy.sh not found."
     [ -x "$REPO_DIR/bin/luks-mount.sh" ] || fatal "$REPO_DIR/bin/luks-mount.sh not found."
     bash -n "$REPO_DIR/bin/luks-deploy.sh" || fatal "luks-deploy.sh does not parse."
+    bash -n "$REPO_DIR/bin/luks-mount.sh" || fatal "luks-mount.sh does not parse."
 
     # The cracklib dictionary: with it in the image, cryptsetup's passphrase
     # quality check works in the rescue exactly as on the installed system.

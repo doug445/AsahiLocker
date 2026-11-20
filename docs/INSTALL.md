@@ -57,6 +57,14 @@ you start — not on the machine you are about to encrypt.
 
 ## Step 1 — Build a Fedora Asahi live USB
 
+> **No USB stick to hand? You do not need one.** The built-in RAM rescue
+> encrypts the system you are sitting in, with nothing plugged in and no second
+> install: `sudo ./AsahiLocker/bin/ram-rescue.sh build --arm && sudo reboot`,
+> then type `asahilocker` at its prompt. It replaces Steps 1 and 2 and the
+> partition menus of Step 3; the prompts in
+> [What it will ask you](#what-it-will-ask-you) and Steps 4 onward are the
+> same. See [RAM-RESCUE.md](RAM-RESCUE.md).
+
 > **If your Mac will not boot the stick**, try `usb start` at the U-Boot prompt
 > first — an unpowered, unenumerated port is the usual cause and it looks
 > exactly like "this machine cannot boot USB"
@@ -215,7 +223,9 @@ Two things to know about that route:
   own subvolume, so under `subvol=root` the `home` folder is empty.
 - **Copy it, do not run it from `/mnt`.** The script has to unmount the
   target before it can encrypt it, and it cannot do that while it is running
-  from it.
+  from it. It also mounts the install on `/mnt` itself later on. Started from
+  anywhere under `/mnt`, or from the partition it is about to encrypt, it says
+  so and stops before changing anything.
 
 The script will ask you to choose a KDF profile (see the prompt table below); no
 flags are needed, and Enter takes `aggressive`, the strongest. To pick one
@@ -246,8 +256,12 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
 | `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `1`, the strongest |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
-| `Press Enter once Caps Lock is OFF` | Only shown when the kernel reports Caps Lock on at the `ENCRYPT` gate — which is exactly what happens if you switched it on to type that all-caps word. | Turn Caps Lock off, then Enter. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt |
+| `Type 'yes' in lower case to confirm Caps Lock is off` | The Caps Lock check, right before the passphrase. A lower-case word cannot be typed with Caps Lock on, so typing it is the proof. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt. | `yes`, in lower case. If it arrives as `YES`, Caps Lock is on: turn it off and type it again |
+| `Are you sure? (Type 'yes' in capital letters)` | `cryptsetup`'s own confirmation. | `YES` — hold **Shift**, do not reach for Caps Lock |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
+| `Try again? [Y/n]` | Only appears if `cryptsetup` stopped at its prompts: the two entries differed, the passphrase was refused as too weak (a dictionary word, say), or its `YES` was not in capitals. Nothing has been written at that point, and the script checks the partition to prove it before asking. | Enter to go round again (three attempts in all). `n` stops, with the partition untouched |
+| `Enter passphrase for /dev/nvme0n1p6` | The encryption itself has finished (15–60 minutes later), and `cryptsetup` is opening the new volume so the boot configuration can be written into it. The script waits here for as long as it takes. | Your new passphrase |
+| `Generate and enroll a recovery key now? [Y/n]` | A random 64-hex-character key in a second keyslot, saved next to the script: the way back in if the passphrase is ever forgotten. Asked after the encryption has finished; `cryptsetup` then asks for your passphrase once more to add the slot. | Enter (yes), then move the key to offline storage afterwards. See [Recovery key](../README.md#recovery-key) |
 
 If the script is interrupted at **any** point — power loss, closed lid, killed
 terminal — just boot the live USB and run it again. It detects the interrupted
@@ -266,7 +280,8 @@ checkpoint:
   Subvols : root=root, home=home
   Free    : 184320 MiB
   Arch    : aarch64
-  Crypto  : cryptsetup 2.7.5
+  Crypto  : cryptsetup 2.8.8
+  Sector  : 4096-byte LUKS sectors (disk logical 4096, btrfs sectorsize 4096)
   Mode    : encrypt
   KDF     : argon2id aggressive — 4096 MiB, 10 iterations, 4 threads
             = 5x the work of cryptsetup's own default here (1024 MiB x 8)
@@ -278,7 +293,9 @@ Confirm `ROOT` is the partition you expect and the subvolumes match your fstab.
 
 Encryption runs for **15–60 minutes** depending on partition size. Progress is
 printed continuously. Do not close the terminal, do not let the machine sleep,
-do not unplug.
+do not unplug. When it finishes, the script asks for your passphrase again to
+open the new volume, and waits for you there: nothing is at risk if you are
+away, but the configuration steps do not start until you answer.
 
 The script runs 8 steps, then a 12-point verification gate. **If any check fails
 it tells you and refuses to declare success** — do not reboot until you have
@@ -312,7 +329,9 @@ If it does not boot, do not panic — nothing is lost yet. Go to
 
 ## Step 5 — Finish on the encrypted system
 
-Once booted encrypted, run:
+Once booted encrypted, run this from the folder that holds your AsahiLocker
+clone on the installed system. (If it only ever lived on the USB stick, clone
+it now: `git clone https://github.com/doug445/AsahiLocker.git`.)
 
 ```bash
 sudo ./AsahiLocker/bin/post-encryption-setup.sh
@@ -326,6 +345,7 @@ re-run.
 To also enable your own units afterwards, copy the example config:
 
 ```bash
+cd AsahiLocker
 cp bin/post-encryption.conf.example bin/post-encryption.conf
 # edit EXTRA_UNITS=( ... ), then re-run the script
 ```
@@ -404,8 +424,9 @@ verified.
 ## Uninstalling AsahiLocker (Not Recommended)
 
 ```bash
-sudo ./boot-guards/install.sh --uninstall
-sudo ./extras/install.sh --uninstall
+sudo ./AsahiLocker/boot-guards/install.sh --uninstall
+sudo ./AsahiLocker/extras/install.sh --uninstall
+sudo ./AsahiLocker/bin/ram-rescue.sh remove     # if you built the RAM rescue
 ```
 
 Removing the *encryption* is a different matter: `cryptsetup reencrypt

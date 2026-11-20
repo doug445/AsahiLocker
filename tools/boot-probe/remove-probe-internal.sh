@@ -1,6 +1,8 @@
 #!/bin/bash
 #
 # AsahiLocker — remove the argon2id probe from the INTERNAL ESP.
+# Copyright (c) 2026 William MacKinnon <spilled-bowline0j@icloud.com>
+# SPDX-License-Identifier: MIT
 #
 # (An earlier, unpublished remove-probe.sh targeted the live-USB staging route;
 # this is the version for the internal ESP staging that the repo documents.)

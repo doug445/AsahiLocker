@@ -32,11 +32,12 @@
 # Targets: Fedora Asahi Remix on Apple Silicon (aarch64), btrfs root — only.
 # Every other platform: LinuxLocker (https://github.com/doug445/LinuxLocker).
 #
-# MUST NOT be run from the system it is encrypting. Run it either from a
-# Fedora Asahi live USB (docs/LIVE-USB.md) or from a second, minimal Asahi
-# install on the same internal disk (docs/SECOND-INSTALL.md) — the usual
-# answer when the machine will not boot USB at all. Either way the running
-# system's own partitions are excluded from the menus and refused as targets.
+# MUST NOT be run from the system it is encrypting. Run it from the RAM-only
+# rescue that ram-rescue.sh builds (docs/RAM-RESCUE.md; no USB stick needed),
+# from a Fedora Asahi live USB (docs/LIVE-USB.md), or from a second, minimal
+# Asahi install on the same internal disk (docs/SECOND-INSTALL.md). In every
+# case the running system's own partitions are excluded from the menus and
+# refused as targets.
 #
 # What this script does:
 #   1. Auto-detects partitions, subvolumes, and boot configuration
@@ -119,6 +120,11 @@ if [ "$USE_DEFAULTS" = 1 ]; then
     LUKS_RECOVERY_KEY="${LUKS_RECOVERY_KEY:-default}"
 fi
 
+# ─── Root check ──────────────────────────────────────────────────────────────
+# Here, before the log is opened and the cleanup trap is armed: a forgotten
+# sudo gets one line, not a stray log file and a page of recovery advice.
+[ "$EUID" -eq 0 ] || { echo "Must run as root: sudo $0${*:+ $*}" >&2; exit 1; }
+
 # ─── Non-interactive passphrase (fleet / automated testing) ──────────────────
 # LUKS_PASSPHRASE_FILE=<path>: read the passphrase from a file instead of the
 # terminal (used for reencrypt/resume/open and as the existing key when
@@ -138,6 +144,19 @@ fi
 # Log to the directory this script lives in (the USB/deployment drive),
 # not /tmp (which is tmpfs on live USB and gets wiped on reboot)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# /mnt and /mnt_temp are where this script mounts the install it encrypts.
+# Run from a drive mounted there, step 4 would mount the target over the top
+# of this directory: the state backup, the header copy and the recovery key
+# could no longer be written, and the run would stop AFTER the encryption.
+case "$(cd "$SCRIPT_DIR" && pwd -P)/" in
+    /mnt/*|/mnt_temp/*)
+        echo "AsahiLocker is running from $SCRIPT_DIR." >&2
+        echo "  /mnt is where this script mounts the install it encrypts, which would" >&2
+        echo "  hide this directory (log, state backup, recovery key) in mid-run." >&2
+        echo "  Mount the drive somewhere else (e.g. /media), or copy AsahiLocker to" >&2
+        echo "  /root, and run it from there. Nothing was changed." >&2
+        exit 1 ;;
+esac
 DEPLOY_LOG="$SCRIPT_DIR/luks-deploy-$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$DEPLOY_LOG") 2>&1
 echo "Full log: $DEPLOY_LOG"
@@ -444,35 +463,53 @@ pwq_unborrow() {
 }
 
 # ─── Cleanup Trap ────────────────────────────────────────────────────────────
+# MNT_OURS: set once step 4 mounts the target on /mnt. Until then whatever is
+# on /mnt is the operator's (a backup drive, a hand mount), and a dry run or a
+# declined prompt has no business unmounting it.
+# RECOVERY_HINTS: set once the target may be in a part-way state: an existing
+# LUKS header was found, or this run was told to go ahead. An exit before that
+# has changed nothing on the target, and says so instead of printing recovery
+# advice for an encryption that never started.
+MNT_OURS=0
+RECOVERY_HINTS=0
 cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
         echo ""
         err "════════════════════════════════════════════════════════════"
-        err "  Script exited with error (code $exit_code). Cleaning up..."
+        if [ "$RECOVERY_HINTS" = "1" ]; then
+            err "  Script exited with error (code $exit_code). Cleaning up..."
+        else
+            err "  Stopped (code $exit_code). Nothing on the target was changed."
+        fi
         err "════════════════════════════════════════════════════════════"
     fi
     # Clean up any temp mounts first (-R: the BLS check nests a boot mount
     # inside /mnt_temp, and a plain umount would fail on the child mount)
     umount -R /mnt_temp 2>/dev/null || umount /mnt_temp 2>/dev/null || true
     rmdir /mnt_temp 2>/dev/null || true
-    # Clean up chroot bind mounts (specific order matters)
-    umount /mnt/sys/firmware/efi/efivars 2>/dev/null || true
-    for mp in /mnt/run /mnt/sys /mnt/proc /mnt/dev/pts /mnt/dev; do
-        umount "$mp" 2>/dev/null || true
-    done
-    umount /mnt/boot/efi 2>/dev/null || true
-    umount /mnt/boot 2>/dev/null || true
-    umount /mnt/home 2>/dev/null || true
-    umount /mnt 2>/dev/null || true
-    cryptsetup close ${LUKS_NAME} 2>/dev/null || true
-    rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+    if [ "$MNT_OURS" = "1" ]; then
+        rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+        # Clean up chroot bind mounts (specific order matters)
+        umount /mnt/sys/firmware/efi/efivars 2>/dev/null || true
+        for mp in /mnt/run /mnt/sys /mnt/proc /mnt/dev/pts /mnt/dev; do
+            umount "$mp" 2>/dev/null || true
+        done
+        umount /mnt/boot/efi 2>/dev/null || true
+        umount /mnt/boot 2>/dev/null || true
+        umount /mnt/home 2>/dev/null || true
+        umount /mnt 2>/dev/null || true
+    fi
+    cryptsetup close "$LUKS_NAME" 2>/dev/null || true
     pwq_unborrow
-    if [ $exit_code -ne 0 ]; then
+    if [ $exit_code -ne 0 ] && [ "$RECOVERY_HINTS" != "1" ]; then
+        echo "  Full log: $DEPLOY_LOG"
+    elif [ $exit_code -ne 0 ]; then
+        local root_dev="${TARGET_ROOT:-<ROOT_DEV>}"
         echo ""
         echo "Recovery options:"
         echo "  If btrfs was shrunk but encryption didn't start:"
-        echo "    mount <ROOT_DEV> /mnt && btrfs filesystem resize max /mnt && umount /mnt"
+        echo "    mount $root_dev /mnt && btrfs filesystem resize max /mnt && umount /mnt"
         echo "  If encryption was interrupted:"
         echo "    RE-RUN THIS SCRIPT — it detects the interrupted state and"
         echo "    resumes automatically (cryptsetup reencrypt --resume-only)."
@@ -480,7 +517,7 @@ cleanup() {
         echo "    RE-RUN THIS SCRIPT — it offers a configuration-only mode that"
         echo "    redoes crypttab/fstab/initramfs/BLS and re-runs verification."
         echo "  LUKS header restore (if backed up):"
-        echo "    cryptsetup luksHeaderRestore <ROOT_DEV> --header-backup-file /boot/luks-header-backup.img"
+        echo "    cryptsetup luksHeaderRestore $root_dev --header-backup-file /boot/luks-header-backup.img"
         echo ""
         echo "  Pre-encryption backups saved to: $SCRIPT_DIR/"
         echo "  Full log: $DEPLOY_LOG"
@@ -499,23 +536,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ─── Root Check ──────────────────────────────────────────────────────────────
-[ "$EUID" -eq 0 ] || fatal "Must run as root: sudo $0"
-
 # ─── Partial Previous Run Detection ─────────────────────────────────────────
 # If a previous run was interrupted, detect and warn
-if [ -b /dev/mapper/${LUKS_NAME} ]; then
+if [ -b "/dev/mapper/${LUKS_NAME}" ]; then
+    # Not always a leftover. An install this tool encrypted is itself unlocked
+    # as ${LUKS_NAME}; run from there to encrypt a second install, the name is
+    # simply taken, by the root filesystem. That used to be reported as a
+    # stale mapper from a previous run, offered for closing, and ended in
+    # "Could not close ... (still in use?)" with no way forward on offer.
+    _root_src=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//' || true)
+    if [ -n "$_root_src" ] \
+       && [ "$(readlink -f "$_root_src" 2>/dev/null || true)" = "$(readlink -f "/dev/mapper/${LUKS_NAME}")" ]; then
+        fatal "The system you are running is itself encrypted, and unlocked as
+       /dev/mapper/${LUKS_NAME}: the name this script gives the volume it creates.
+       Give the install you are about to encrypt a name of its own and run again:
+           sudo LUKS_MAPPER_NAME=${LUKS_NAME}2 $0${*:+ $*}
+       Each install keeps its name in its own crypttab, so the two never meet."
+    fi
+    unset _root_src
     warn "Found /dev/mapper/${LUKS_NAME} already open from a previous run!"
     echo "  keep  = leave it open and reuse it (saves a passphrase prompt in config-only mode)"
     echo "  close = close it and start fresh"
-    read -p "Keep or close? (keep/close): " STALE_CHOICE
+    read -r -p "Keep or close? (keep/close): " STALE_CHOICE
     umount -R /mnt 2>/dev/null || true
     case "$STALE_CHOICE" in
         keep)
             log "  Keeping ${LUKS_NAME} open — it will be reused."
             ;;
         close)
-            cryptsetup close ${LUKS_NAME} 2>/dev/null \
+            cryptsetup close "${LUKS_NAME}" 2>/dev/null \
                 || fatal "Could not close ${LUKS_NAME} (still in use?). Close it manually and re-run."
             log "  Closed stale ${LUKS_NAME}."
             ;;
@@ -578,7 +627,9 @@ log "Tools OK. cryptsetup=$CRYPTSETUP_VER initramfs=$INITRAMFS_TOOL grub=$GRUB_M
 log "Loading required kernel modules..."
 modprobe dm-crypt 2>/dev/null || true
 modprobe dm_mod 2>/dev/null || true
-if ! lsmod | grep -q dm_crypt; then
+# /proc/modules, not `lsmod | grep -q`: grep -q leaves at its first match, and
+# under pipefail a producer cut short by SIGPIPE reads as "not loaded".
+if ! grep -q '^dm_crypt ' /proc/modules 2>/dev/null; then
     warn "Cannot load dm-crypt module. cryptsetup may still work via kernel built-in."
 fi
 
@@ -784,8 +835,9 @@ if [ "$ENV_KIND" = "installed" ]; then
     warn "  but ONLY to encrypt a DIFFERENT install than the one you booted."
     warn "The partitions this system is using are marked [IN USE] in the menus"
     warn "  below and cannot be chosen. If the install you want to encrypt is the"
-    warn "  one you are sitting in, stop now: reboot into a live USB or a second"
-    warn "  Asahi install and run this from there."
+    warn "  one you are sitting in, stop now: build the RAM rescue instead"
+    warn "  (ram-rescue.sh build --arm, then reboot; docs/RAM-RESCUE.md), or"
+    warn "  reboot into a live USB or a second Asahi install and run this there."
     m1n1_usb_check
 fi
 
@@ -808,7 +860,7 @@ for ps_dir in /sys/class/power_supply/*/; do
             err "║  Connect AC power before proceeding.                ║"
             err "╚══════════════════════════════════════════════════════╝"
             echo ""
-            read -p "Continue on battery? (Type 'BATTERY' to override): " BAT_OVERRIDE
+            read -r -p "Continue on battery? (Type 'BATTERY' to override): " BAT_OVERRIDE
             [ "$BAT_OVERRIDE" = "BATTERY" ] || fatal "Connect AC power and try again."
         fi
         break
@@ -838,6 +890,20 @@ partition_number() {
     local base
     base=$(basename "$(readlink -f "$1" 2>/dev/null || echo "$1")")
     cat "/sys/class/block/$base/partition" 2>/dev/null || true
+}
+
+# A menu cannot be answered once stdin has closed (a pipe that ran dry, a
+# terminal that went away), and read then fails at once, every time. The menu
+# loops below used to go round on that for ever: no prompt was ever answered,
+# and each pass wrote another line to the deploy log -- 1.5 GB in six minutes
+# when it was measured. This ends the menu instead. pick_partition runs inside
+# $( ), so the exit leaves that subshell and the failed assignment stops the
+# script.
+pick_no_input() {
+    echo "" >&2
+    echo "  No input: stdin is closed, so this menu cannot be answered. Stopping." >&2
+    echo "  (For unattended runs pin the partitions: LUKS_TARGET_ROOT/BOOT/EFI.)" >&2
+    exit 1
 }
 
 pick_partition() {
@@ -947,7 +1013,7 @@ pick_partition() {
     if [ ${#devs[@]} -eq 0 ]; then
         echo "  No $fstype partitions found!" >&2
         while true; do
-            read -p "  Enter device path manually: " manual_dev
+            read -r -p "  Enter device path manually: " manual_dev || pick_no_input
             if [ ! -b "$manual_dev" ]; then
                 echo "  ERROR: $manual_dev is not a block device." >&2
                 continue
@@ -964,7 +1030,7 @@ pick_partition() {
             manual_fs=$(blkid -s TYPE -o value "$manual_dev" 2>/dev/null || echo "unknown")
             if ! [[ "$manual_fs" =~ ^($fstype)$ ]]; then
                 echo "  WARNING: $manual_dev has '$manual_fs', expected '$fstype'." >&2
-                read -p "  Accept anyway? (yes/no): " accept
+                read -r -p "  Accept anyway? (yes/no): " accept
                 [ "$accept" = "yes" ] || continue
             fi
             echo "  Selected: $manual_dev" >&2; echo "$manual_dev"; return
@@ -989,7 +1055,7 @@ pick_partition() {
     while true; do
         local default_hint=""
         [ "$best_idx" -ge 0 ] && default_hint=" [default: $((best_idx+1))]"
-        read -p "  Select [1-${#devs[@]}] or device path${default_hint}: " choice
+        read -r -p "  Select [1-${#devs[@]}] or device path${default_hint}: " choice || pick_no_input
         if [ -z "$choice" ]; then
             if [ "$best_idx" -lt 0 ]; then
                 echo "  No default available — type a number or a device path." >&2
@@ -1021,7 +1087,7 @@ pick_partition() {
             actual_fs=$(blkid -s TYPE -o value "$choice" 2>/dev/null || echo "unknown")
             if ! [[ "$actual_fs" =~ ^($fstype)$ ]]; then
                 echo "  WARNING: $choice has '$actual_fs', expected '$fstype'." >&2
-                read -p "  Accept anyway? (yes/no): " accept
+                read -r -p "  Accept anyway? (yes/no): " accept
                 [ "$accept" != "yes" ] && continue
             fi
             echo -e "  Selected: ${GREEN}${choice}${NC}" >&2
@@ -1116,7 +1182,15 @@ for _role_dev in "ROOT:$TARGET_ROOT" "BOOT:$TARGET_BOOT" "EFI:$TARGET_EFI"; do
         err "  Booted root: $RUNNING_ROOT_DEV"
         err "  Nothing can encrypt the filesystem it is itself running from."
         echo ""
-        err "  Boot a Fedora Asahi live USB (docs/LIVE-USB.md), or a second"
+        if [ -x "$SCRIPT_DIR/ram-rescue.sh" ]; then
+            err "  To encrypt THIS system, the quickest way is the built-in RAM"
+            err "  rescue: no USB stick, no second install (docs/RAM-RESCUE.md):"
+            err "      sudo $SCRIPT_DIR/ram-rescue.sh build --arm && sudo reboot"
+            err "  Or boot a Fedora Asahi live USB (docs/LIVE-USB.md) or a second"
+        else
+            err "  Boot the RAM rescue (docs/RAM-RESCUE.md), a Fedora Asahi live"
+            err "  USB (docs/LIVE-USB.md) or a second"
+        fi
         err "  minimal Asahi install (docs/SECOND-INSTALL.md), and from there"
         err "  select the partitions of the install you want encrypted."
         fatal "Refusing to operate on the running system."
@@ -1142,7 +1216,7 @@ if [ "$ENV_KIND" = "installed" ]; then
     if [ "${LUKS_ACK_SIBLING:-0}" = "1" ]; then
         log "  LUKS_ACK_SIBLING=1 — confirmation pre-acknowledged."
     else
-        read -p "  Confirm (Type 'SIBLING' to proceed): " SIBLING_OK
+        read -r -p "  Confirm (Type 'SIBLING' to proceed): " SIBLING_OK
         [ "$SIBLING_OK" = "SIBLING" ] || fatal "Aborted for safety."
     fi
     unset _run_label _tgt_label
@@ -1170,8 +1244,8 @@ fi
 # the ROOT partition just selected. Otherwise every later step that reuses the
 # mapper (discovery, config, verification) would run against a DIFFERENT device
 # than the one LUKS_UUID/crypttab point at — cross-wiring two systems.
-if [ -b /dev/mapper/${LUKS_NAME} ]; then
-    MAPPER_BACKING=$(cryptsetup status ${LUKS_NAME} 2>/dev/null \
+if [ -b "/dev/mapper/${LUKS_NAME}" ]; then
+    MAPPER_BACKING=$(cryptsetup status "${LUKS_NAME}" 2>/dev/null \
         | awk '$1 == "device:" {print $2; exit}')
     MAPPER_BACKING=$(readlink -f "$MAPPER_BACKING" 2>/dev/null || echo "${MAPPER_BACKING:-unknown}")
     TARGET_ROOT_REAL=$(readlink -f "$TARGET_ROOT")
@@ -1181,7 +1255,7 @@ if [ -b /dev/mapper/${LUKS_NAME} ]; then
         err "/dev/mapper/${LUKS_NAME} is open but backed by: $MAPPER_BACKING"
         err "You selected ROOT: $TARGET_ROOT_REAL"
         err "Reusing this mapper would configure the WRONG system — closing it."
-        if cryptsetup close ${LUKS_NAME} 2>/dev/null; then
+        if cryptsetup close "${LUKS_NAME}" 2>/dev/null; then
             log "  Closed mismatched ${LUKS_NAME}; the selected device will be opened when needed."
         else
             fatal "Could not close ${LUKS_NAME} (still in use?). Close it manually and re-run."
@@ -1208,7 +1282,7 @@ ensure_unmounted() {
         warn "  [dry-run] a real run would require unmounting these first."
         return 0
     fi
-    read -p "  Unmount it now? (yes/no): " UNMOUNT_OK
+    read -r -p "  Unmount it now? (yes/no): " UNMOUNT_OK
     [ "$UNMOUNT_OK" = "yes" ] || fatal "Cannot operate on a mounted device."
     while IFS= read -r mp; do
         [ -n "$mp" ] || continue
@@ -1216,9 +1290,20 @@ ensure_unmounted() {
     done <<< "$mps"
     log "  Unmounted $dev."
 }
+# This script's own directory on the target is the one mount that cannot be
+# released: say that, rather than offer an unmount that can only fail busy.
+_self_src=$(findmnt -n -o SOURCE --target "$SCRIPT_DIR" 2>/dev/null | sed 's/\[.*//' || true)
+_self_src=$(readlink -f "${_self_src:-/nonexistent}" 2>/dev/null || true)
+if [ "$_self_src" = "$(readlink -f "$TARGET_ROOT")" ] \
+   || { [ -b "/dev/mapper/${LUKS_NAME}" ] && [ "$_self_src" = "$(readlink -f "/dev/mapper/${LUKS_NAME}")" ]; }; then
+    fatal "AsahiLocker is running from $SCRIPT_DIR, which is ON the partition it is
+       about to encrypt ($TARGET_ROOT). Copy the AsahiLocker folder to /root (or a
+       USB stick), unmount the target, and run it from the copy."
+fi
+unset _self_src
 ensure_unmounted "$TARGET_ROOT"
-if [ -b /dev/mapper/${LUKS_NAME} ]; then
-    ensure_unmounted /dev/mapper/${LUKS_NAME}
+if [ -b "/dev/mapper/${LUKS_NAME}" ]; then
+    ensure_unmounted "/dev/mapper/${LUKS_NAME}"
 fi
 
 # ─── Same-Disk Sanity Check ──────────────────────────────────────────────────
@@ -1230,7 +1315,7 @@ if [ "$DISK_ROOT" != "$DISK_BOOT" ] || [ "$DISK_ROOT" != "$DISK_EFI" ]; then
     echo "  ROOT: $TARGET_ROOT → $DISK_ROOT"
     echo "  BOOT: $TARGET_BOOT → $DISK_BOOT"
     echo "  EFI : $TARGET_EFI → $DISK_EFI"
-    read -p "Proceed? (yes/no): " cross_disk
+    read -r -p "Proceed? (yes/no): " cross_disk
     [ "$cross_disk" = "yes" ] || fatal "Aborted."
 fi
 
@@ -1246,16 +1331,26 @@ fi
 #      are idempotent, so they can simply be re-driven against the
 #      unlocked container ("config-only" mode).
 DEPLOY_MODE="encrypt"          # encrypt | resume | config-only
-if blkid "$TARGET_ROOT" | grep -q 'TYPE="crypto_LUKS"'; then
+if [ "$(blkid -s TYPE -o value "$TARGET_ROOT" 2>/dev/null || true)" = "crypto_LUKS" ]; then
+    RECOVERY_HINTS=1
     echo ""
     warn "$TARGET_ROOT already contains a LUKS header."
-    if ! cryptsetup luksDump "$TARGET_ROOT" >/dev/null 2>&1; then
+    # One dump, held in a variable, and the flag looked for in that. This is
+    # the test that tells an INTERRUPTED encryption from a finished one, so it
+    # does not ride on `luksDump | grep -q` under pipefail. grep -q exits at
+    # its first match; a producer still writing is then killed by SIGPIPE, and
+    # pipefail reports the pipeline as failed: "no match". That construction
+    # did misreport in post-encryption-setup.sh (lsinitrd, a long listing). It
+    # was not seen to fail with luksDump -- 300 runs against a 5.4 KB dump, no
+    # miss -- but "interrupted volume taken for a complete one" is not an
+    # outcome to leave to buffer sizes.
+    if ! LUKS_DUMP=$(cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null); then
         err "blkid reports crypto_LUKS but 'cryptsetup luksDump' cannot read the header."
         echo "  Try repairing it first, then re-run this script:"
         echo "    cryptsetup repair $TARGET_ROOT"
         fatal "LUKS header unreadable — see docs/RECOVERY.md."
     fi
-    if cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null | grep -q 'online-reencrypt'; then
+    if grep -q 'online-reencrypt' <<< "$LUKS_DUMP"; then
         warn "The header carries the 'online-reencrypt' requirement flag:"
         warn "a previous in-place encryption was INTERRUPTED partway through."
         echo ""
@@ -1263,7 +1358,7 @@ if blkid "$TARGET_ROOT" | grep -q 'TYPE="crypto_LUKS"'; then
         echo "  (reencrypt --resume-only) and then redo the configuration"
         echo "  phase. This script can do both now."
         echo ""
-        read -p "  Resume the interrupted encryption now? (yes/no): " RESUME_OK
+        read -r -p "  Resume the interrupted encryption now? (yes/no): " RESUME_OK
         [ "$RESUME_OK" = "yes" ] \
             || fatal "Aborted. Resume manually with: cryptsetup reencrypt --resume-only $TARGET_ROOT"
         DEPLOY_MODE="resume"
@@ -1278,7 +1373,7 @@ if blkid "$TARGET_ROOT" | grep -q 'TYPE="crypto_LUKS"'; then
         echo "  If this partition is an encrypted system that already boots"
         echo "  fine, answer no."
         echo ""
-        read -p "  Re-run configuration + verification on $TARGET_ROOT? (yes/no): " CONFIG_OK
+        read -r -p "  Re-run configuration + verification on $TARGET_ROOT? (yes/no): " CONFIG_OK
         [ "$CONFIG_OK" = "yes" ] || fatal "Aborted — partition is already LUKS."
         DEPLOY_MODE="config-only"
     fi
@@ -1319,9 +1414,9 @@ fi
 # (subvolumes, fstab, UUIDs) must read through the opened mapper device.
 DISCOVERY_DEV="$TARGET_ROOT"
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    if [ ! -b /dev/mapper/${LUKS_NAME} ]; then
+    if [ ! -b "/dev/mapper/${LUKS_NAME}" ]; then
         log "Unlocking $TARGET_ROOT (passphrase required)..."
-        cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" ${LUKS_NAME}
+        cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "${LUKS_NAME}"
     fi
     DISCOVERY_DEV="/dev/mapper/${LUKS_NAME}"
 fi
@@ -1479,7 +1574,7 @@ fi
 # Capture UUIDs before encryption. In config-only mode the raw partition
 # holds the LUKS header, so the btrfs UUID must be read from the open mapper.
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    BTRFS_UUID=$(blkid -s UUID -o value /dev/mapper/${LUKS_NAME})
+    BTRFS_UUID=$(blkid -s UUID -o value "/dev/mapper/${LUKS_NAME}")
 else
     BTRFS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
 fi
@@ -1505,7 +1600,15 @@ else
     FS_SECTOR=$(btrfs inspect-internal dump-super "$TARGET_ROOT" 2>/dev/null | awk '/^sectorsize/{print $2; exit}')
 fi
 case "$FS_SECTOR" in ''|*[!0-9]*) FS_SECTOR=4096 ;; esac
-if [ -n "${LUKS_SECTOR_SIZE:-}" ]; then
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    # The header exists and its sector size is what it is: read it, so the log
+    # and the closing summary state the volume's real value. (They used to
+    # print the size a fresh run would have chosen: 4096 for a volume made
+    # with 512-byte sectors before 1.12.0.)
+    LUKS_SECTOR_SIZE=$(cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null \
+        | awk '/^Data segments:/{d=1; next} d && /^[[:space:]]+sector:/{print $2; exit}' || true)
+    case "$LUKS_SECTOR_SIZE" in ''|*[!0-9]*) LUKS_SECTOR_SIZE="unknown" ;; esac
+elif [ -n "${LUKS_SECTOR_SIZE:-}" ]; then
     case "$LUKS_SECTOR_SIZE" in 512|1024|2048|4096) ;; *) fatal "LUKS_SECTOR_SIZE must be 512, 1024, 2048 or 4096 (got '$LUKS_SECTOR_SIZE')" ;; esac
     [ "$LUKS_SECTOR_SIZE" -le "$FS_SECTOR" ] || fatal "LUKS_SECTOR_SIZE=$LUKS_SECTOR_SIZE is larger than the btrfs sectorsize ($FS_SECTOR) — the filesystem would write partial encryption sectors"
 elif [ "$FS_SECTOR" -ge 4096 ]; then
@@ -1530,7 +1633,10 @@ if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
     SECTOR_SHORT=$(( _dev_b % LUKS_SECTOR_SIZE ))
     if [ "$SECTOR_SHORT" -ne 0 ]; then
         _disk=$(lsblk -dno PKNAME "$TARGET_ROOT" 2>/dev/null | head -n1)
-        _pt=$( [ -n "$_disk" ] && lsblk -dno PTTYPE "/dev/$_disk" 2>/dev/null | tr -d ' ')
+        # || true: a root that is not a partition has no parent disk, and a
+        # failed test inside $( ) would end the script under set -e, silently,
+        # one line short of the warning written for exactly that case.
+        _pt=$( { [ -n "$_disk" ] && lsblk -dno PTTYPE "/dev/$_disk" 2>/dev/null | tr -d ' '; } || true )
         if [ -z "$_disk" ] || [ "$_pt" != gpt ] || ! command -v sgdisk >/dev/null 2>&1; then
             warn "  $TARGET_ROOT is $SECTOR_SHORT bytes past a ${LUKS_SECTOR_SIZE}-byte boundary and its end cannot be moved here (not a GPT partition, or no sgdisk) — 512-byte LUKS sectors"
             LUKS_SECTOR_SIZE=512
@@ -1555,7 +1661,7 @@ if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
                         log "  [dry-run] a real run asks here; LUKS_ALIGN_PARTITION=yes|no answers it. Showing the ALIGN plan."
                         SECTOR_ALIGN=1
                     else
-                        read -p "  Type 'ALIGN' to move the partition end, or press Enter for 512-byte sectors: " ALIGN_CHOICE
+                        read -r -p "  Type 'ALIGN' to move the partition end, or press Enter for 512-byte sectors: " ALIGN_CHOICE
                         if [ "${ALIGN_CHOICE:-}" = "ALIGN" ]; then SECTOR_ALIGN=1; else LUKS_SECTOR_SIZE=512; log "  Keeping the partition as it is: 512-byte LUKS sectors"; fi
                     fi ;;
                 *) fatal "LUKS_ALIGN_PARTITION must be yes or no (got '$LUKS_ALIGN_PARTITION')" ;;
@@ -1563,7 +1669,11 @@ if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
         fi
     fi
 fi
-log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (disk logical sector $DEV_LSS, btrfs sectorsize $FS_SECTOR)$( [ "$SECTOR_ALIGN" = 1 ] && echo " — after moving the partition end down $SECTOR_SHORT bytes")"
+if [ "$DEPLOY_MODE" = "config-only" ]; then
+    log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (existing header — unchanged)"
+else
+    log "  LUKS sector size: $LUKS_SECTOR_SIZE bytes (disk logical sector $DEV_LSS, btrfs sectorsize $FS_SECTOR)$( [ "$SECTOR_ALIGN" = 1 ] && echo " — after moving the partition end down $SECTOR_SHORT bytes")"
+fi
 
 # --- align_partition_end ---
 # Move the end of $TARGET_ROOT down so its size is a multiple of
@@ -1639,15 +1749,15 @@ cross_check_part() {
     err "    Target fstab wants: UUID=$want for $2"
     err "  The selected $1 partition likely belongs to a DIFFERENT install on"
     err "  this machine. Writing boot config there would break BOTH systems."
-    read -p "  Use $3 anyway? (Type 'MISMATCH' to override): " XCHK
+    read -r -p "  Use $3 anyway? (Type 'MISMATCH' to override): " XCHK
     [ "$XCHK" = "MISMATCH" ] || fatal "Fix the partition selection and re-run."
 }
 log "Cross-checking selected BOOT/EFI partitions against the target's fstab..."
 cross_check_part "BOOT" "/boot"     "$TARGET_BOOT" "$BOOT_UUID"
 cross_check_part "EFI"  "/boot/efi" "$TARGET_EFI"  "$EFI_UUID"
 
-# ─── Pre-Encryption State Backup (to USB drive) ─────────────────────────────
-log "  Saving pre-encryption state to USB drive..."
+# ─── Pre-Encryption State Backup (next to this script) ──────────────────────
+log "  Saving pre-encryption state next to this script..."
 STATE_DIR="$SCRIPT_DIR/pre-luks-state-$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$STATE_DIR"
 # Lock the directory before the recovery key or the header backup land in it.
@@ -1687,7 +1797,7 @@ if [ -n "$BLS_ROOT_SUBVOL" ] && [ "$BLS_ROOT_SUBVOL" != "$ROOT_SUBVOL" ]; then
     warn "  The script will mount and modify the fstab subvolume ('$ROOT_SUBVOL')."
     warn "  If the system boots from a DIFFERENT subvolume, config changes"
     warn "  may not take effect. Consider fixing this inconsistency first."
-    read -p "  Continue anyway? (yes/no): " subvol_override
+    read -r -p "  Continue anyway? (yes/no): " subvol_override
     [ "$subvol_override" = "yes" ] || fatal "Fix subvolume inconsistency first."
 fi
 
@@ -1715,7 +1825,7 @@ elif [ "$USE_DEFAULTS" = 1 ]; then
     DO_CHECK="Y"
     log "--defaults: running the btrfs integrity check."
 else
-    read -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
+    read -r -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
 fi
 if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
     log "  Running btrfs check --readonly (this may take a while)..."
@@ -1723,7 +1833,7 @@ if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
         log "  Btrfs check: PASSED"
     else
         err "  Btrfs check found errors!"
-        read -p "  Continue despite btrfs errors? (Type 'FORCE' to override): " btrfs_override
+        read -r -p "  Continue despite btrfs errors? (Type 'FORCE' to override): " btrfs_override
         [ "$btrfs_override" = "FORCE" ] || fatal "Fix btrfs errors before encrypting."
     fi
 else
@@ -1788,7 +1898,7 @@ else
     # Re-prompt on a typo: by this point the user may have sat through a
     # 5-30 minute btrfs check, so a mistyped digit must not abort the run.
     while true; do
-        read -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
+        read -r -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
         case "${KDF_CHOICE:-1}" in
             1) apply_kdf_profile aggressive; break ;;
             2) apply_kdf_profile moderate;   break ;;
@@ -1883,12 +1993,13 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    read -p "Type 'CONFIGURE' to redo the configuration phase: " CONFIRM
+    read -r -p "Type 'CONFIGURE' to redo the configuration phase: " CONFIRM
     [ "$CONFIRM" = "CONFIGURE" ] || fatal "Aborted."
 else
-    read -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
+    read -r -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
     [ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
 fi
+RECOVERY_HINTS=1
 
 log "Starting LUKS deployment. Pre-encryption btrfs UUID: $BTRFS_UUID"
 
@@ -1972,24 +2083,25 @@ else
     # cannot be entered with Caps Lock on, which makes accepting it the proof:
     # no keyboard LED reading, which is unreliable over Bluetooth anyway, and
     # no warning issued minutes before the keystroke it is about.
-    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+    caps_lock_gate() {
+        local caps_ok caps_tries=0
+        [ -z "${LUKS_PASSPHRASE_FILE:-}" ] || return 0
         warn "  cryptsetup will now ask you to type YES in capital letters, and"
         warn "  then for the passphrase this machine will boot with."
         warn "  Hold SHIFT for that YES — do NOT use Caps Lock. Left on, it"
         warn "  inverts the passphrase both times, so the type-it-twice check"
         warn "  still passes and the boot prompt is where you would find out."
-        CAPS_TRIES=0
         while :; do
-            if ! read -p "  Type 'yes' in lower case to confirm Caps Lock is off: " CAPS_OK; then
+            if ! read -r -p "  Type 'yes' in lower case to confirm Caps Lock is off: " caps_ok; then
                 echo ""
                 fatal "Aborted (no input)."
             fi
-            [ "$CAPS_OK" = "yes" ] && break
-            CAPS_TRIES=$((CAPS_TRIES + 1))
-            if [ "$CAPS_TRIES" -ge 5 ]; then
+            [ "$caps_ok" = "yes" ] && break
+            caps_tries=$((caps_tries + 1))
+            if [ "$caps_tries" -ge 5 ]; then
                 fatal "Aborted."
             fi
-            if [ "$CAPS_OK" = "YES" ]; then
+            if [ "$caps_ok" = "YES" ]; then
                 warn "  That arrived as 'YES' — Caps Lock is ON. Turn it off and"
                 warn "  type yes again in lower case."
             else
@@ -1997,7 +2109,7 @@ else
             fi
         done
         echo ""
-    fi
+    }
 
     # cryptsetup runs a typed passphrase through libpwquality, whose dictionary
     # check needs the cracklib dictionary on disk; without one EVERY passphrase
@@ -2028,25 +2140,65 @@ else
     # Unlock at boot re-runs this KDF inside the initramfs, so LUKS_PBKDF_MEMORY KiB
     # must be allocatable there — fine for every profile: the initramfs has the
     # machine to itself, so even 4 GiB (aggressive) fits on an 8 GiB M1.
-    cryptsetup reencrypt \
-        --encrypt \
-        --type luks2 \
-        --cipher aes-xts-plain64 \
-        --key-size 512 \
-        --pbkdf argon2id \
-        --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
-        --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
-        --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
-        --hash sha512 \
-        --sector-size "$LUKS_SECTOR_SIZE" \
-        --reduce-device-size 32M \
-        --resilience checksum \
-        --verbose \
-        ${CRYPT_PWQ_ARGS[@]+"${CRYPT_PWQ_ARGS[@]}"} \
-        "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
-        "$TARGET_ROOT"
+    #
+    # In a loop, for one reason: cryptsetup takes the passphrase BEFORE it
+    # writes anything, and ends there if the two entries differ, if the quality
+    # check refuses it, or if its YES arrives in lower case. Measured on
+    # cryptsetup 2.8.8: exit 2 (exit 1 for the YES), no LUKS header, the btrfs
+    # superblock still in place, no temporary file left behind. That used to
+    # end the whole run, after every prompt and a btrfs check of up to half an
+    # hour, over one mistyped character. Now it asks again, and only when the
+    # device proves nothing was written: still no LUKS header, still btrfs. Any
+    # other failure stops here as before, and a re-run resumes it.
+    ENC_ATTEMPT=1
+    while :; do
+        caps_lock_gate
+        ENC_RC=0
+        cryptsetup reencrypt \
+            --encrypt \
+            --type luks2 \
+            --cipher aes-xts-plain64 \
+            --key-size 512 \
+            --pbkdf argon2id \
+            --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
+            --pbkdf-parallel "$LUKS_PBKDF_PARALLEL" \
+            --pbkdf-force-iterations "$LUKS_PBKDF_ITER" \
+            --hash sha512 \
+            --sector-size "$LUKS_SECTOR_SIZE" \
+            --reduce-device-size 32M \
+            --resilience checksum \
+            --verbose \
+            ${CRYPT_PWQ_ARGS[@]+"${CRYPT_PWQ_ARGS[@]}"} \
+            "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
+            "$TARGET_ROOT" || ENC_RC=$?
+        [ "$ENC_RC" -eq 0 ] && break
+
+        if [ -n "${LUKS_PASSPHRASE_FILE:-}" ] || [ "$ENC_ATTEMPT" -ge 3 ] \
+           || { [ "$ENC_RC" -ne 1 ] && [ "$ENC_RC" -ne 2 ]; } \
+           || cryptsetup isLuks "$TARGET_ROOT" 2>/dev/null \
+           || [ "$(blkid -p -s TYPE -o value "$TARGET_ROOT" 2>/dev/null || true)" != "btrfs" ]; then
+            fatal "cryptsetup reencrypt failed (exit $ENC_RC). Re-run this script: it reads the
+       state of $TARGET_ROOT and resumes or starts again as needed."
+        fi
+        ENC_ATTEMPT=$((ENC_ATTEMPT + 1))
+        echo ""
+        warn "  cryptsetup stopped at its prompts (exit $ENC_RC; its reason is just above),"
+        warn "  before writing anything. Checked: $TARGET_ROOT has no LUKS header and"
+        warn "  is still plain btrfs. Nothing is lost, and nothing needs undoing."
+        if ! read -r -p "  Try again? [Y/n]: " ENC_RETRY; then
+            echo ""
+            fatal "Aborted (no input). $TARGET_ROOT is untouched."
+        fi
+        case "$ENC_RETRY" in
+            [Nn]|[Nn][Oo]) fatal "Aborted. $TARGET_ROOT is untouched; re-run when ready." ;;
+        esac
+        echo ""
+    done
+    unset ENC_ATTEMPT ENC_RC ENC_RETRY
 
     log "  Encryption complete."
+    [ -n "${LUKS_PASSPHRASE_FILE:-}" ] \
+        || log "  Next, cryptsetup asks for your passphrase once more, to open the new volume."
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2067,19 +2219,19 @@ LUKS_UUID=$(blkid -s UUID -o value "$TARGET_ROOT")
 log "  LUKS UUID: $LUKS_UUID"
 
 # Open the LUKS container (already open if we came in via config-only mode)
-if [ -b /dev/mapper/${LUKS_NAME} ]; then
+if [ -b "/dev/mapper/${LUKS_NAME}" ]; then
     log "  Container already open: /dev/mapper/${LUKS_NAME}"
 else
-    cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" ${LUKS_NAME}
+    cryptsetup open "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "${LUKS_NAME}"
 fi
 
 # Verify mapper device exists
-[ -b /dev/mapper/${LUKS_NAME} ] || fatal "/dev/mapper/${LUKS_NAME} does not exist after open!"
+[ -b "/dev/mapper/${LUKS_NAME}" ] || fatal "/dev/mapper/${LUKS_NAME} does not exist after open!"
 log "  Mapper device: /dev/mapper/${LUKS_NAME} OK"
 
 # Verify the btrfs filesystem is intact inside LUKS
-INNER_FSTYPE=$(blkid -s TYPE -o value /dev/mapper/${LUKS_NAME} 2>/dev/null || echo "")
-INNER_UUID=$(blkid -s UUID -o value /dev/mapper/${LUKS_NAME} 2>/dev/null || echo "")
+INNER_FSTYPE=$(blkid -s TYPE -o value "/dev/mapper/${LUKS_NAME}" 2>/dev/null || echo "")
+INNER_UUID=$(blkid -s UUID -o value "/dev/mapper/${LUKS_NAME}" 2>/dev/null || echo "")
 log "  Inner filesystem: type=$INNER_FSTYPE UUID=$INNER_UUID"
 
 if [ "$INNER_FSTYPE" != "btrfs" ]; then
@@ -2091,7 +2243,7 @@ if [ "$INNER_UUID" != "$BTRFS_UUID" ]; then
     err "  filesystem. It usually means the open mapper is backed by a DIFFERENT"
     err "  device than expected, or the filesystem was damaged. Continuing"
     err "  would write boot configuration for the wrong system."
-    read -p "  Continue with UUID $INNER_UUID anyway? (Type 'UUID-CHANGED' to override): " UUID_OVERRIDE
+    read -r -p "  Continue with UUID $INNER_UUID anyway? (Type 'UUID-CHANGED' to override): " UUID_OVERRIDE
     [ "$UUID_OVERRIDE" = "UUID-CHANGED" ] || fatal "Aborted — investigate before configuring anything."
     warn "  Override accepted — updating BTRFS_UUID to $INNER_UUID."
     BTRFS_UUID="$INNER_UUID"
@@ -2105,7 +2257,7 @@ log "[4/8] Resizing btrfs to fill LUKS container and mounting..."
 
 # Resize btrfs to reclaim any space
 mkdir -p /mnt_temp
-mount /dev/mapper/${LUKS_NAME} /mnt_temp
+mount "/dev/mapper/${LUKS_NAME}" /mnt_temp
 btrfs filesystem resize max /mnt_temp 2>/dev/null || true
 umount /mnt_temp
 rmdir /mnt_temp
@@ -2115,18 +2267,19 @@ log "  Btrfs resize max complete."
 log "  Mounting filesystems for chroot..."
 # A minimal environment (the RAM rescue's initramfs) has no /mnt at all.
 mkdir -p /mnt
-mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt
+MNT_OURS=1
+mount -o "subvol=$ROOT_SUBVOL" "/dev/mapper/${LUKS_NAME}" /mnt
 
 # Verify we got the right subvolume
 if [ ! -f /mnt/etc/fstab ]; then
     err "  /mnt/etc/fstab not found after mounting subvol=$ROOT_SUBVOL!"
     err "  Trying subvolid=5 (top-level) as fallback..."
     umount /mnt
-    mount -o subvolid=5 /dev/mapper/${LUKS_NAME} /mnt
+    mount -o subvolid=5 "/dev/mapper/${LUKS_NAME}" /mnt
     if [ -f "/mnt/${ROOT_SUBVOL}/etc/fstab" ]; then
         log "  Found fstab at /mnt/${ROOT_SUBVOL}/etc/fstab — remounting correctly..."
         umount /mnt
-        mount -o "subvol=${ROOT_SUBVOL}" /dev/mapper/${LUKS_NAME} /mnt
+        mount -o "subvol=${ROOT_SUBVOL}" "/dev/mapper/${LUKS_NAME}" /mnt
     else
         fatal "Cannot find /etc/fstab in any mount configuration."
     fi
@@ -2135,7 +2288,7 @@ fi
 # Mount home subvolume (if separate from root)
 if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     mkdir -p /mnt/home
-    mount -o "subvol=$HOME_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt/home
+    mount -o "subvol=$HOME_SUBVOL" "/dev/mapper/${LUKS_NAME}" /mnt/home
 fi
 
 # Mount boot and EFI
@@ -2218,9 +2371,9 @@ if [ -z "$RK_CHOICE" ]; then
     if [ "$RK_DEFAULT" = "no" ]; then
         warn "  The header already has $SLOTS_IN_USE keyslots: saying yes adds ANOTHER"
         warn "  one on top of what is already there. Defaulting to no."
-        read -p "  Generate and enroll a recovery key now? [y/N]: " RK_CHOICE
+        read -r -p "  Generate and enroll a recovery key now? [y/N]: " RK_CHOICE
     else
-        read -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
+        read -r -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
     fi
     # A bare Enter takes the default rather than falling through to "enrol".
     RK_CHOICE="${RK_CHOICE:-$RK_DEFAULT}"
@@ -2300,7 +2453,7 @@ harden_path 0400 /mnt/boot/luks-header-backup.img
 install -m 0400 /mnt/boot/luks-header-backup.img "$STATE_DIR/luks-header-backup.img"
 harden_path 0400 "$STATE_DIR/luks-header-backup.img"
 log "  Header backup: /boot/luks-header-backup.img"
-log "  Header backup: $STATE_DIR/luks-header-backup.img (USB copy)"
+log "  Header backup: $STATE_DIR/luks-header-backup.img (copy next to this script)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 6: Update System Configuration
@@ -3032,9 +3185,9 @@ else
     warn "  V8 WARN: LUKS header backup missing from /boot"
 fi
 if [ -f "$STATE_DIR/luks-header-backup.img" ]; then
-    log "  V8 OK: LUKS header backup exists on USB"
+    log "  V8 OK: LUKS header backup exists in $STATE_DIR/"
 else
-    warn "  V8 WARN: LUKS header backup missing from USB"
+    warn "  V8 WARN: LUKS header backup missing from $STATE_DIR/"
 fi
 
 # ─── V9: dracut config ───────────────────────────────────────────────────────
@@ -3051,7 +3204,7 @@ else
 fi
 
 # ─── V10: LUKS device integrity ──────────────────────────────────────────────
-if [ -b /dev/mapper/${LUKS_NAME} ]; then
+if [ -b "/dev/mapper/${LUKS_NAME}" ]; then
     log "  V10 OK: /dev/mapper/${LUKS_NAME} is active"
     _ss=$(cryptsetup status "${LUKS_NAME}" 2>/dev/null | awk '/sector size:/{print $3; exit}')
     if [ "$DEPLOY_MODE" = "config-only" ]; then

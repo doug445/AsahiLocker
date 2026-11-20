@@ -144,10 +144,15 @@ working image intact rather than leaving you with zero bootable kernels.
 | UUID preservation check | Silent btrfs UUID change breaking fstab and backups |
 | Pre-encryption state backup | Having nothing to compare against when repairing |
 | Dual header backup | A single point of failure for the LUKS header |
-| Cleanup trap | Leaving mounts and mappers dangling after an error |
+| Script-location check | Running from a drive mounted on `/mnt`, or from the partition about to be encrypted. `/mnt` is where step 4 mounts the target, which would hide the script's own directory (state backup, header copy, recovery key) and stop the run *after* the encryption. Refused up front |
+| Passphrase retry | Losing the whole run to one mistyped character. `cryptsetup` takes the passphrase before it writes anything; if it stops there (entries differ, passphrase refused as weak, `YES` not in capitals) the script asks again — but only after the partition itself shows nothing was written: no LUKS header, btrfs superblock still in place. Three attempts; any other failure stops as before |
+| Cleanup trap | Leaving mounts and mappers dangling after an error. It unmounts `/mnt` only once this run has mounted the target there: until step 4, whatever is on `/mnt` belongs to the operator and is left alone |
 
-The cleanup trap also prints a tailored recovery command list on any non-zero
-exit, matched to how far the run got.
+The cleanup trap also prints a recovery command list on a non-zero exit —
+once the target may be in a part-way state, that is: an existing LUKS header
+was found, or the run was told to go ahead. An exit before that (a declined
+prompt, a refused partition, a forgotten `sudo`) says instead that nothing on
+the target was changed.
 
 ---
 

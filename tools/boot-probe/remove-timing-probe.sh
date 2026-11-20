@@ -1,6 +1,8 @@
 #!/bin/bash
 #
 # AsahiLocker — remove the argon2id TIMING probe from the internal ESP.
+# Copyright (c) 2026 William MacKinnon <spilled-bowline0j@icloud.com>
+# SPDX-License-Identifier: MIT
 # Counterpart to remove-probe-internal.sh; strips only the timing block, so the
 # allocation probe entry (if still staged) is left alone.
 set -euo pipefail

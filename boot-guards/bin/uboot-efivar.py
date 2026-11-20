@@ -166,7 +166,11 @@ def main(argv):
     path, dry, args = None, False, []
     i = 0
     while i < len(argv):
+        if argv[i] in ("-h", "--help"):
+            sys.stdout.write(__doc__); return 0
         if argv[i] == "--file":
+            if i + 1 >= len(argv):
+                sys.stderr.write("--file needs a path\n"); return 2
             path = argv[i + 1]; i += 2
         elif argv[i] == "--dry-run":
             dry = True; i += 1
@@ -175,6 +179,15 @@ def main(argv):
     if not args:
         sys.stderr.write(__doc__); return 2
     cmd = args[0]
+    if cmd not in ("list", "stale", "remove", "prune-stale", "check"):
+        sys.stderr.write("unknown command %s (try --help)\n" % cmd); return 2
+    if cmd == "remove":
+        try:
+            targets = ["Boot%04X" % int(a, 16) for a in args[1:]]
+        except ValueError:
+            sys.stderr.write("remove takes boot numbers in hex, e.g. 0003 (got: %s)\n" % " ".join(args[1:])); return 2
+        if not targets:
+            sys.stderr.write("remove needs at least one boot number, e.g. 0003\n"); return 2
     path = path or find_file()
     if not path:
         sys.stderr.write("no ubootefi.var on a mounted ESP (not a U-Boot host?)\n"); return 3
@@ -208,10 +221,6 @@ def main(argv):
         return 0
     if cmd == "prune-stale":
         targets = stale
-    elif cmd == "remove":
-        targets = ["Boot%04X" % int(a, 16) for a in args[1:]]
-    else:
-        sys.stderr.write("unknown command %s\n" % cmd); return 2
     if not targets:
         print("nothing to remove"); return 0
     names = set(targets)

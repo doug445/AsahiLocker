@@ -59,6 +59,13 @@ warn(){ echo -e "  ${Y}[warn]${N} $*"; }
 err(){  echo -e "  ${RED}[fail]${N} $*"; }
 hdr(){  echo -e "\n${B}${C}## $* ${N}"; }
 
+# --help needs no root and changes nothing.
+case "${1:-}" in
+    -h|--help)
+        "$SED" -n '/^# post-encryption-setup.sh —/,/^# Every tool is still called/p' "$("$READLINK" -f "$0")" | "$SED" 's/^# \{0,1\}//'
+        exit 0 ;;
+esac
+
 [ "$(id -u)" -eq 0 ] || { err "run as root (sudo)"; exit 1; }
 
 SELFDIR=$("$DIRNAME" "$("$READLINK" -f "$0")")
@@ -80,7 +87,7 @@ case "${1:-}" in
         [ "$#" -le 2 ] || { err "unexpected argument: $3"; exit 2; }
         ;;
     *)
-        err "unknown option: $1 (only '--config <file>' is accepted)"; exit 2
+        err "unknown option: $1 (only '--config <file>' and '--help' are accepted)"; exit 2
         ;;
 esac
 [ -z "$CONFIG" ] && [ -f "$SELFDIR/post-encryption.conf" ] && CONFIG="$SELFDIR/post-encryption.conf"
@@ -182,6 +189,17 @@ enable_units() {
     done
 }
 enable_units "boot guards" "${BOOT_GUARD_UNITS[@]}"
+# "absent" above is the normal case on a first run: the guards are installed by
+# their own installer, which also enables them. Say where it is.
+for u in "${BOOT_GUARD_UNITS[@]}"; do
+    if [ ! -e "/etc/systemd/system/$u" ] && [ ! -e "/usr/lib/systemd/system/$u" ]; then
+        if [ -x "$SELFDIR/../boot-guards/install.sh" ]; then
+            echo "     The boot guards are not installed yet. Install and enable them with:"
+            echo "         sudo $("$READLINK" -f "$SELFDIR/../boot-guards/install.sh")"
+        fi
+        break
+    fi
+done
 
 # ============================================================================
 hdr "3. Extra units from config"
@@ -259,7 +277,12 @@ echo "  --- initramfs carries the crypt module? ---"
 KVER=$(/usr/bin/uname -r)
 # Match the actual artifacts (cryptsetup binaries / dm-crypt module); a bare
 # 'crypt' would also hit libcrypto etc. and pass on any initramfs.
-if /usr/bin/lsinitrd "/boot/initramfs-${KVER}.img" 2>/dev/null | "$GREP" -qE 'cryptsetup|dm-crypt'; then
+# Listed into a variable first, never piped into grep -q: grep -q exits at its
+# first match, lsinitrd (half a megabyte of listing) is then killed by SIGPIPE,
+# and under pipefail the pipeline "fails" although the match was found. That
+# printed the warning below on every correctly encrypted system.
+INITRD_LIST=$(/usr/bin/lsinitrd "/boot/initramfs-${KVER}.img" 2>/dev/null || true)
+if "$GREP" -qE 'cryptsetup|dm-crypt' <<< "$INITRD_LIST"; then
     ok "initramfs-${KVER}.img contains crypt support"
 else
     warn "could not confirm crypt support in initramfs-${KVER}.img (lsinitrd unavailable, or crypt genuinely missing — check manually)"
