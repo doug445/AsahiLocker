@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-09-20">
+<meta property="article:modified_time" content="2026-11-20">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "argon2id and AES-256-XTS for LUKS2 on Apple Silicon: choosing a KDF profile",
       "description": "Choosing an argon2id profile for LUKS2 on an Apple Silicon Mac, changing the KDF on a volume that already exists, why pbkdf2 is never used, and how this compares with FileVault's key derivation.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-09-20",
+      "dateModified": "2026-11-20",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -81,6 +81,7 @@
     <a href="../live-usb/">Live USB</a>
     <a href="../u-boot-bootflow/">U-Boot</a>
     <a href="../second-install/">Second install</a>
+    <a href="../ram-rescue/">RAM rescue</a>
     <a href="../which-macs/">Which Macs</a>
     <a href="../argon2id/" aria-current="page">argon2id</a>
     <a href="../recovery/">Recovery</a>
@@ -97,13 +98,13 @@
     <p class="lede">Choosing an argon2id profile for LUKS2 on an Apple Silicon Mac, changing the KDF on a volume that already exists, why pbkdf2 is never used, and how this compares with FileVault&#x27;s key derivation.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/CRYPTO.md"><code>docs/CRYPTO.md</code></a> from the repository,
-      last changed 2026-09-20.</p>
+      last changed 2026-11-20.</p>
   </div>
 </header>
 
 <main class="wrap doc">
 <p>Everything behind the summary in the
-<a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#crypto-parameters--aes-256-xts-and-argon2id">README</a>: how to pick
+<a href="../README.md#crypto-parameters--aes-256-xts-and-argon2id">README</a>: how to pick
 an argon2id profile and why <code>aggressive</code> is the right default, how to change the
 KDF on a volume that already exists, why nothing here uses pbkdf2, what
 FileVault does with the same disk, how much your passphrase actually
@@ -132,27 +133,30 @@ numbers you see will be your own.</em></p>
 <th>Memory</th>
 <th>Iterations</th>
 <th>Threads</th>
-<th>Unlock, M2 Max</th>
+<th>At boot, M2 Max</th>
+<th>KDF alone, M2 Max</th>
 <th>vs stock</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>aggressive</code></td>
+<td>
+<code>aggressive</code> (default)</td>
 <td>4 GiB</td>
 <td>10</td>
 <td>4</td>
 <td>
 <strong>9.5 s</strong> (measured)</td>
+<td>7.3 s</td>
 <td>5x</td>
 </tr>
 <tr>
-<td>
-<code>moderate</code> (default)</td>
+<td><code>moderate</code></td>
 <td>2 GiB</td>
 <td>8</td>
 <td>4</td>
-<td>~3.8 s</td>
+<td>~4.2 s</td>
+<td>3.2 s</td>
 <td>2x</td>
 </tr>
 <tr>
@@ -160,16 +164,20 @@ numbers you see will be your own.</em></p>
 <td>1 GiB</td>
 <td>9</td>
 <td>4</td>
-<td>~2.1 s</td>
+<td>~2.7 s</td>
+<td>2.0 s</td>
 <td>1.125x</td>
 </tr>
 </tbody>
 </table></div>
-<p>Only <code>aggressive</code> is measured — from the boot journal, the gap between
-systemd-cryptsetup taking the passphrase and the volume opening. The other two
-scale from it at ~0.24 s per GiB-pass. The screenshot above shows a live
-<code>cryptsetup benchmark</code> run instead, which is a different basis and jitters with
-load, so its numbers sit slightly higher.</p>
+<p><em>At boot:</em> <code>aggressive</code> measured from the boot journal (the gap between
+systemd-cryptsetup taking the passphrase and the volume opening); the others
+scaled from it. <em>KDF alone:</em> <code>cryptsetup open --test-passphrase</code>, median of five
+runs, re-clocked 2026-11-20 with cryptsetup 2.8.8. Boot runs about 1.3x the KDF
+alone. <code>luks-tune.sh</code> also offers <code>paranoid</code> (4 GiB x 12): 8.6 s KDF alone,
+~11.3 s at boot. The screenshot above shows the prompt's own estimate, from a live
+<code>cryptsetup benchmark</code> run: a third basis, which jitters with load and lands
+between the two.</p>
 <p><strong>"vs stock"</strong> is work (memory x iterations) against what <code>cryptsetup</code> picks on
 this machine unaided — 1 GiB x 8, its <code>--iter-time</code> default of 2000 ms. Every
 profile is above 1.0x by construction, and a runtime guard enforces it (below).</p>
@@ -281,7 +289,7 @@ byte of filesystem data. It takes seconds.</p>
 iteration count) and <code>Threads:</code>. Every keyslot carries its own parameters — a
 passphrase slot and a keyfile slot on the same volume are commonly different.</p>
 <p>There is an ncurses front-end for all of this if you would rather not hand-type
-the parameters — <a href="https://github.com/doug445/AsahiLocker/blob/main/bin/luks-tune.sh"><code>bin/luks-tune.sh</code></a> offers the four tiers
+the parameters — <a href="../bin/luks-tune.sh"><code>bin/luks-tune.sh</code></a> offers the four tiers
 below plus a custom option, shows the measured unlock time and the strength
 graph below for whatever you pick before you commit, and takes the header
 backup for you:</p>
@@ -295,24 +303,24 @@ your key, wrapped:</p>
 <p>Then pick a tier. Each command converts the keyslot your passphrase opens
 <strong>without changing the passphrase</strong>; add <code>-S &lt;n&gt;</code> to target a specific slot,
 and repeat per slot you want re-costed.</p>
-<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more</span>
+<div class="codeblock"><pre><code><span class="pl-c"><span class="pl-c">#</span> fast — 1 GiB, 9 iterations          (~2.7 s at boot on an M2 Max; 12.5% more</span>
 <span class="pl-c"><span class="pl-c">#</span>                                      work than cryptsetup unaided here,</span>
 <span class="pl-c"><span class="pl-c">#</span>                                      which picks 1 GiB x 8)</span>
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-<span class="pl-c"><span class="pl-c">#</span> moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default</span>
+<span class="pl-c"><span class="pl-c">#</span> moderate — 2 GiB, 8 iterations      (~4.2 s)</span>
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-<span class="pl-c"><span class="pl-c">#</span> aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)</span>
+<span class="pl-c"><span class="pl-c">#</span> aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)   ← the shipped default</span>
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-<span class="pl-c"><span class="pl-c">#</span> paranoid — 4 GiB, 12 iterations     (~11.4 s)</span>
+<span class="pl-c"><span class="pl-c">#</span> paranoid — 4 GiB, 12 iterations     (~11.3 s)</span>
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
      /dev/nvme0n1p6</code></pre></div>
@@ -346,7 +354,7 @@ between <code>aggressive</code> and <code>paranoid</code>.</p>
 the table completely — not "makes it hard", removes it as an avenue. Against a
 fleet of a thousand top-end GPUs, each running the six concurrent guesses that
 4 GiB per guess allows, at the per-guess cost measured on real hardware:</p>
-<div class="codeblock"><pre><code>                                  time to search half the keyspace
+<pre><code>                                  time to search half the keyspace
                                   (log scale — each block ≈ 1.5 orders of magnitude)
 
  weak / reused password  ~30 bit  ▏                          12 days
@@ -358,7 +366,7 @@ fleet of a thousand top-end GPUs, each running the six concurrent guesses that
 
  the universe is         ~10^10 years old  ────────┤ everything below this line
                                                      already outlives it
-</code></pre></div>
+</code></pre>
 <p>No budget closes that gap. Money buys an attacker hardware, and hardware scales
 the cost <em>linearly</em> while your passphrase scales the keyspace <em>exponentially</em> —
 adding two diceware words costs you four seconds of typing and multiplies their
@@ -371,7 +379,7 @@ you, or from a keylogger, or from a camera above your desk. They image the
 machine while it is running, where the key sits in RAM. They find the backup you
 made to an unencrypted disk. Set your KDF so that brute force is hopeless — it
 already is, at every tier here — and then spend your remaining attention on the
-attacks that actually work. See <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#risks--read-this">Risks</a>.</p>
+attacks that actually work. See <a href="../README.md#risks--read-this">Risks</a>.</p>
 <p>That top row is the one to look at twice. At ~30 bits, <code>paranoid</code> buys you
 twelve days. <strong>The KDF cannot rescue a weak passphrase, and no tier on this page
 tries to pretend otherwise</strong> — see
@@ -717,7 +725,7 @@ gate.</li>
 correctly-configured encrypted volume is forgetting the passphrase, not
 someone breaking it. Paper in a safe beats a fifth backup of the header.
 Enrol a recovery key in a second keyslot as well — see
-<a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#recovery-key">Recovery key</a>.</li>
+<a href="../README.md#recovery-key">Recovery key</a>.</li>
 </ul>
 <hr>
 <h2 id="grub-and-argon2id">GRUB and argon2id</h2>
@@ -752,7 +760,7 @@ memory cost does.</p>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-09-20.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
   </div>
 </footer>
 

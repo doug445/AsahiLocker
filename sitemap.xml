@@ -2,7 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://doug445.github.io/AsahiLocker/</loc>
-    <lastmod>2026-10-24</lastmod>
+    <lastmod>2026-11-20</lastmod>
   </url>
   <url>
     <loc>https://doug445.github.io/AsahiLocker/live-usb/</loc>
@@ -22,7 +22,7 @@
   </url>
   <url>
     <loc>https://doug445.github.io/AsahiLocker/argon2id/</loc>
-    <lastmod>2026-09-20</lastmod>
+    <lastmod>2026-11-20</lastmod>
   </url>
   <url>
     <loc>https://doug445.github.io/AsahiLocker/recovery/</loc>
@@ -31,5 +31,9 @@
   <url>
     <loc>https://doug445.github.io/AsahiLocker/faq/</loc>
     <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://doug445.github.io/AsahiLocker/ram-rescue/</loc>
+    <lastmod>2026-11-20</lastmod>
   </url>
 </urlset>

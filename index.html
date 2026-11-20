@@ -21,7 +21,7 @@
 <meta property="og:image:height" content="720">
 <meta property="og:image:alt" content="AsahiLocker logo: a faceted pink and silver polyhedron bearing the Fedora mark and the Asahi Linux 'A'">
 <meta property="article:published_time" content="2026-10-14">
-<meta property="article:modified_time" content="2026-10-24">
+<meta property="article:modified_time" content="2026-11-20">
 <meta name="twitter:card" content="summary_large_image">
 
 <script type="application/ld+json">
@@ -49,7 +49,7 @@
       "headline": "Encrypt Fedora Asahi Remix with LUKS2, in place, on Apple Silicon",
       "description": "How to encrypt an installed Fedora Asahi Remix system on an Apple Silicon Mac with LUKS2 and argon2id, without reinstalling or touching macOS.",
       "datePublished": "2026-10-14",
-      "dateModified": "2026-10-24",
+      "dateModified": "2026-11-20",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "author": { "@id": "https://doug445.github.io/AsahiLocker/#author" },
       "about": { "@id": "https://doug445.github.io/AsahiLocker/#software" },
@@ -118,6 +118,7 @@
     <a href="live-usb/">Live USB</a>
     <a href="u-boot-bootflow/">U-Boot</a>
     <a href="second-install/">Second install</a>
+    <a href="ram-rescue/">RAM rescue</a>
     <a href="which-macs/">Which Macs</a>
     <a href="argon2id/">argon2id</a>
     <a href="recovery/">Recovery</a>
@@ -225,10 +226,21 @@
     <code>fstab</code>, <code>/etc/kernel/cmdline</code>, GRUB defaults, <em>all</em> BLS entries,
     dracut config and <em>all</em> initramfs images, behind a 12-point gate that refuses to let you
     reboot into a broken system.</li>
-  <li><strong>Pinned argon2id, never pbkdf2.</strong> AES-256-XTS with argon2id at 4, 2 or 1 GiB of
-    memory per guess, benchmarked on your own machine before you choose. Every profile is stronger
-    than <code>cryptsetup</code>'s own default on that machine; the script checks that at run time
-    and there is no flag to opt out.</li>
+  <li><strong>The strongest KDF by default.</strong> AES-256-XTS with argon2id at 4 GiB per guess,
+    the most memory <code>cryptsetup</code> allows: five times the work of a stock
+    <code>luksFormat</code>, and a 24 GB GPU fits only about six guesses at once. 2 and 1 GiB
+    profiles are one choice away. Every profile is stronger than <code>cryptsetup</code>'s own
+    default on that machine; the script checks that at run time and there is no flag to opt out.
+    Never pbkdf2.</li>
+  <li><strong>One command.</strong> <code>luks-deploy.sh --list</code> shows every install on the
+    Mac; <code>luks-deploy.sh /dev/nvme0n1p6 --defaults</code> encrypts one, with
+    <code>/boot</code> and EFI proven from that install's own <code>fstab</code> rather than
+    guessed from partition order.</li>
+  <li><strong>No USB stick needed.</strong> The built-in <a href="ram-rescue/">RAM rescue</a> boots
+    your own kernel from RAM and encrypts in place. It survives a power cut midway.</li>
+  <li><strong>Maintenance built in.</strong> <code>luks-mount.sh</code> unlocks, mounts and
+    chroots into any other Asahi install on the Mac, encrypted or not, and locks it all up again
+    when you leave.</li>
   <li><strong>Resumable after any interruption.</strong> LUKS2 re-encryption is journaled. Lose
     power, close the lid, kill the terminal: re-run the script and it finishes the job.</li>
   <li><strong>A <code>--dry-run</code> that really is dry.</strong> Detection, menus, fstab
@@ -284,6 +296,11 @@
 </ul>
 
 <h2 id="step-by-step">Step by step</h2>
+<div class="note"><p><strong>No USB stick, or one your Mac will not boot?</strong> Skip steps 1
+  and 2. On the installed system, run
+  <code>sudo ./AsahiLocker/bin/ram-rescue.sh build --arm</code>, reboot, and type
+  <code>asahilocker</code> at the rescue prompt. The <a href="ram-rescue/">RAM rescue guide</a> has
+  the details.</p></div>
 <ol class="steps">
   <li>
     <h3>Get the kit and build a live USB</h3>
@@ -323,8 +340,14 @@ sudo su -                               # build.sh refuses to run under sudo
     <h3>Dry-run it, then encrypt</h3>
     <p>From the live environment. The dry run shows everything it detected and the exact command it
       would run, and changes nothing:</p>
-<div class="codeblock"><pre><code>sudo /root/AsahiLocker/bin/luks-deploy.sh --dry-run
-sudo /root/AsahiLocker/bin/luks-deploy.sh</code></pre></div>
+<div class="codeblock"><pre><code>sudo /root/AsahiLocker/bin/luks-deploy.sh --list
+sudo /root/AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --dry-run
+sudo /root/AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults</code></pre></div>
+    <p><code>--list</code> shows every install on the Mac and its state. Naming the root partition
+      takes its <code>/boot</code> and EFI from that install's own <code>fstab</code>, and
+      <code>--defaults</code> takes the recommended answer to every question that has one: the
+      btrfs check, the <code>aggressive</code> KDF, a recovery key. Leave both off and it asks
+      instead.</p>
     <p>The script auto-detects root, <code>/boot</code> and EFI, cross-checks them against the
       target's own <code>fstab</code>, offers a read-only <code>btrfs check</code>, benchmarks your
       Mac, and asks you to pick a KDF profile. It then shows a pre-flight summary. Read it, and type
@@ -374,9 +397,9 @@ systemctl --failed</code></pre></div>
 <div class="table-scroll"><table>
   <thead><tr><th>Profile</th><th>Memory</th><th>Iterations</th><th>Unlock, M2 Max</th><th>Work vs cryptsetup default</th></tr></thead>
   <tbody>
-    <tr><td><code>aggressive</code></td><td>4 GiB</td><td>10</td><td><strong>9.5 s</strong> (measured)</td><td>5×</td></tr>
-    <tr><td><code>moderate</code> (default)</td><td>2 GiB</td><td>8</td><td>~3.8 s</td><td>2×</td></tr>
-    <tr><td><code>fast</code></td><td>1 GiB</td><td>9</td><td>~2.1 s</td><td>1.125×</td></tr>
+    <tr><td><code>aggressive</code> (default)</td><td>4 GiB</td><td>10</td><td><strong>9.5 s</strong> (measured)</td><td>5×</td></tr>
+    <tr><td><code>moderate</code></td><td>2 GiB</td><td>8</td><td>~4.2 s</td><td>2×</td></tr>
+    <tr><td><code>fast</code></td><td>1 GiB</td><td>9</td><td>~2.7 s</td><td>1.125×</td></tr>
   </tbody>
 </table></div>
 <figure>
@@ -519,6 +542,7 @@ systemctl --failed</code></pre></div>
 <ul class="guides">
   <li><a href="live-usb/">Build and boot a Fedora Asahi Remix live USB on an Apple Silicon Mac</a> — How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.</li>
   <li><a href="u-boot-bootflow/">U-Boot bootflow: booting a USB stick or a specific kernel on Apple Silicon</a> — Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.</li>
+  <li><a href="ram-rescue/">Encrypting Fedora Asahi Remix from a RAM-only rescue, with no USB stick</a> — Encrypt an installed Fedora Asahi Remix system with no USB stick and no second install: your own kernel, booted from RAM.</li>
   <li><a href="second-install/">Encrypting Fedora Asahi Remix from a second, minimal Asahi install</a> — Encrypt an installed Fedora Asahi Remix system without a live USB.</li>
   <li><a href="which-macs/">Which Apple Silicon Macs work: M1, M2 and M3 compatibility for AsahiLocker</a> — Which Apple Silicon Macs run Fedora Asahi Remix with LUKS2 encryption.</li>
   <li><a href="argon2id/">argon2id and AES-256-XTS for LUKS2 on Apple Silicon: choosing a KDF profile</a> — Choosing an argon2id profile for LUKS2 on an Apple Silicon Mac, changing the KDF on a volume that already exists, why pbkdf2 is never used, and how this compares with FileVault&#x27;s key derivation.</li>
@@ -545,7 +569,7 @@ systemctl --failed</code></pre></div>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 24 October 2026.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20 October 2026.</p>
   </div>
 </footer>
 

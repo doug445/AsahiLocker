@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encrypt Asahi Linux without a USB stick: the RAM-only rescue — AsahiLocker</title>
+<meta name="description" content="Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.">
+<link rel="canonical" href="https://doug445.github.io/AsahiLocker/ram-rescue/">
+<meta name="author" content="William MacKinnon">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0d0b14">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AsahiLocker">
+<meta property="og:title" content="Encrypt Asahi Linux without a USB stick: the RAM-only rescue — AsahiLocker">
+<meta property="og:description" content="Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.">
+<meta property="og:url" content="https://doug445.github.io/AsahiLocker/ram-rescue/">
+<meta property="og:image" content="https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="article:published_time" content="2026-11-20">
+<meta property="article:modified_time" content="2026-11-20">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://doug445.github.io/AsahiLocker/ram-rescue/#article",
+      "headline": "Encrypting Fedora Asahi Remix from a RAM-only rescue, with no USB stick",
+      "description": "Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.",
+      "datePublished": "2026-11-20",
+      "dateModified": "2026-11-20",
+      "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
+      "inLanguage": "en",
+      "author": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "publisher": {
+        "@id": "https://doug445.github.io/AsahiLocker/#author"
+      },
+      "about": {
+        "@id": "https://doug445.github.io/AsahiLocker/#software"
+      },
+      "isPartOf": {
+        "@id": "https://doug445.github.io/AsahiLocker/#article"
+      },
+      "mainEntityOfPage": "https://doug445.github.io/AsahiLocker/ram-rescue/",
+      "proficiencyLevel": "Expert"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://doug445.github.io/AsahiLocker/ram-rescue/#crumbs",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "AsahiLocker",
+          "item": "https://doug445.github.io/AsahiLocker/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Encrypt Asahi Linux without a USB stick",
+          "item": "https://doug445.github.io/AsahiLocker/ram-rescue/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<nav class="sitenav" aria-label="AsahiLocker guides">
+  <div class="wrap">
+    <a class="brand" href="../">AsahiLocker</a>
+    <a href="../">Guide</a>
+    <a href="../live-usb/">Live USB</a>
+    <a href="../u-boot-bootflow/">U-Boot</a>
+    <a href="../second-install/">Second install</a>
+    <a href="../ram-rescue/" aria-current="page">RAM rescue</a>
+    <a href="../which-macs/">Which Macs</a>
+    <a href="../argon2id/">argon2id</a>
+    <a href="../recovery/">Recovery</a>
+    <a href="../faq/">FAQ</a>
+    <a href="https://github.com/doug445/AsahiLocker">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero doc">
+  <div class="wrap">
+    <p class="crumbs"><a href="../">Encrypt Asahi Linux with LUKS2, in place</a> › Encrypt Asahi Linux without a USB stick</p>
+    <p class="eyebrow">No USB stick · no second install · LUKS2</p>
+    <h1>Encrypting Fedora Asahi Remix from a RAM-only rescue, with no USB stick</h1>
+    <p class="lede">Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.</p>
+    <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
+      <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RAM-RESCUE.md"><code>docs/RAM-RESCUE.md</code></a> from the repository,
+      last changed 2026-11-20.</p>
+  </div>
+</header>
+
+<main class="wrap doc">
+<p>The live USB is one way to run <code>luks-deploy.sh</code>, and a
+<a href="../second-install/">second Asahi install</a> is another. This is the third, and
+it needs neither a USB stick nor a second install: <code>bin/ram-rescue.sh</code> builds
+a rescue image from your own kernel, GRUB boots it, and the system runs
+entirely from RAM while <code>luks-deploy.sh</code> encrypts the root partition in place.</p>
+<p>Nothing is installed alongside your system, nothing is plugged in, and the
+macOS side is never touched: no new APFS volume, no m1n1 change. The rescue
+is one image in <code>/boot</code> and one GRUB entry in a file of its own, and
+<code>ram-rescue.sh remove</code> takes both away again.</p>
+<hr>
+<h2 id="how-it-works">How it works</h2>
+<pre lang="text"><code>  GRUB entry "AsahiLocker RAM rescue (encrypt in place)"
+    └─ your kernel + /boot/initramfs-asahilocker-rescue.img
+         (dracut image: luks-deploy.sh, cryptsetup, btrfs-progs, sgdisk,
+          the cracklib dictionary, the `asahilocker` launcher)
+    └─ rd.break=pre-mount  →  a root shell in RAM; nothing on the disk mounted
+         └─ asahilocker  →  luks-deploy.sh, with root, /boot and EFI pinned
+                            by GPT partition UUID  →  in-place encryption
+</code></pre>
+<p><code>/boot</code> is a separate ext4 partition and is never encrypted, so the rescue
+entry stays bootable at every stage. That is what makes this route survive a
+power cut: boot the rescue entry again and type <code>asahilocker</code>. The script
+sees the <code>online-reencrypt</code> flag in the LUKS header, repairs the journal if
+the cut left it dirty, and finishes the job.</p>
+<p>Three choices make that work at every stage:</p>
+<ul>
+<li>
+<strong>The rescue finds your partitions by GPT partition UUID</strong>, which stays the
+same before, during and after encryption. The root's filesystem UUID
+does not: it disappears the moment the LUKS header is written.</li>
+<li>
+<strong>The GRUB entry names <code>/boot</code> as the initrd's root device.</strong> That device is
+present in every state of the root partition, so the rescue reaches its
+prompt in seconds after a power cut, with no timeout. Nothing is mounted:
+<code>rd.break=pre-mount</code> stops before that.</li>
+<li>
+<strong>The cracklib dictionary is inside the image.</strong> cryptsetup checks a new
+passphrase in the rescue exactly as it does on the installed system, and
+refuses a weak one.</li>
+</ul>
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>The stock Fedora Asahi Remix layout: btrfs root, plus separate ext4 <code>/boot</code>
+and EFI partitions. <code>ram-rescue.sh</code> checks this and refuses anything else,
+including a root that is already encrypted.</li>
+<li>
+<code>gdisk</code> (for <code>sgdisk</code>) and <code>cracklib-dicts</code>: <code>sudo dnf install gdisk cracklib-dicts</code>. <code>ram-rescue.sh</code> lists anything else it misses.</li>
+<li>200 MiB free on <code>/boot</code>. The image is about 55 MiB.</li>
+<li>AC power, and a backup. This route rewrites every block of the root
+partition, exactly as the other two do.</li>
+</ul>
+<p>RAM is not a concern on any Apple Silicon Mac. The image is small, and the
+Argon2id KDF needs at most the memory of the profile you pick (1–4 GiB).</p>
+<h2 id="step-1--build-the-rescue">Step 1 — Build the rescue</h2>
+<p>On the Mac you are about to encrypt, booted normally:</p>
+<div class="codeblock"><pre><code>git clone https://github.com/doug445/AsahiLocker.git
+sudo ./AsahiLocker/bin/ram-rescue.sh build --arm</code></pre></div>
+<p>It prints what it found (disk, root, <code>/boot</code>, EFI, kernel) before it builds
+anything. <strong>Check the <code>root</code> line</strong>: that partition is the one the rescue
+will encrypt. Then it:</p>
+<ol>
+<li>builds the image under a temporary name and checks that every tool,
+every kernel module between the root partition and the bus, the
+dictionary and the launcher are really inside it. Only then does it move
+the image into place;</li>
+<li>writes <code>/etc/grub.d/42_asahilocker-rescue</code>, its own file, and regenerates
+<code>/boot/grub2/grub.cfg</code>. <code>40_custom</code> and any other file of yours are never
+touched. If the entry does not appear in <code>grub.cfg</code>, it takes it out again
+and stops;</li>
+<li>with <code>--arm</code>, sets GRUB to boot the rescue <strong>once</strong>, at the next reboot.</li>
+</ol>
+<p>The image belongs to this machine and this kernel. If a kernel update
+removes that kernel before you use the rescue, <code>arm</code> says so; run <code>build</code>
+again.</p>
+<h2 id="step-2--boot-it">Step 2 — Boot it</h2>
+<div class="codeblock"><pre><code>sudo reboot</code></pre></div>
+<p>The rescue stops at a <code>pre-mount:/root#</code> prompt, under a banner that names
+the partition it will encrypt. Fedora locks the root account, so you are not
+asked for a password. If you once gave root a password, you are asked for
+it here.</p>
+<h2 id="step-3--encrypt">Step 3 — Encrypt</h2>
+<div class="codeblock"><pre><code>asahilocker</code></pre></div>
+<p>From here it is the normal <code>luks-deploy.sh</code> run. The only difference is that
+there are no partition menus: the launcher pins root, <code>/boot</code> and EFI by
+partition UUID. See <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">INSTALL.md</a> for what each prompt means.
+<code>asahilocker --defaults</code> takes the recommended answer to every question that
+has one, as <code>luks-deploy.sh --defaults</code> does.</p>
+<p>The rescue also carries <code>luks-mount</code>, for looking inside an install without
+encrypting anything: <code>luks-mount list</code>, then <code>luks-mount chroot /dev/...</code> opens
+a shell inside it (unlocking it first if it is encrypted) and puts everything
+back when you leave.</p>
+<ul>
+<li>
+<strong>A weak passphrase is refused</strong> ("it is based on a dictionary word"). The
+run then stops, after the btrfs shrink and before anything is encrypted.
+Type <code>asahilocker</code> again: the shrink is not repeated.</li>
+<li>
+<strong>An early warning that the script directory is held in RAM.</strong> It is: the
+log, the pre-encryption state and the recovery key live there until the end
+of the run.</li>
+</ul>
+<p>Whatever the outcome, the launcher copies the deploy log, <code>dmesg</code>, <code>lsblk</code>,
+dracut's <code>rdsosreport.txt</code> and the key-free part of the pre-encryption state
+to <code>/boot/asahilocker-rescue-logs/&lt;time&gt;/</code>. The files are named one by one:
+the recovery key and the LUKS header backup are never among them.</p>
+<h3 id="if-the-power-goes-or-the-run-stops">If the power goes, or the run stops</h3>
+<p>Boot the Mac, choose <strong>AsahiLocker RAM rescue (encrypt in place)</strong> in the
+GRUB menu, and type <code>asahilocker</code> again. The <code>--arm</code> one-shot is used up, so
+you pick the entry by hand; GRUB shows its menu after a boot that did not
+finish. The script finds the interrupted encryption and offers to resume it.
+If the power cut left the reencryption journal dirty, it asks you to confirm
+a <code>cryptsetup repair</code> (type <code>YES</code>) and asks for the passphrase. The
+configuration phase then runs as usual.</p>
+<h2 id="step-4--keep-the-recovery-material">Step 4 — Keep the recovery material</h2>
+<p>At the end of a successful run, the script copies its whole state directory
+onto the encrypted system, to <code>/root/asahilocker-pre-luks-state-&lt;time&gt;/</code>, and
+tells you so in a box headed <strong>BEFORE you reboot</strong>. It holds the LUKS header
+backup, the pre-encryption fstab, GRUB and BLS state and, if you enrolled
+one, the recovery key.</p>
+<p><strong>That copy of the recovery key is inside the volume it unlocks.</strong> It is no
+use for the one case it exists for: a forgotten passphrase. Before you
+reboot, write it down:</p>
+<div class="codeblock"><pre><code>cat /root/AsahiLocker/bin/pre-luks-state-<span class="pl-k">*</span>/recovery-key.txt</code></pre></div>
+<p>or, after the first boot, move the directory from <code>/root</code> to offline storage.
+The header backup is also at <code>/boot/luks-header-backup.img</code>.</p>
+<p>If a run stops after the recovery key was enrolled but before that copy, the
+launcher says so and shows where the only copy is. Write it down, or run
+<code>asahilocker</code> again before you reboot.</p>
+<h2 id="step-5--reboot-into-the-encrypted-system">Step 5 — Reboot into the encrypted system</h2>
+<div class="codeblock"><pre><code>reboot -f</code></pre></div>
+<p>Enter the passphrase at the prompt. Then finish as on any route:</p>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/post-encryption-setup.sh
+sudo ./AsahiLocker/boot-guards/install.sh</code></pre></div>
+<h2 id="step-6--remove-the-rescue">Step 6 — Remove the rescue</h2>
+<div class="codeblock"><pre><code>sudo ./AsahiLocker/bin/ram-rescue.sh remove</code></pre></div>
+<p>That removes the image and <code>42_asahilocker-rescue</code>, regenerates <code>grub.cfg</code>,
+and clears the one-shot if it is still set. <code>/boot/asahilocker-rescue-logs/</code>
+is kept; it holds logs only, so delete it when you like.
+<code>sudo ./AsahiLocker/bin/ram-rescue.sh status</code> shows what is installed at any
+time.</p>
+<h2 id="what-is-different-in-ram">What is different in RAM</h2>
+<p><code>luks-deploy.sh</code> treats a <code>rootfs</code> root as live media (<code>ENV_KIND=live</code>), the
+same way it treats a live USB's overlay. On top of that:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Live USB</th>
+<th>RAM rescue</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partitions</td>
+<td>chosen from menus</td>
+<td>pinned by GPT partition UUID</td>
+</tr>
+<tr>
+<td>Log, state and recovery key</td>
+<td>written to the stick</td>
+<td>written to RAM, copied into the encrypted <code>/root</code> at the end</td>
+</tr>
+<tr>
+<td>Passphrase quality check</td>
+<td>the stick's dictionary</td>
+<td>the image's dictionary. Without one, the target's own copy is lent to the run (<code>/run</code> + a <code>pwquality.conf.d</code> drop-in, removed at exit). Only if neither exists is the check turned off, with a warning</td>
+</tr>
+<tr>
+<td>
+<code>dracut</code> / <code>grub2-mkconfig</code>
+</td>
+<td>on the stick</td>
+<td>only inside the target's chroot; the target is checked for them before anything is written</td>
+</tr>
+<tr>
+<td>Resume after an interruption</td>
+<td>boot the stick again</td>
+<td>boot the rescue entry again</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tested">Tested</h2>
+<p>Tested end to end in a KVM guest running the official Fedora Asahi Remix 45
+image, including a power cut in the middle of the encryption. Not yet run on
+Apple hardware. kernelzeroday first demonstrated this route, on M1 hardware,
+in PR #5 and <a href="https://github.com/kernelzeroday/asahi-ram-rescue">asahi-ram-rescue</a>.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>You see</th>
+<th>It means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>the partitions this rescue was built for are not here</code></td>
+<td>The rescue only acts on the disk it was built on. It is not portable between Macs.</td>
+</tr>
+<tr>
+<td>
+<code>arm</code>: <code>built for kernel …, which is no longer in /boot</code>
+</td>
+<td>A kernel update removed the rescue's kernel. Run <code>build</code> again.</td>
+</tr>
+<tr>
+<td>No banner, no <code>asahilocker</code> command</td>
+<td>You booted a normal entry, not the rescue. Check <code>ram-rescue.sh status</code>.</td>
+</tr>
+<tr>
+<td><code>Resume still failing after repair</code></td>
+<td>Do not wipe anything. Run <code>asahilocker</code> again; see <a href="../recovery/">RECOVERY.md</a>.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="see-also">See also</h2>
+<ul>
+<li>
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">INSTALL.md</a>: the prompts, step by step</li>
+<li>
+<a href="../recovery/">RECOVERY.md</a>: if something goes wrong</li>
+<li>
+<a href="../second-install/">SECOND-INSTALL.md</a> and <a href="../live-usb/">LIVE-USB.md</a>:
+the other two routes</li>
+</ul>
+
+<p class="backlink"><a href="../">← Back to the full guide: encrypt Fedora Asahi Remix with LUKS2, in place</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>AsahiLocker</strong> by William MacKinnon
+      (<a href="https://doug445.github.io/">doug445</a>) ·
+      <a href="https://github.com/doug445/AsahiLocker">Source on GitHub</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
+      <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
+    <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.codeblock').forEach(function (block) {
+  var btn = document.createElement('button');
+  btn.className = 'copy'; btn.type = 'button'; btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var text = block.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    }).catch(function () { btn.textContent = 'Select + copy'; });
+  });
+  block.appendChild(btn);
+});
+</script>
+</body>
+</html>
