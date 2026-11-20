@@ -92,8 +92,9 @@ interrupted encryption and finishes it.
   plain and an encrypted install; the command line of every script. Since
   2.1.0 every release has also been run end to end in a virtual machine on
   the official Fedora Asahi Remix image: encrypt, pass the gate, boot.
-- **In daily use.** The author's M1 Pro and M2 Max MacBook Pros were encrypted
-  with it and have asked for the passphrase at every boot since;
+- **In daily use on three Macs.** The author's M2 MacBook Air, M1 Pro MacBook
+  Pro and M2 Max MacBook Pro were encrypted with it and have asked for the
+  passphrase at every boot since;
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) says exactly what is known
   about every other M-series Mac, and how.
 - **Documented like it matters.** Every prompt and what to answer, every file

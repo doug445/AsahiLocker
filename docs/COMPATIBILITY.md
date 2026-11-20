@@ -34,10 +34,10 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.
 | **M1 Max** `t6001` | MacBook Pro 14" / 16" `j314c` / `j316c` | laptop | C | |
 | | Mac Studio `j375c` | desktop | C | |
 | **M1 Ultra** `t6002` | Mac Studio `j375d` | desktop | C | |
-| **M2** `t8112` | MacBook Air 13" (2022) `j413` | laptop | C | |
-| | MacBook Air 15" (2023) `j415` | laptop | C | |
-| | MacBook Pro 13" (2022) `j493` | laptop | C | |
-| | Mac mini (2023) `j473` | desktop | C | |
+| **M2** `t8112` | MacBook Air 13" (2022) `j413` | laptop | **A** | The author's MacBook Air (`Mac14,2`, 24 GB): encrypted in place with this tooling, the passphrase typed at every boot — see [TESTED-SYSTEMS.md](TESTED-SYSTEMS.md) |
+| | MacBook Air 15" (2023) `j415` | laptop | C | same SoC as the machine above |
+| | MacBook Pro 13" (2022) `j493` | laptop | C | same SoC |
+| | Mac mini (2023) `j473` | desktop | C | same SoC |
 | **M2 Pro** `t6020` | MacBook Pro 14" / 16" `j414s` / `j416s` | laptop | C | |
 | | Mac mini (2023) `j474s` | desktop | C | |
 | **M2 Max** `t6021` | MacBook Pro 14" `j414c` | laptop | **A** | The author's daily machine — see [TESTED-SYSTEMS.md](TESTED-SYSTEMS.md): production volume plus the 1.12.1 end-to-end run on a test image |
