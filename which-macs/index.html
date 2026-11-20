@@ -240,8 +240,9 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
 <td>MacBook Air 13" (2022) <code>j413</code>
 </td>
 <td>laptop</td>
-<td>C</td>
-<td></td>
+<td><strong>A</strong></td>
+<td>The author's MacBook Air (<code>Mac14,2</code>, 24 GB): encrypted in place with this tooling, the passphrase typed at every boot — see <a href="#tested-systems">TESTED-SYSTEMS.md</a>
+</td>
 </tr>
 <tr>
 <td></td>
@@ -249,7 +250,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
 </td>
 <td>laptop</td>
 <td>C</td>
-<td></td>
+<td>same SoC as the machine above</td>
 </tr>
 <tr>
 <td></td>
@@ -257,7 +258,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
 </td>
 <td>laptop</td>
 <td>C</td>
-<td></td>
+<td>same SoC</td>
 </tr>
 <tr>
 <td></td>
@@ -265,7 +266,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.</p>
 </td>
 <td>desktop</td>
 <td>C</td>
-<td></td>
+<td>same SoC</td>
 </tr>
 <tr>
 <td>
@@ -525,6 +526,14 @@ format as <a href="https://github.com/doug445/linux-backup-system/blob/main/docs
 <td>btrfs root on LUKS2 argon2id <strong><code>aggressive</code></strong> (4 GiB × 10) — <strong>9.5 s unlock measured from the boot journal</strong>, the figure the KDF profile table is built on — GRUB on <code>arm64-efi</code> behind m1n1/U-Boot</td>
 <td>
 <strong>in-place encryption ✅ — production</strong>, the development platform since August 2026. Once left unbootable by an earlier release: <code>main</code> had been rewound behind the v1.8.2/1.8.3 tags, so the machine ran a <code>luks-deploy.sh</code> without the issue #2 fix (a <code>grep</code> for <code>GRUB_CMDLINE_LINUX</code> — a line Fedora Asahi Remix does not have — exiting stage 6c silently under <code>pipefail</code>); recovered from the live USB in configuration-only mode, and the fix is on <code>main</code> since 2026-09-02</td>
+</tr>
+<tr>
+<td>Fedora Asahi Remix (aarch64)</td>
+<td>2022 MacBook Air 13" (M2, <code>Mac14,2</code>: 8 CPU cores, 10 GPU cores, 24 GB RAM)</td>
+<td>btrfs root (<code>root</code> + <code>home</code> subvolumes) on LUKS2, unlocked by passphrase in the initramfs; ext4 <code>/boot</code>, vfat ESP at <code>/boot/efi</code>
+</td>
+<td>
+<strong>in-place encryption ✅ — production</strong>: the author's Air, the passphrase typed at every boot</td>
 </tr>
 <tr>
 <td>Fedora Asahi Remix 45 Minimal (aarch64)</td>

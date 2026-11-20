@@ -100,7 +100,7 @@
         {
           "@type": "Question",
           "name": "Which Macs does AsahiLocker support?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Every M-series Mac that Fedora Asahi Remix boots, M1 through M3, laptop or desktop. It is verified in production on an M1 Pro and an M2 Max MacBook Pro and reported working on an M3 MacBook Air. M4 is not claimed because Asahi does not boot it yet." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Every M-series Mac that Fedora Asahi Remix boots, M1 through M3, laptop or desktop. It is verified in production on an M2 MacBook Air, an M1 Pro MacBook Pro and an M2 Max MacBook Pro, and reported working on an M3 MacBook Air. M4 is not claimed because Asahi does not boot it yet." }
         }
       ]
     }
@@ -296,8 +296,9 @@
     mid-encryption followed by a resume. A VM is not a Mac, and the
     <a href="which-macs/#tested-systems">tested-systems table</a> says exactly what each run did
     and did not show.</li>
-  <li><strong>In daily use.</strong> The author's MacBook Pro 16" (M1 Pro) and 14" (M2 Max) were
-    encrypted with it and have asked for the passphrase at every boot since.</li>
+  <li><strong>In daily use on three Macs.</strong> The author's MacBook Air 13" (M2), MacBook Pro
+    16" (M1 Pro) and MacBook Pro 14" (M2 Max) were encrypted with it and have asked for the
+    passphrase at every boot since.</li>
   <li><strong>Stronger than stock, enforced.</strong> The default profile does five times the
     work per guess of a plain <code>luksFormat</code> on the same Mac. The script measures what
     <code>cryptsetup</code> would have chosen on your machine and will not write anything
@@ -495,8 +496,8 @@ systemctl --failed</code></pre></div>
   model-specific; partitions, sector size and initramfs contents are all read at run time.
 </p>
 <ul>
-  <li><span class="ok">Verified in production:</span> MacBook Pro 16" M1 Pro and MacBook Pro 14"
-    M2 Max, both encrypted in place and unlocked at every boot.</li>
+  <li><span class="ok">Verified in production:</span> MacBook Air 13" M2, MacBook Pro 16" M1 Pro
+    and MacBook Pro 14" M2 Max, all three encrypted in place and unlocked at every boot.</li>
   <li><span class="ok">Reported working:</span> M3 MacBook Air, via the second-install route
     (<a href="https://www.kirsle.net/asahi-linux-with-luks-encryption">Noah Petherbridge's write-up</a>).</li>
   <li><strong>Not claimed:</strong> M4. The kernel ships its device trees, but Asahi does not boot
