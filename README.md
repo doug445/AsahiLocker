@@ -610,6 +610,12 @@ four additions to the tests keep all of it that way: `tests/cli-smoke-test.sh`,
 `tests/luks-mount-test.sh`, the refused passphrase in the loopback suite, and
 the closed-stdin menu.
 
+The fixes shipped as v2.2.1, and **v3.0.0 marks the audited state**, as
+v1.11.0 and v2.0.0 marked the first two. A major number, because the scripts
+are deliberately stricter than before: an option a script does not know is an
+error, `luks-mount.sh umount` acts only on what it mounted, and a run from a
+place that cannot work is refused before it starts.
+
 The design decisions are the author's; the audits check that the code keeps
 them. Nothing here has changed hands.
 
