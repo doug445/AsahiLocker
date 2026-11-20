@@ -408,6 +408,13 @@ cleanup() {
         echo ""
         echo "  Pre-encryption backups saved to: $SCRIPT_DIR/"
         echo "  Full log: $DEPLOY_LOG"
+        if [ "${STATE_VOLATILE:-0}" = "1" ]; then
+            echo ""
+            echo "  $SCRIPT_DIR is held in RAM. If you are not re-running the"
+            echo "  script straight away, copy it somewhere persistent BEFORE you"
+            echo "  reboot: it holds the log and, if one was enrolled, the only"
+            echo "  copy of the recovery key."
+        fi
     fi
     # Give the background tee logger a moment to drain the pipe, so the final
     # lines (including the recovery instructions above) reach the log file.
@@ -491,10 +498,14 @@ if ! lsmod | grep -q dm_crypt; then
 fi
 
 # ─── Environment Detection ───────────────────────────────────────────────────
-# Two environments can run this script safely:
+# Three environments can run this script safely:
 #   • a Fedora Asahi live USB                       (docs/LIVE-USB.md)
 #   • a second, minimal Asahi install on the same internal disk
 #                                                   (docs/SECOND-INSTALL.md)
+#   • a RAM-only rescue: the target install's own initramfs, stopped at a
+#     dracut rd.break=pre-mount shell, with this script included in the image.
+#     / is "rootfs", nothing on the disk is mounted, and everything written
+#     next to the script is gone at reboot ($STATE_VOLATILE below).
 # The second route exists because plenty of Apple Silicon machines never
 # enumerate a USB stick in U-Boot at all, and a 20 GiB Fedora Minimal install
 # alongside the real one is the reliable way out. Encrypting a partition from a
@@ -508,7 +519,13 @@ fi
 # instead of an obscure umount failure an hour later.
 CURRENT_ROOT_FSTYPE=$(findmnt -n -o FSTYPE / 2>/dev/null || echo "unknown")
 RUNNING_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
-RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "${RUNNING_ROOT_DEV:-unknown}")
+# Resolve only a real path. A RAM root reports a bare word ("rootfs", "tmpfs",
+# "overlay"), and readlink -f resolves that against the current directory,
+# which put "booted from /root/AsahiLocker/bin/rootfs" in the log.
+case "$RUNNING_ROOT_DEV" in
+    /*) RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "$RUNNING_ROOT_DEV") ;;
+    '') RUNNING_ROOT_DEV="unknown" ;;
+esac
 # What a block device is built on, as /dev paths: the partitions under a
 # dm-crypt, LVM or RAID device. Nothing for a plain partition or disk. The one
 # place the /sys slaves layout is spelled out; both walks below use it.
@@ -653,6 +670,26 @@ if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
         && ENV_KIND="live"
 fi
 log "Environment: $ENV_KIND (booted from ${RUNNING_ROOT_DEV}, disk ${RUNNING_ROOT_DISK:-unknown})"
+
+# Is the directory this script runs from held in RAM? Everything the run leaves
+# behind is written there: the deploy log, the pre-encryption state, a copy of
+# the LUKS header backup and the recovery key. On a stick that is the point; in
+# a RAM rescue all of it is gone at reboot, and the recovery key exists nowhere
+# else. The end of the run copies the directory onto the encrypted system
+# (KEEP_DIR, far below); this is the early notice.
+STATE_VOLATILE=0
+case "$(findmnt -n -o FSTYPE --target "$SCRIPT_DIR" 2>/dev/null || true)" in
+    rootfs|tmpfs|ramfs) STATE_VOLATILE=1 ;;
+esac
+if [ "$STATE_VOLATILE" = "1" ]; then
+    echo ""
+    warn "AsahiLocker is running from $SCRIPT_DIR, which is held in RAM."
+    warn "  The deploy log, the pre-encryption state backup, the LUKS header"
+    warn "  backup copy and the recovery key are written there, and RAM is"
+    warn "  cleared at reboot. A completed run copies them onto the encrypted"
+    warn "  system before it exits. If the run stops early, copy that directory"
+    warn "  somewhere persistent BEFORE you reboot."
+fi
 
 if [ "$ENV_KIND" = "installed" ]; then
     echo ""
@@ -1718,6 +1755,29 @@ else
         echo ""
     fi
 
+    # cryptsetup runs a typed passphrase through libpwquality, whose dictionary
+    # check needs the cracklib dictionary on disk. A minimal image (a dracut RAM
+    # rescue) does not carry it, and then EVERY passphrase is refused with
+    # "error loading dictionary". --force-password skips the quality check, so
+    # it is passed only when the dictionary really is absent: wherever it is
+    # present, a weak passphrase is still rejected. A passphrase read from
+    # LUKS_PASSPHRASE_FILE is never quality-checked, so that route needs nothing.
+    CRYPT_PWQ_ARGS=()
+    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+        PWQ_DICT=$(sed -n 's/^[[:space:]]*dictpath[[:space:]]*=[[:space:]]*//p' \
+            /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null \
+            | tail -n 1 || true)
+        PWQ_DICT="${PWQ_DICT:-/usr/share/cracklib/pw_dict}"
+        if ! compgen -G "${PWQ_DICT}.pwd*" >/dev/null; then
+            CRYPT_PWQ_ARGS=(--force-password)
+            warn "  No cracklib dictionary here (${PWQ_DICT}.pwd): cryptsetup's"
+            warn "  passphrase quality check is OFF for this run, and a weak"
+            warn "  passphrase will be accepted without complaint. Choose a strong one."
+            echo ""
+        fi
+        unset PWQ_DICT
+    fi
+
     # LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
     # auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
     # --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
@@ -1738,7 +1798,7 @@ else
         --reduce-device-size 32M \
         --resilience checksum \
         --verbose \
-        --force-password \
+        ${CRYPT_PWQ_ARGS[@]+"${CRYPT_PWQ_ARGS[@]}"} \
         "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
         "$TARGET_ROOT"
 
@@ -1940,10 +2000,9 @@ case "$RK_CHOICE" in
             # --hash sha512: a new keyslot gets its own AF hash, and without an
             # explicit value cryptsetup stamps its compiled-in sha256 — the
             # same silent downgrade luks-tune.sh had, verified on cryptsetup 2.8.
-            # --force-password: skip pwquality's cracklib dictionary check; the
-            # dictionary isn't in a RAM rescue image and its absence fails the call.
+            # No --force-password: the new key comes from a file, and cryptsetup
+            # quality-checks only a passphrase typed at a terminal.
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
-                   --force-password \
                    --hash sha512 \
                    --pbkdf argon2id \
                    --pbkdf-memory "$LUKS_PBKDF_MEMORY" \
@@ -2797,20 +2856,33 @@ cp "$DEPLOY_LOG" /mnt/boot/luks-deploy.log 2>/dev/null || true
 chroot /mnt /usr/sbin/restorecon -F /boot/luks-deploy.log 2>/dev/null || true
 log "Log also saved to target: /boot/luks-deploy.log"
 echo ""
-echo "Full log: $DEPLOY_LOG (on deployment drive)"
+if [ "$STATE_VOLATILE" = "1" ]; then
+    echo "Full log: $DEPLOY_LOG (in RAM -- gone at reboot)"
+else
+    echo "Full log: $DEPLOY_LOG (on deployment drive)"
+fi
 echo "          /boot/luks-deploy.log (on target system)"
 echo ""
 echo "Pre-encryption backups: $STATE_DIR/"
 echo ""
 
-# The second-install route ends with the operator deleting the install this
-# script ran from. Say so here, where they are actually looking.
-if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+# Two routes leave the recovery material somewhere that is about to disappear:
+# the second-install route ends with the operator deleting the install this
+# script ran from, and a RAM rescue loses it at reboot. Say so here, where they
+# are actually looking.
+KEEP_WHY=""
+if [ "$STATE_VOLATILE" = "1" ]; then
+    KEEP_WHY="ram"
+elif [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+    KEEP_WHY="sibling"
+fi
+if [ -n "$KEEP_WHY" ]; then
     # The EXIT trap unmounts /mnt and closes the mapper the moment this script
     # returns, so any "copy it now" instruction is already wrong when it is
     # read. Do the copy here, while the target is still mounted, into its own
     # /root: readable only once the volume is unlocked, so nothing is exposed,
-    # and it outlives the rescue install being erased from macOS.
+    # and it outlives the rescue install being erased from macOS, or the reboot
+    # out of a RAM rescue.
     KEEP_DIR="/mnt/root/asahilocker-$(basename "$STATE_DIR")"
     if mountpoint -q /mnt && cp -a "$STATE_DIR" "$KEEP_DIR" 2>/dev/null; then
         chmod 0700 "$KEEP_DIR" 2>/dev/null || true
@@ -2819,6 +2891,29 @@ if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "
     else
         KEEP_NOTE="Could NOT copy it onto the encrypted system -- do that by hand, now"
     fi
+fi
+if [ "$KEEP_WHY" = "ram" ]; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  BEFORE you reboot:                                       ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo "  $STATE_DIR/"
+    echo "  is held in RAM and holds the LUKS header backup, the pre-encryption"
+    echo "  fstab/grub/BLS state and (if enrolled) the recovery key."
+    echo "  $KEEP_NOTE"
+    echo ""
+    if [ -f "$STATE_DIR/recovery-key.txt" ]; then
+        echo "  That copy sits INSIDE the volume it unlocks, which makes the recovery"
+        echo "  key in it useless for the one case it exists for: a forgotten"
+        echo "  passphrase. Either write the key down now, before you reboot:"
+        echo "      cat $STATE_DIR/recovery-key.txt"
+        echo "  or, after the first boot, move the directory from /root to offline"
+        echo "  storage. (The header backup is also at /boot/luks-header-backup.img.)"
+    else
+        echo "  After the first boot, move the directory from /root to offline"
+        echo "  storage. (The header backup is also at /boot/luks-header-backup.img.)"
+    fi
+    echo ""
+elif [ "$KEEP_WHY" = "sibling" ]; then
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║  BEFORE you delete this rescue install from macOS:        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
