@@ -5,6 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
+        AsahiLocker is actively developed. A good idea gets built into AsahiLocker
+        itself and credited by name in the README's Acknowledgements.
+
         The constraints below are deliberate, and documented in
         [`docs/INTERNALS.md`](https://github.com/doug445/AsahiLocker/blob/main/docs/INTERNALS.md).
         A request that works around one of them by weakening the crypto is not

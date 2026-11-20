@@ -463,6 +463,15 @@ search: [live USB](https://doug445.github.io/AsahiLocker/live-usb/) ·
 
 ## Contributing
 
+**AsahiLocker is actively developed, and good ideas end up in it.** If you
+have one, open a [feature
+request](https://github.com/doug445/AsahiLocker/issues/new?template=feature_request.yml)
+or start a [discussion](https://github.com/doug445/AsahiLocker/discussions).
+Any good free and open-source idea that keeps to the security rules gets built
+into AsahiLocker itself and credited by name under
+[Acknowledgements](#acknowledgements). That is how the RAM-only rescue arrived.
+There is no need to maintain a separate tool for it.
+
 Bug reports and patches are welcome — open an
 [issue](https://github.com/doug445/AsahiLocker/issues) or a pull request.
 

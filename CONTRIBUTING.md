@@ -1,5 +1,12 @@
 # Contributing to AsahiLocker
 
+**AsahiLocker is actively developed, and good ideas end up in it.** Open a
+[feature request](https://github.com/doug445/AsahiLocker/issues/new?template=feature_request.yml)
+or a [discussion](https://github.com/doug445/AsahiLocker/discussions). Any good
+free and open-source idea that keeps to the security rules gets built into
+AsahiLocker itself and credited by name in the README's
+[Acknowledgements](README.md#acknowledgements), as the RAM-only rescue was.
+
 Bug reports and patches are welcome. Because this tooling rewrites a live root
 filesystem and its bootloader, the bar for a useful report is higher than usual:
 **a description of what went wrong is rarely enough to act on.** The commands
