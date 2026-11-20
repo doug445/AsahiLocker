@@ -12,6 +12,10 @@
 [![Platform: Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon%20(M1--M3)-lightgrey.svg)](docs/COMPATIBILITY.md)
 [![KDF: argon2id](https://img.shields.io/badge/KDF-argon2id-blue.svg)](#crypto-parameters--aes-256-xts-and-argon2id)
 
+**The complete, audited way to encrypt Asahi Linux.** One command, the
+strongest key derivation `cryptsetup` can write, and a machine that boots
+afterwards — checked before you are allowed to reboot.
+
 Encrypt the root filesystem of an **already-installed Fedora Asahi Remix** system
 on Apple Silicon — in place, without reinstalling, without wiping macOS, and
 without a second copy of your data.
@@ -59,6 +63,44 @@ interrupted encryption and finishes it.
 > **This is destructive-by-nature tooling.** It rewrites a live root filesystem.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
 > verified backup. See [Risks](#risks--read-this).
+
+---
+
+## Why AsahiLocker
+
+- **It is the whole job, not a wrapper around one command.** Encrypt in place,
+  rewrite every boot file, rebuild every initramfs, verify, and recover:
+  start to finish, with three ways to run it — including a built-in RAM rescue
+  that needs no USB stick and no second install.
+- **The strongest key derivation `cryptsetup` can write, by default.**
+  argon2id at 4 GiB x 10: five times the work per guess of a stock
+  `luksFormat` on the same Mac. Measured on your machine, enforced at run
+  time. No profile, flag or code path goes below stock, and none uses pbkdf2.
+- **Built so that a mistake does not cost you the machine.** A 12-point gate
+  checks every boot file before you may reboot. A run that is interrupted,
+  power cut included, resumes when you run the same command again. A
+  mistyped passphrase is asked for again. The script refuses the system it is
+  running from and a directory it is about to mount over, and stops at a
+  `/boot` that belongs to a different install.
+- **Audited in full three times.** Every script, every test, every document.
+  Nothing counted as a finding until it had been reproduced, and every
+  finding was fixed. The record, with what was found, is under
+  [Audit](#audit).
+- **More than 100 automated checks on every push.** The real encrypt,
+  hard-kill, repair and resume sequence against a loop device; a refused
+  passphrase; the partition menus on a two-install disk; `luks-mount.sh` on a
+  plain and an encrypted install; the command line of every script. Since
+  2.1.0 every release has also been run end to end in a virtual machine on
+  the official Fedora Asahi Remix image: encrypt, pass the gate, boot.
+- **In daily use.** The author's M1 Pro and M2 Max MacBook Pros were encrypted
+  with it and have asked for the passphrase at every boot since;
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) says exactly what is known
+  about every other M-series Mac, and how.
+- **Documented like it matters.** Every prompt and what to answer, every file
+  it changes, every failure mode and the way out, every number and where it
+  was measured.
+- **Free, MIT-licensed, actively developed.** Good ideas get built in and
+  credited by name.
 
 ---
 
