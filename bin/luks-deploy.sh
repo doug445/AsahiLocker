@@ -509,8 +509,6 @@ elif command -v mkinitcpio &>/dev/null; then
 elif command -v update-initramfs &>/dev/null; then
     INITRAMFS_TOOL="update-initramfs"
 fi
-[ -n "$INITRAMFS_TOOL" ] || MISSING+=("dracut/mkinitcpio/update-initramfs")
-
 # Detect GRUB config tool
 GRUB_MKCONFIG=""
 if command -v grub2-mkconfig &>/dev/null; then
@@ -518,7 +516,18 @@ if command -v grub2-mkconfig &>/dev/null; then
 elif command -v grub-mkconfig &>/dev/null; then
     GRUB_MKCONFIG="grub-mkconfig"
 fi
-[ -n "$GRUB_MKCONFIG" ] || MISSING+=("grub2-mkconfig/grub-mkconfig")
+
+# Both tools only ever run inside the target's chroot, where step 4 checks for
+# them again. The check here is an early warning for live media. An initrd
+# (the RAM rescue, docs/RAM-RESCUE.md; systemd marks one with
+# /etc/initrd-release) carries neither, and needs neither.
+if [ -f /etc/initrd-release ]; then
+    INITRAMFS_TOOL="${INITRAMFS_TOOL:-chroot}"
+    GRUB_MKCONFIG="${GRUB_MKCONFIG:-chroot}"
+else
+    [ -n "$INITRAMFS_TOOL" ] || MISSING+=("dracut/mkinitcpio/update-initramfs")
+    [ -n "$GRUB_MKCONFIG" ] || MISSING+=("grub2-mkconfig/grub-mkconfig")
+fi
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     fatal "Missing required tools: ${MISSING[*]}"
@@ -1222,8 +1231,17 @@ if [ "$DEPLOY_MODE" = "resume" ]; then
         warn "  Resume refused — running 'cryptsetup repair' (dirty reencryption journal after a hard interrupt), then retrying..."
         cryptsetup repair "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
             || fatal "cryptsetup repair failed. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
-        cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
-            || fatal "Resume still failing after repair. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+        # One more try if the first resume after repair fails. Seen once in a
+        # Fedora Asahi 45 VM (cryptsetup 2.8.8, power cut at 20 %): repair
+        # succeeded, the next --resume-only unlocked keyslot 0 and then failed
+        # with "wrong or missing parameters" (-1), and the very same command
+        # run again straight afterwards finished the encryption. A failed
+        # --resume-only changes nothing on disk, so a second attempt is safe.
+        if ! cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT"; then
+            warn "  Resume after repair failed once — trying again (a failed attempt changes nothing on disk)..."
+            cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
+                || fatal "Resume still failing after repair. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+        fi
     fi
     log "  Reencryption finished."
     DEPLOY_MODE="config-only"
@@ -1279,6 +1297,28 @@ log "  Discovered subvolumes: root='$ROOT_SUBVOL', home='$HOME_SUBVOL'"
 if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     [ -d "/mnt_temp/${HOME_SUBVOL}" ] || warn "Home subvolume '$HOME_SUBVOL' directory not found — may be nested."
 fi
+
+# ─── Target tools ───────────────────────────────────────────────────────────
+# Steps 6-7 rebuild the initramfs and grub.cfg INSIDE the target's chroot, so
+# it is the target that must have the tools, whatever this environment has.
+# Check now, while nothing has been written: after encryption a missing tool
+# is only a warning and a system that will not boot.
+_tgt_has() {
+    local d
+    for d in usr/bin usr/sbin bin sbin; do
+        [ -e "/mnt_temp/${ROOT_SUBVOL}/$d/$1" ] && return 0
+    done
+    return 1
+}
+if ! { _tgt_has dracut || _tgt_has mkinitcpio || _tgt_has update-initramfs; }; then
+    umount /mnt_temp; rmdir /mnt_temp
+    fatal "The target install has no dracut/mkinitcpio/update-initramfs: it could not boot once encrypted."
+fi
+if ! { _tgt_has grub2-mkconfig || _tgt_has grub-mkconfig; }; then
+    umount /mnt_temp; rmdir /mnt_temp
+    fatal "The target install has no grub2-mkconfig/grub-mkconfig: it could not boot once encrypted."
+fi
+unset -f _tgt_has
 
 # ─── Passphrase quality dictionary ──────────────────────────────────────────
 # Without a cracklib dictionary, cryptsetup refuses EVERY typed passphrase with
@@ -2001,6 +2041,8 @@ log "  Btrfs resize max complete."
 
 # Mount with correct subvolumes for chroot
 log "  Mounting filesystems for chroot..."
+# A minimal environment (the RAM rescue's initramfs) has no /mnt at all.
+mkdir -p /mnt
 mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt
 
 # Verify we got the right subvolume
