@@ -458,6 +458,16 @@ them. Nothing here has changed hands.
   exclusions, the hard self-target refusal, the neighbour-aware `BOOT`/`EFI`
   defaults, the `SIBLING` confirmation, the recovery-bundle warning and
   [docs/SECOND-INSTALL.md](docs/SECOND-INSTALL.md) all exist because of it.
+- **[kernelzeroday](https://github.com/kernelzeroday)** — for the RAM-only
+  rescue. [PR #5](https://github.com/doug445/AsahiLocker/pull/5) and
+  [asahi-ram-rescue](https://github.com/kernelzeroday/asahi-ram-rescue) showed
+  that `luks-deploy.sh` could encrypt a root in place from the target's own
+  initramfs, with no USB stick and no second install, on a MacBook Air M1 and
+  a MacBook Pro 13" M1. Those runs turned up the two bugs that stopped it: the
+  silent `lsblk` exit when `/` is `rootfs`, and the missing cracklib
+  dictionary that made cryptsetup refuse every passphrase.
+  [docs/RAM-RESCUE.md](docs/RAM-RESCUE.md) and `bin/ram-rescue.sh` exist
+  because of it.
 
 ## License and contact
 
