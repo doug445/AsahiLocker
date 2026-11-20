@@ -368,6 +368,49 @@ kdf_fmt_ms() {
     else awk -v m="$ms" 'BEGIN{ printf "%.1f s", m/1000 }'; fi
 }
 
+# ─── cracklib dictionary helpers ─────────────────────────────────────────────
+# cryptsetup runs a passphrase typed at the terminal through libpwquality, and
+# its dictionary check needs a cracklib dictionary on disk. Where the running
+# environment has none (the dracut RAM rescue, docs/RAM-RESCUE.md), discovery
+# lends this run the target install's own copy (under /run, plus a
+# pwquality.conf.d drop-in); see "Passphrase quality dictionary" below.
+# Defined up here because cleanup() removes both.
+
+# The dictionary base path libpwquality uses under root $1 ("" = the running
+# system): dictpath from pwquality.conf, else cracklib's compiled-in default.
+# libpwquality reads pwquality.conf.d/*.conf first and pwquality.conf last,
+# each overriding the one before, so the last dictpath in that order wins.
+pwq_dict_base() {
+    local root="${1:-}" d
+    d=$(sed -n 's/^[[:space:]]*dictpath[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+            "$root"/etc/security/pwquality.conf.d/*.conf \
+            "$root/etc/security/pwquality.conf" 2>/dev/null \
+        | tail -n 1 || true)
+    echo "${d:-/usr/share/cracklib/pw_dict}"
+}
+
+# True when cracklib can open the dictionary at base $1: the index (.pwi) and
+# the word file (.pwd, or .pwd.gz where cracklib is built with zlib). The .hwm
+# file is optional to cracklib.
+pwq_dict_present() {
+    [ -f "$1.pwi" ] && { [ -f "$1.pwd" ] || [ -f "$1.pwd.gz" ]; }
+}
+
+PWQ_BORROWED=()          # files written for this run (dictionary copy, drop-in)
+PWQ_BORROWED_DIRS=()     # directories made for them, deepest first
+pwq_unborrow() {
+    local f
+    for f in ${PWQ_BORROWED[@]+"${PWQ_BORROWED[@]}"}; do
+        rm -f "$f" 2>/dev/null || true
+    done
+    # rmdir, never rm -r: only a directory this run made, and only if empty.
+    for f in ${PWQ_BORROWED_DIRS[@]+"${PWQ_BORROWED_DIRS[@]}"}; do
+        rmdir "$f" 2>/dev/null || true
+    done
+    PWQ_BORROWED=()
+    PWQ_BORROWED_DIRS=()
+}
+
 # ─── Cleanup Trap ────────────────────────────────────────────────────────────
 cleanup() {
     local exit_code=$?
@@ -392,6 +435,7 @@ cleanup() {
     umount /mnt 2>/dev/null || true
     cryptsetup close ${LUKS_NAME} 2>/dev/null || true
     rm -f /mnt/tmp/.luks-deploy-env 2>/dev/null || true
+    pwq_unborrow
     if [ $exit_code -ne 0 ]; then
         echo ""
         echo "Recovery options:"
@@ -408,6 +452,13 @@ cleanup() {
         echo ""
         echo "  Pre-encryption backups saved to: $SCRIPT_DIR/"
         echo "  Full log: $DEPLOY_LOG"
+        if [ "${STATE_VOLATILE:-0}" = "1" ]; then
+            echo ""
+            echo "  $SCRIPT_DIR is held in RAM. If you are not re-running the"
+            echo "  script straight away, copy it somewhere persistent BEFORE you"
+            echo "  reboot: it holds the log and, if one was enrolled, the only"
+            echo "  copy of the recovery key."
+        fi
     fi
     # Give the background tee logger a moment to drain the pipe, so the final
     # lines (including the recovery instructions above) reach the log file.
@@ -458,8 +509,6 @@ elif command -v mkinitcpio &>/dev/null; then
 elif command -v update-initramfs &>/dev/null; then
     INITRAMFS_TOOL="update-initramfs"
 fi
-[ -n "$INITRAMFS_TOOL" ] || MISSING+=("dracut/mkinitcpio/update-initramfs")
-
 # Detect GRUB config tool
 GRUB_MKCONFIG=""
 if command -v grub2-mkconfig &>/dev/null; then
@@ -467,7 +516,18 @@ if command -v grub2-mkconfig &>/dev/null; then
 elif command -v grub-mkconfig &>/dev/null; then
     GRUB_MKCONFIG="grub-mkconfig"
 fi
-[ -n "$GRUB_MKCONFIG" ] || MISSING+=("grub2-mkconfig/grub-mkconfig")
+
+# Both tools only ever run inside the target's chroot, where step 4 checks for
+# them again. The check here is an early warning for live media. An initrd
+# (the RAM rescue, docs/RAM-RESCUE.md; systemd marks one with
+# /etc/initrd-release) carries neither, and needs neither.
+if [ -f /etc/initrd-release ]; then
+    INITRAMFS_TOOL="${INITRAMFS_TOOL:-chroot}"
+    GRUB_MKCONFIG="${GRUB_MKCONFIG:-chroot}"
+else
+    [ -n "$INITRAMFS_TOOL" ] || MISSING+=("dracut/mkinitcpio/update-initramfs")
+    [ -n "$GRUB_MKCONFIG" ] || MISSING+=("grub2-mkconfig/grub-mkconfig")
+fi
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     fatal "Missing required tools: ${MISSING[*]}"
@@ -491,10 +551,14 @@ if ! lsmod | grep -q dm_crypt; then
 fi
 
 # ─── Environment Detection ───────────────────────────────────────────────────
-# Two environments can run this script safely:
+# Three environments can run this script safely:
 #   • a Fedora Asahi live USB                       (docs/LIVE-USB.md)
 #   • a second, minimal Asahi install on the same internal disk
 #                                                   (docs/SECOND-INSTALL.md)
+#   • a RAM-only rescue: the target install's own initramfs, stopped at a
+#     dracut rd.break=pre-mount shell, with this script included in the image.
+#     / is "rootfs", nothing on the disk is mounted, and everything written
+#     next to the script is gone at reboot ($STATE_VOLATILE below).
 # The second route exists because plenty of Apple Silicon machines never
 # enumerate a USB stick in U-Boot at all, and a 20 GiB Fedora Minimal install
 # alongside the real one is the reliable way out. Encrypting a partition from a
@@ -508,7 +572,13 @@ fi
 # instead of an obscure umount failure an hour later.
 CURRENT_ROOT_FSTYPE=$(findmnt -n -o FSTYPE / 2>/dev/null || echo "unknown")
 RUNNING_ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*//')
-RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "${RUNNING_ROOT_DEV:-unknown}")
+# Resolve only a real path. A RAM root reports a bare word ("rootfs", "tmpfs",
+# "overlay"), and readlink -f resolves that against the current directory,
+# which put "booted from /root/AsahiLocker/bin/rootfs" in the log.
+case "$RUNNING_ROOT_DEV" in
+    /*) RUNNING_ROOT_DEV=$(readlink -f "$RUNNING_ROOT_DEV" 2>/dev/null || echo "$RUNNING_ROOT_DEV") ;;
+    '') RUNNING_ROOT_DEV="unknown" ;;
+esac
 # What a block device is built on, as /dev paths: the partitions under a
 # dm-crypt, LVM or RAID device. Nothing for a plain partition or disk. The one
 # place the /sys slaves layout is spelled out; both walks below use it.
@@ -535,7 +605,9 @@ while [ -b "$RUNNING_ROOT_BASE" ] \
     _depth=$((_depth + 1))
 done
 unset _depth _next
-RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1)
+# || true: in a RAM rescue / is "rootfs", not a block device, and lsblk exits 32,
+# which set -e + pipefail would turn into a silent script exit.
+RUNNING_ROOT_DISK=$(lsblk -dno PKNAME "$RUNNING_ROOT_BASE" 2>/dev/null | head -1 || true)
 log "Current root filesystem: $CURRENT_ROOT_FSTYPE ($RUNNING_ROOT_DEV)"
 RUNNING_ROOT_NOTE=""
 if [ "$RUNNING_ROOT_BASE" != "$RUNNING_ROOT_DEV" ]; then
@@ -633,7 +705,7 @@ m1n1_usb_check() {
 # fstype alone is not the tell — removability is.
 ENV_KIND="installed"
 case "$CURRENT_ROOT_FSTYPE" in
-    overlay|tmpfs|ramfs|squashfs|iso9660|erofs) ENV_KIND="live" ;;
+    overlay|tmpfs|ramfs|rootfs|squashfs|iso9660|erofs) ENV_KIND="live" ;;
 esac
 if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
     [ "$(cat "/sys/block/$RUNNING_ROOT_DISK/removable" 2>/dev/null || echo 0)" = "1" ] \
@@ -651,6 +723,26 @@ if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
         && ENV_KIND="live"
 fi
 log "Environment: $ENV_KIND (booted from ${RUNNING_ROOT_DEV}, disk ${RUNNING_ROOT_DISK:-unknown})"
+
+# Is the directory this script runs from held in RAM? Everything the run leaves
+# behind is written there: the deploy log, the pre-encryption state, a copy of
+# the LUKS header backup and the recovery key. On a stick that is the point; in
+# a RAM rescue all of it is gone at reboot, and the recovery key exists nowhere
+# else. The end of the run copies the directory onto the encrypted system
+# (KEEP_DIR, far below); this is the early notice.
+STATE_VOLATILE=0
+case "$(findmnt -n -o FSTYPE --target "$SCRIPT_DIR" 2>/dev/null || true)" in
+    rootfs|tmpfs|ramfs) STATE_VOLATILE=1 ;;
+esac
+if [ "$STATE_VOLATILE" = "1" ]; then
+    echo ""
+    warn "AsahiLocker is running from $SCRIPT_DIR, which is held in RAM."
+    warn "  The deploy log, the pre-encryption state backup, the LUKS header"
+    warn "  backup copy and the recovery key are written there, and RAM is"
+    warn "  cleared at reboot. A completed run copies them onto the encrypted"
+    warn "  system before it exits. If the run stops early, copy that directory"
+    warn "  somewhere persistent BEFORE you reboot."
+fi
 
 if [ "$ENV_KIND" = "installed" ]; then
     echo ""
@@ -1139,8 +1231,17 @@ if [ "$DEPLOY_MODE" = "resume" ]; then
         warn "  Resume refused — running 'cryptsetup repair' (dirty reencryption journal after a hard interrupt), then retrying..."
         cryptsetup repair "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
             || fatal "cryptsetup repair failed. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
-        cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
-            || fatal "Resume still failing after repair. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+        # One more try if the first resume after repair fails. Seen once in a
+        # Fedora Asahi 45 VM (cryptsetup 2.8.8, power cut at 20 %): repair
+        # succeeded, the next --resume-only unlocked keyslot 0 and then failed
+        # with "wrong or missing parameters" (-1), and the very same command
+        # run again straight afterwards finished the encryption. A failed
+        # --resume-only changes nothing on disk, so a second attempt is safe.
+        if ! cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT"; then
+            warn "  Resume after repair failed once — trying again (a failed attempt changes nothing on disk)..."
+            cryptsetup reencrypt --resume-only --verbose "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" "$TARGET_ROOT" \
+                || fatal "Resume still failing after repair. Do NOT wipe or reformat anything — see docs/RECOVERY.md."
+        fi
     fi
     log "  Reencryption finished."
     DEPLOY_MODE="config-only"
@@ -1195,6 +1296,116 @@ log "  Discovered subvolumes: root='$ROOT_SUBVOL', home='$HOME_SUBVOL'"
 [ -d "/mnt_temp/${ROOT_SUBVOL}" ] || fatal "Root subvolume '$ROOT_SUBVOL' directory not found!"
 if [ "$HOME_SUBVOL" != "$ROOT_SUBVOL" ]; then
     [ -d "/mnt_temp/${HOME_SUBVOL}" ] || warn "Home subvolume '$HOME_SUBVOL' directory not found — may be nested."
+fi
+
+# ─── Target tools ───────────────────────────────────────────────────────────
+# Steps 6-7 rebuild the initramfs and grub.cfg INSIDE the target's chroot, so
+# it is the target that must have the tools, whatever this environment has.
+# Check now, while nothing has been written: after encryption a missing tool
+# is only a warning and a system that will not boot.
+_tgt_has() {
+    local d
+    for d in usr/bin usr/sbin bin sbin; do
+        [ -e "/mnt_temp/${ROOT_SUBVOL}/$d/$1" ] && return 0
+    done
+    return 1
+}
+if ! { _tgt_has dracut || _tgt_has mkinitcpio || _tgt_has update-initramfs; }; then
+    umount /mnt_temp; rmdir /mnt_temp
+    fatal "The target install has no dracut/mkinitcpio/update-initramfs: it could not boot once encrypted."
+fi
+if ! { _tgt_has grub2-mkconfig || _tgt_has grub-mkconfig; }; then
+    umount /mnt_temp; rmdir /mnt_temp
+    fatal "The target install has no grub2-mkconfig/grub-mkconfig: it could not boot once encrypted."
+fi
+unset -f _tgt_has
+
+# ─── Passphrase quality dictionary ──────────────────────────────────────────
+# Without a cracklib dictionary, cryptsetup refuses EVERY typed passphrase with
+# "error loading dictionary". The dracut RAM rescue carries none, but the
+# install being encrypted almost always does (Fedora: cracklib-dicts), and its
+# root is mounted read-only right here. Lend it to this run, so the quality
+# check stays ON:
+#   - the dictionary is copied to a fresh directory under /run (tmpfs). Not
+#     into /usr: systemd mounts /usr read-only in an initrd, and a live
+#     system's /usr is not this script's to change;
+#   - a drop-in, $PWQ_DROPIN, points libpwquality's dictpath at the copy.
+#     libpwquality reads the drop-ins in name order and pwquality.conf last,
+#     so a dictpath set in pwquality.conf itself still wins: the result is
+#     checked, and undone unless libpwquality will really use the copy.
+# Only a fresh encryption sets a new passphrase, and only a typed one is
+# checked (never LUKS_PASSPHRASE_FILE). Only on live media, never on an
+# installed sibling; never over an existing file. cleanup() removes the copy,
+# the drop-in and every directory made for them, on every exit. If nothing can
+# be lent, the reencrypt step falls back to --force-password and says so.
+# Verified in a Fedora Asahi 45 RAM rescue (cryptsetup 2.8.8): with the
+# drop-in, luksFormat rejects "password1" as a dictionary word; without it,
+# every passphrase fails with "error loading dictionary".
+PWQ_DROPIN="/etc/security/pwquality.conf.d/zz-asahilocker-dict.conf"
+if [ "$DEPLOY_MODE" = "encrypt" ] && [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+    _pwq_have=$(pwq_dict_base "")
+    if ! pwq_dict_present "$_pwq_have"; then
+        _pwq_root="/mnt_temp/${ROOT_SUBVOL}"
+        _pwq_src="${_pwq_root}$(pwq_dict_base "$_pwq_root")"
+        _pwq_why=""
+        if [ "$ENV_KIND" != "live" ]; then
+            _pwq_why="AsahiLocker does not change an installed system's configuration"
+        elif ! pwq_dict_present "$_pwq_src"; then
+            _pwq_why="the target install has none either"
+        # The index header opens with cracklib's magic 0x70775631, stored in
+        # host byte order: proof the copy is a dictionary this machine reads.
+        elif [ "$(od -An -tx4 -N4 "$_pwq_src.pwi" 2>/dev/null | tr -d ' \n')" != "70775631" ]; then
+            _pwq_why="the target's index $_pwq_src.pwi is not a cracklib dictionary this machine can read"
+        elif [ -e "$PWQ_DROPIN" ]; then
+            _pwq_why="$PWQ_DROPIN already exists, and is left alone"
+        fi
+        if [ -n "$_pwq_why" ]; then
+            log "  No cracklib dictionary at $_pwq_have, and $_pwq_why."
+        elif [ "$DRY_RUN" = "1" ]; then
+            log "  [dry-run] would lend the target's cracklib dictionary ($_pwq_src) to this run"
+            log "  [dry-run]   (a copy under /run + $PWQ_DROPIN), keeping the passphrase quality check on."
+        else
+            _pwq_ok=0
+            if _pwq_dir=$(mktemp -d /run/asahilocker-dict.XXXXXX 2>/dev/null); then
+                PWQ_BORROWED_DIRS+=("$_pwq_dir")
+                _pwq_ok=1
+                for _pwq_ext in pwd pwd.gz pwi hwm; do
+                    [ -f "$_pwq_src.$_pwq_ext" ] || continue
+                    # Recorded before the copy, so a half-written file goes too.
+                    PWQ_BORROWED+=("$_pwq_dir/pw_dict.$_pwq_ext")
+                    cp "$_pwq_src.$_pwq_ext" "$_pwq_dir/pw_dict.$_pwq_ext" 2>/dev/null \
+                        || { _pwq_ok=0; break; }
+                done
+            else
+                _pwq_dir="/run"
+            fi
+            if [ "$_pwq_ok" = "1" ]; then
+                # Note every directory level mkdir -p is about to create,
+                # deepest first, so cleanup() can take them all away again.
+                _pwq_d=$(dirname "$PWQ_DROPIN")
+                while [ "$_pwq_d" != "/" ] && [ ! -e "$_pwq_d" ]; do
+                    PWQ_BORROWED_DIRS+=("$_pwq_d")
+                    _pwq_d=$(dirname "$_pwq_d")
+                done
+                PWQ_BORROWED+=("$PWQ_DROPIN")
+                { mkdir -p "$(dirname "$PWQ_DROPIN")" \
+                    && printf '# Written by AsahiLocker luks-deploy.sh for one run; removed at exit.\ndictpath = %s\n' \
+                        "$_pwq_dir/pw_dict" > "$PWQ_DROPIN"; } 2>/dev/null || _pwq_ok=0
+            fi
+            if [ "$_pwq_ok" = "1" ] && [ "$(pwq_dict_base "")" = "$_pwq_dir/pw_dict" ] \
+               && pwq_dict_present "$_pwq_dir/pw_dict"; then
+                log "  Lent the target's cracklib dictionary ($_pwq_src) to this run,"
+                log "    via $_pwq_dir and $PWQ_DROPIN:"
+                log "    cryptsetup's passphrase quality check stays on. Both are removed at exit."
+            else
+                pwq_unborrow
+                log "  Could not lend the target's cracklib dictionary to this run (tried $_pwq_dir)."
+            fi
+            unset _pwq_ok _pwq_ext _pwq_d _pwq_dir
+        fi
+        unset _pwq_root _pwq_src _pwq_why
+    fi
+    unset _pwq_have
 fi
 
 # Capture UUIDs before encryption. In config-only mode the raw partition
@@ -1716,6 +1927,29 @@ else
         echo ""
     fi
 
+    # cryptsetup runs a typed passphrase through libpwquality, whose dictionary
+    # check needs the cracklib dictionary on disk; without one EVERY passphrase
+    # is refused with "error loading dictionary". Discovery has already
+    # borrowed the target's own dictionary where this environment had none
+    # ("Passphrase quality dictionary"). --force-password is the fallback for
+    # when that was not possible: it skips the quality check, so it is passed
+    # only when the dictionary really is still absent, and wherever it is
+    # present a weak passphrase is still rejected. A passphrase read from
+    # LUKS_PASSPHRASE_FILE is never quality-checked, so that route needs nothing.
+    CRYPT_PWQ_ARGS=()
+    if [ -z "${LUKS_PASSPHRASE_FILE:-}" ]; then
+        PWQ_DICT=$(pwq_dict_base "")
+        if ! pwq_dict_present "$PWQ_DICT"; then
+            CRYPT_PWQ_ARGS=(--force-password)
+            warn "  No cracklib dictionary here (${PWQ_DICT}.pwi/.pwd), and none could be"
+            warn "  borrowed from the target: cryptsetup's passphrase quality check is"
+            warn "  OFF for this run, and a weak passphrase will be accepted without"
+            warn "  complaint. Choose a strong one."
+            echo ""
+        fi
+        unset PWQ_DICT
+    fi
+
     # LUKS2 KDF pinned for fleet consistency — do NOT fall back to cryptsetup's
     # auto-benchmark defaults (they pick sha256 + variable, time-benchmarked memory).
     # --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
@@ -1736,6 +1970,7 @@ else
         --reduce-device-size 32M \
         --resilience checksum \
         --verbose \
+        ${CRYPT_PWQ_ARGS[@]+"${CRYPT_PWQ_ARGS[@]}"} \
         "${CRYPT_PASS_ARGS[@]}" "${CRYPT_BATCH_ARGS[@]}" \
         "$TARGET_ROOT"
 
@@ -1806,6 +2041,8 @@ log "  Btrfs resize max complete."
 
 # Mount with correct subvolumes for chroot
 log "  Mounting filesystems for chroot..."
+# A minimal environment (the RAM rescue's initramfs) has no /mnt at all.
+mkdir -p /mnt
 mount -o "subvol=$ROOT_SUBVOL" /dev/mapper/${LUKS_NAME} /mnt
 
 # Verify we got the right subvolume
@@ -1937,6 +2174,8 @@ case "$RK_CHOICE" in
             # --hash sha512: a new keyslot gets its own AF hash, and without an
             # explicit value cryptsetup stamps its compiled-in sha256 — the
             # same silent downgrade luks-tune.sh had, verified on cryptsetup 2.8.
+            # No --force-password: the new key comes from a file, and cryptsetup
+            # quality-checks only a passphrase typed at a terminal.
             if cryptsetup luksAddKey "${CRYPT_PASS_ARGS[@]}" "$TARGET_ROOT" "$RK_FILE" \
                    --hash sha512 \
                    --pbkdf argon2id \
@@ -2791,20 +3030,33 @@ cp "$DEPLOY_LOG" /mnt/boot/luks-deploy.log 2>/dev/null || true
 chroot /mnt /usr/sbin/restorecon -F /boot/luks-deploy.log 2>/dev/null || true
 log "Log also saved to target: /boot/luks-deploy.log"
 echo ""
-echo "Full log: $DEPLOY_LOG (on deployment drive)"
+if [ "$STATE_VOLATILE" = "1" ]; then
+    echo "Full log: $DEPLOY_LOG (in RAM -- gone at reboot)"
+else
+    echo "Full log: $DEPLOY_LOG (on deployment drive)"
+fi
 echo "          /boot/luks-deploy.log (on target system)"
 echo ""
 echo "Pre-encryption backups: $STATE_DIR/"
 echo ""
 
-# The second-install route ends with the operator deleting the install this
-# script ran from. Say so here, where they are actually looking.
-if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+# Two routes leave the recovery material somewhere that is about to disappear:
+# the second-install route ends with the operator deleting the install this
+# script ran from, and a RAM rescue loses it at reboot. Say so here, where they
+# are actually looking.
+KEEP_WHY=""
+if [ "$STATE_VOLATILE" = "1" ]; then
+    KEEP_WHY="ram"
+elif [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "$SCRIPT_DEV"; then
+    KEEP_WHY="sibling"
+fi
+if [ -n "$KEEP_WHY" ]; then
     # The EXIT trap unmounts /mnt and closes the mapper the moment this script
     # returns, so any "copy it now" instruction is already wrong when it is
     # read. Do the copy here, while the target is still mounted, into its own
     # /root: readable only once the volume is unlocked, so nothing is exposed,
-    # and it outlives the rescue install being erased from macOS.
+    # and it outlives the rescue install being erased from macOS, or the reboot
+    # out of a RAM rescue.
     KEEP_DIR="/mnt/root/asahilocker-$(basename "$STATE_DIR")"
     if mountpoint -q /mnt && cp -a "$STATE_DIR" "$KEEP_DIR" 2>/dev/null; then
         chmod 0700 "$KEEP_DIR" 2>/dev/null || true
@@ -2813,6 +3065,29 @@ if [ "$ENV_KIND" = "installed" ] && [ -n "${SCRIPT_DEV:-}" ] && is_running_dev "
     else
         KEEP_NOTE="Could NOT copy it onto the encrypted system -- do that by hand, now"
     fi
+fi
+if [ "$KEEP_WHY" = "ram" ]; then
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  BEFORE you reboot:                                       ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo "  $STATE_DIR/"
+    echo "  is held in RAM and holds the LUKS header backup, the pre-encryption"
+    echo "  fstab/grub/BLS state and (if enrolled) the recovery key."
+    echo "  $KEEP_NOTE"
+    echo ""
+    if [ -f "$STATE_DIR/recovery-key.txt" ]; then
+        echo "  That copy sits INSIDE the volume it unlocks, which makes the recovery"
+        echo "  key in it useless for the one case it exists for: a forgotten"
+        echo "  passphrase. Either write the key down now, before you reboot:"
+        echo "      cat $STATE_DIR/recovery-key.txt"
+        echo "  or, after the first boot, move the directory from /root to offline"
+        echo "  storage. (The header backup is also at /boot/luks-header-backup.img.)"
+    else
+        echo "  After the first boot, move the directory from /root to offline"
+        echo "  storage. (The header backup is also at /boot/luks-header-backup.img.)"
+    fi
+    echo ""
+elif [ "$KEEP_WHY" = "sibling" ]; then
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║  BEFORE you delete this rescue install from macOS:        ║"
     echo "╚════════════════════════════════════════════════════════════╝"
