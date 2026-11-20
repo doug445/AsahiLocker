@@ -105,6 +105,13 @@ asahilocker
 From here it is the normal `luks-deploy.sh` run. The only difference is that
 there are no partition menus: the launcher pins root, `/boot` and EFI by
 partition UUID. See [INSTALL.md](INSTALL.md) for what each prompt means.
+`asahilocker --defaults` takes the recommended answer to every question that
+has one, as `luks-deploy.sh --defaults` does.
+
+The rescue also carries `luks-mount`, for looking inside an install without
+encrypting anything: `luks-mount list`, then `luks-mount chroot /dev/...` opens
+a shell inside it (unlocking it first if it is encrypted) and puts everything
+back when you leave.
 
 - **A weak passphrase is refused** ("it is based on a dictionary word"). The
   run then stops, after the btrfs shrink and before anything is encrypted.

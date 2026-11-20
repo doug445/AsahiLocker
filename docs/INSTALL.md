@@ -168,6 +168,21 @@ From the live environment:
 sudo /root/AsahiLocker/bin/luks-deploy.sh
 ```
 
+**The short way.** Name the install and take the recommended answers:
+
+```bash
+sudo /root/AsahiLocker/bin/luks-deploy.sh --list
+sudo /root/AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults
+```
+
+`--list` shows every Asahi install on the Mac and its state (not encrypted,
+encrypted, encryption interrupted, or the system you are running). Naming the
+root partition takes its `/boot` and EFI from that install's own `/etc/fstab`,
+so there are no partition menus. `--defaults` answers the questions that have a
+recommended answer: run the btrfs check, use the `aggressive` KDF, enrol a
+recovery key. You still type `ENCRYPT`, confirm Caps Lock, and choose the
+passphrase.
+
 **`command not found`?** The copy never reached the stick. Download it
 straight onto the stick instead; the live image has `wget` and `tar`. From the
 live USB, as root, set `V` to the latest version on the
@@ -175,7 +190,7 @@ live USB, as root, set `V` to the latest version on the
 
 ```bash
 nmcli dev wifi connect <ssid> password <password>
-V=2.1.0
+V=2.2.0
 cd /root
 wget https://github.com/doug445/AsahiLocker/archive/refs/tags/v$V.tar.gz
 tar xzf v$V.tar.gz && mv AsahiLocker-$V AsahiLocker
@@ -203,7 +218,8 @@ Two things to know about that route:
   from it.
 
 The script will ask you to choose a KDF profile (see the prompt table below); no
-flags are needed. To pick one non-interactively instead:
+flags are needed, and Enter takes `aggressive`, the strongest. To pick one
+non-interactively instead:
 
 ```bash
 sudo LUKS_PROFILE=fast /root/AsahiLocker/bin/luks-deploy.sh
@@ -228,7 +244,7 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Continue anyway? (yes/no)` | The BLS boot entries disagree with `/etc/fstab` about which subvolume is root. | `no` — investigate first; see [RECOVERY.md](RECOVERY.md) |
 | `Run btrfs integrity check?` | A read-only `btrfs check`. Takes 5–30 min. | **`Y`** — this is your last chance to find pre-existing corruption |
 | `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
-| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `2` |
+| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `1`, the strongest |
 | `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
 | `Press Enter once Caps Lock is OFF` | Only shown when the kernel reports Caps Lock on at the `ENCRYPT` gate — which is exactly what happens if you switched it on to type that all-caps word. | Turn Caps Lock off, then Enter. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
@@ -252,8 +268,8 @@ checkpoint:
   Arch    : aarch64
   Crypto  : cryptsetup 2.7.5
   Mode    : encrypt
-  KDF     : argon2id moderate — 2048 MiB, 8 iterations, 4 threads
-            = 2x the work of cryptsetup's own default here (1024 MiB x 8)
+  KDF     : argon2id aggressive — 4096 MiB, 10 iterations, 4 threads
+            = 5x the work of cryptsetup's own default here (1024 MiB x 8)
 ```
 
 Confirm `ROOT` is the partition you expect and the subvolumes match your fstab.
@@ -284,7 +300,7 @@ it is almost certainly waiting for you. Type the passphrase and press Enter.
 
 How long unlock takes depends on the profile you chose, and it tracks memory
 *times* iterations — not memory alone. On an M2 Max the three profiles come to
-roughly 2.1 s (fast), 3.8 s (moderate) and 9.5 s (aggressive, measured). A 1 GiB
+roughly 2.7 s (fast), 4.2 s (moderate) and 9.5 s (aggressive, measured). A 1 GiB
 argon2id unlock is not a slow unlock on any machine you would still boot; the
 multi-second figures come mostly from the stacked iteration count, not the
 gigabytes.

@@ -44,35 +44,67 @@ start to finish.
 
 ---
 
+## Security at a glance
+
+- **AES-256-XTS** with a 512-bit key, in 4096-byte encryption sectors that match
+  Apple's NVMe.
+- **argon2id at 4 GiB x 10 iterations, by default.** 4 GiB is the most memory
+  `cryptsetup` will let a keyslot cost. Every single guess at your passphrase
+  has to fill 4 GiB, ten passes over: a 24 GB GPU holds about **six guesses at
+  once**.
+- **5x the work per guess of a stock `luksFormat`** on the same Mac. A runtime
+  guard refuses to write anything weaker than what `cryptsetup` would pick on
+  its own. **pbkdf2 is never used.**
+- **You pay the KDF once per boot; an attacker pays it for every guess.** About
+  9.5 s at power-on on an M2 Max, after which the disk runs at full AES speed.
+  With an 8-word diceware passphrase, an offline attack runs past **10^20
+  years**.
+- **sha512 everywhere it counts:** the keyslot AF splitter and the volume-key
+  digest, pinned on every keyslot this tool writes, so none silently falls back
+  to sha256.
+- **A 256-bit recovery key** in its own keyslot and a LUKS header backup, so a
+  forgotten passphrase or a damaged header is not the end of your data.
+- **Verified before you reboot.** A 12-point gate refuses to hand you a machine
+  that will not boot.
+
+The numbers, their sources and the FileVault comparison:
+**[docs/CRYPTO.md](docs/CRYPTO.md)**.
+
+---
+
 ## Quick start
 
+Encrypting needs a system that is **not** the one being encrypted. Boot any one
+of these three, then run the same two commands:
+
+| Boot from | Needs | Guide |
+|---|---|---|
+| **The built-in RAM rescue** | Nothing extra: no USB stick, no second install | [docs/RAM-RESCUE.md](docs/RAM-RESCUE.md) |
+| A Fedora Asahi live USB | A USB stick that your Mac's U-Boot can see | [docs/LIVE-USB.md](docs/LIVE-USB.md) |
+| A second, minimal Asahi install | ~20 GB of disk, set up from macOS | [docs/SECOND-INSTALL.md](docs/SECOND-INSTALL.md) |
+
 ```bash
-# 1. On the installed system: get the kit, and build a Fedora Asahi live USB
-#    to run it from  (see docs/LIVE-USB.md — a stock Fedora ISO will NOT boot)
 git clone https://github.com/doug445/AsahiLocker.git
 
-# 2. Boot the live USB. Easiest route, with the USB plugged in:
-#      sudo grub2-mkconfig -o /boot/grub2/grub.cfg    # adds it to your GRUB menu
-#      (-o must be exactly that path — NEVER the ESP grub.cfg; see docs/LIVE-USB.md)
-#    then reboot and select it.  (see docs/LIVE-USB.md for the U-Boot routes)
-#    Stick not showing up at the U-Boot prompt? Run `usb start` first.
-#    Still nothing? Use a second minimal Asahi install instead — the rest of
-#    these steps are identical.  (see docs/SECOND-INSTALL.md)
-#    No stick and no second install? Encrypt from RAM instead:
-#      sudo ./AsahiLocker/bin/ram-rescue.sh build --arm && sudo reboot
-#      then type `asahilocker` at the rescue prompt.  (see docs/RAM-RESCUE.md)
+# RAM rescue: build it on the system you want encrypted, then reboot into it.
+# At its prompt, `asahilocker` runs everything below for you.
+sudo ./AsahiLocker/bin/ram-rescue.sh build --arm && sudo reboot
 
-# 3. From the live environment, encrypt the installed root:
-sudo ./AsahiLocker/bin/luks-deploy.sh
+# From a live USB or a second install:
+sudo ./AsahiLocker/bin/luks-deploy.sh --list          # find your install
+sudo ./AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults
 
-# 4. Reboot, enter your passphrase, then finish up on the encrypted system:
+# Reboot, type your passphrase, then finish on the encrypted system:
 sudo ./AsahiLocker/bin/post-encryption-setup.sh
 sudo ./AsahiLocker/boot-guards/install.sh
 ```
 
-The deploy script auto-detects your disk layout and shows you what it found. You
-confirm the selection, type `ENCRYPT`, and choose a passphrase. Everything after
-that is automated, including recovery if a step fails partway.
+`--defaults` takes the recommended answer to every question that has one: the
+btrfs check, the `aggressive` KDF, a recovery key. `/boot` and EFI come from
+your install's own `/etc/fstab`. What stays is what protects you: you type
+`ENCRYPT`, confirm Caps Lock is off, and choose the passphrase. If anything is
+interrupted, power cut included, run the same command again and it picks up
+where it stopped.
 
 Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
@@ -82,8 +114,9 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 - **In-place btrfs → LUKS2 conversion.** No reinstall, no backup-and-restore
   round trip, no second disk. Subvolumes, snapshots and the btrfs UUID survive.
-- **Pinned argon2id, never pbkdf2.** AES-256-XTS with argon2id at 4 / 2 / 1 GiB
-  memory cost — memory-hard by design, so GPU and ASIC cracking stays expensive.
+- **Pinned argon2id, never pbkdf2.** AES-256-XTS with argon2id at 4 GiB by
+  default, the maximum `cryptsetup` allows (2 and 1 GiB on request).
+  Memory-hard by design, so GPU and ASIC cracking stays expensive.
 - **Every profile is stronger than `cryptsetup`'s own defaults — enforced, not
   asserted.** The weakest profile on offer does 1.125x the work of a plain
   `luksFormat` on the same machine, and the strongest does 5x. Before it writes
@@ -99,6 +132,15 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 - **Resumable after any interruption.** LUKS2 re-encryption is journaled with
   checksum resilience; re-run the script and it detects the interrupted state
   and finishes it.
+- **One command when you want it.** `luks-deploy.sh --list` shows every install
+  on the Mac and its state; `luks-deploy.sh /dev/nvme0n1pN --defaults` encrypts
+  one, with `/boot` and EFI proven from that install's own fstab instead of
+  guessed from partition order.
+- **No USB stick needed.** The built-in RAM rescue (`ram-rescue.sh`) boots your
+  own kernel from RAM and encrypts in place, and survives a power cut midway.
+- **Maintenance built in.** `luks-mount.sh` lists, unlocks, mounts and chroots
+  into any other Asahi install on the Mac, encrypted or not, then locks it all
+  up again on exit.
 - **A `--dry-run` that really is dry.** The entire read-only half, including the
   exact `cryptsetup reencrypt` invocation it would issue, with nothing modified.
 - **Recovery you can actually use.** Optional 64-hex recovery key in a second
@@ -115,6 +157,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 | Path | What it is |
 |------|------------|
+| `bin/luks-mount.sh` | Maintenance for the other installs on the Mac: `list` them and their state, `mount` one (unlocking it if encrypted) with `/boot` and EFI taken from its own fstab, `chroot` into it with everything put back on exit, `umount`, `status`. Refuses the partitions of the running system. Also in the RAM rescue, as `luks-mount`. |
 | `bin/luks-deploy.sh` | **The main event.** In-place LUKS2 encryption of the installed btrfs root, run from a live USB, a [second minimal Asahi install](docs/SECOND-INSTALL.md) or a [RAM-only rescue](docs/RAM-RESCUE.md). Auto-detects everything, excludes the partitions of whatever system it is running from and refuses them as targets, cross-checks the selected boot/EFI partitions against the target's own fstab, self-repairs failed initramfs/BLS steps, fixes SELinux labels, and gates the reboot behind 12 verification checks. Fully resumable: re-run it after any interruption and it finishes the encryption (`--resume-only`) or redoes just the config phase. |
 | `bin/ram-rescue.sh` | Builds, arms, reports on and removes the [RAM-only rescue](docs/RAM-RESCUE.md): this Mac's own kernel with an initramfs carrying `luks-deploy.sh`, every tool it needs and the cracklib dictionary, in a GRUB entry of its own. Encrypts the root in place with no USB stick and no second install; finds the partitions by GPT partition UUID, so it resumes after a power cut. |
 | `bin/post-encryption-setup.sh` | Run once on the newly-encrypted system. Saves a recovery bundle, creates snapper subvolumes on the encrypted volume, enables the boot guards, verifies the result. Idempotent. |
@@ -205,13 +248,20 @@ three are argon2id — no profile selects pbkdf2 — and all three are stronger
 than what `cryptsetup` picks for itself, which a runtime guard enforces rather
 than assumes.
 
-| Profile | Memory | Iterations | Threads | Unlock, M2 Max | vs stock |
-|---------|--------|-----------|---------|----------------|----------|
-| `aggressive` | 4 GiB | 10 | 4 | **9.5 s** (measured) | 5x |
-| `moderate` (default) | 2 GiB | 8 | 4 | ~3.8 s | 2x |
-| `fast` | 1 GiB | 9 | 4 | ~2.1 s | 1.125x |
+| Profile | Memory | Iterations | Threads | At boot, M2 Max | KDF alone, M2 Max | vs stock |
+|---------|--------|-----------|---------|-----------------|-------------------|----------|
+| `aggressive` (default) | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
+| `moderate` | 2 GiB | 8 | 4 | ~4.2 s | 3.2 s | 2x |
+| `fast` | 1 GiB | 9 | 4 | ~2.7 s | 2.0 s | 1.125x |
 
-![The luks-deploy.sh KDF profile prompt, showing three argon2id profiles with unlock times benchmarked on the running machine](docs/images/kdf-profile-menu.png)
+*At boot:* `aggressive` measured from the boot journal (the gap between
+systemd-cryptsetup taking the passphrase and the volume opening); the others
+scaled from it. *KDF alone:* `cryptsetup open --test-passphrase`, median of five
+runs, re-clocked 2026-11-20 with cryptsetup 2.8.8. Boot runs about 1.3x the KDF
+alone. `luks-tune.sh` also offers `paranoid` (4 GiB x 12): 8.6 s KDF alone,
+~11.3 s at boot.
+
+![The luks-deploy.sh KDF profile prompt, showing three argon2id profiles with unlock times benchmarked on the running machine, aggressive marked as the default](docs/images/kdf-profile-menu.png)
 
 *Times shown are from an M2 Max. Your machine is benchmarked at run time, so the
 numbers you see will be your own.*

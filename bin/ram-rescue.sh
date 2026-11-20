@@ -75,16 +75,16 @@ usage() {
     exit "${1:-0}"
 }
 
-# Every command luks-deploy.sh runs OUTSIDE its chroot. dracut prints an error
+# Every command luks-deploy.sh runs OUTSIDE its chroot, and luks-mount.sh's. dracut prints an error
 # for a missing one and still builds the image, so each is checked on the host
 # first and found in the finished image afterwards.
 REQ_TOOLS="bash cryptsetup btrfs sgdisk partprobe partx blockdev blkid lsblk
   findmnt mount umount mountpoint chroot mktemp awk sed grep tee head tail wc
   sort cut tr stat sync basename dirname readlink date cp mv rm mkdir rmdir
   chmod cat touch env sleep uname df find free seq udevadm lsmod modprobe
-  modinfo od install which lsinitrd dmesg"
+  modinfo od install which lsinitrd dmesg id"
 # Not called by luks-deploy.sh; there for repairs by hand at the rescue prompt.
-EXTRA_TOOLS="dd truncate uniq less vi dmsetup wipefs e2fsck"
+EXTRA_TOOLS="dd truncate uniq less vi dmsetup wipefs e2fsck fuser"
 
 # ─── Small helpers ───────────────────────────────────────────────────────────
 src_dev() {
@@ -184,6 +184,7 @@ cmd_build() {
     fi
     [ -f "$GRUB_CFG" ] || fatal "$GRUB_CFG not found — refusing to guess where grub.cfg lives."
     [ -x "$REPO_DIR/bin/luks-deploy.sh" ] || fatal "$REPO_DIR/bin/luks-deploy.sh not found."
+    [ -x "$REPO_DIR/bin/luks-mount.sh" ] || fatal "$REPO_DIR/bin/luks-mount.sh not found."
     bash -n "$REPO_DIR/bin/luks-deploy.sh" || fatal "luks-deploy.sh does not parse."
 
     # The cracklib dictionary: with it in the image, cryptsetup's passphrase
@@ -226,7 +227,7 @@ cmd_build() {
     # shellcheck disable=SC2064  # expand now: $stage is local to this function
     trap "rm -rf '$stage'; rm -f '$IMG.new'" EXIT
     mkdir -p "$stage/AsahiLocker/bin"
-    install -m 0755 "$REPO_DIR/bin/luks-deploy.sh" "$stage/AsahiLocker/bin/"
+    install -m 0755 "$REPO_DIR/bin/luks-deploy.sh" "$REPO_DIR/bin/luks-mount.sh" "$stage/AsahiLocker/bin/"
     install -m 0644 "$REPO_DIR/LICENSE" "$stage/AsahiLocker/"
     [ -f "$REPO_DIR/docs/RAM-RESCUE.md" ] && install -m 0644 "$REPO_DIR/docs/RAM-RESCUE.md" "$stage/AsahiLocker/"
 
@@ -245,6 +246,7 @@ cmd_build() {
             --install-optional "$EXTRA_TOOLS" \
             --include "$stage/AsahiLocker" /root/AsahiLocker \
             --include "$stage/asahilocker" /usr/bin/asahilocker \
+            --include "$stage/AsahiLocker/bin/luks-mount.sh" /usr/bin/luks-mount \
             --include "$stage/banner.txt" /etc/asahilocker-banner.txt \
             --include "$stage/banner-hook.sh" /var/lib/dracut/hooks/emergency/99-asahilocker-banner.sh \
             "$IMG.new" "$kver" > "$dracut_log" 2>&1; then
@@ -257,7 +259,8 @@ cmd_build() {
     list=$(lsinitrd "$IMG.new" 2>/dev/null) || fatal "lsinitrd cannot read the new image."
     local fail=0
     in_image() { grep -qE "(^| )$1( |$)" <<< "$list"; }
-    for f in root/AsahiLocker/bin/luks-deploy.sh usr/bin/asahilocker etc/asahilocker-banner.txt \
+    for f in root/AsahiLocker/bin/luks-deploy.sh root/AsahiLocker/bin/luks-mount.sh usr/bin/luks-mount \
+             usr/bin/asahilocker etc/asahilocker-banner.txt \
              var/lib/dracut/hooks/emergency/99-asahilocker-banner.sh; do
         in_image "$f" || { warn "  missing from image: /$f"; fail=1; }
     done
@@ -426,6 +429,8 @@ write_banner() {
        asahilocker
 
    It resumes an interrupted encryption the same way.
+   To look inside an install instead:    luks-mount list
+                                         luks-mount chroot /dev/...
    To leave without changing anything:   reboot -f
   ════════════════════════════════════════════════════════════════
 

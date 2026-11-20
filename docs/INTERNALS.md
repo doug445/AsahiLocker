@@ -235,10 +235,12 @@ cryptographically verified on Asahi.
 - **Unlock time tracks memory x iterations, not memory alone.** Measured from
   the journal on an M2 Max — the gap between systemd-cryptsetup accepting the
   passphrase and the volume opening — argon2id at 4 GiB / 10 iterations / 4
-  threads costs **9.5 s**, consistent to +/-0.1 s across three boots. That works
-  out to ~0.24 s per GiB-pass. The `aggressive` profile IS that measurement
-  (4 GiB x 10); the others scale from it to roughly 3.8 s (moderate,
-  2 GiB x 8) and 2.1 s (fast, 1 GiB x 9).
+  threads costs **9.5 s**, consistent to +/-0.1 s across three boots. The
+  `aggressive` profile IS that measurement (4 GiB x 10). Re-clocked 2026-11-20
+  outside boot (`cryptsetup open --test-passphrase`, median of five, cryptsetup
+  2.8.8): paranoid 8.60 s, aggressive 7.26 s, moderate 3.21 s, fast 2.04 s, so
+  boot runs ~1.3x the bare KDF, and the others come to roughly 11.3 s
+  (paranoid), 4.2 s (moderate) and 2.7 s (fast) at boot.
   Memory size alone is cheap on modern hardware: the 4 GiB in that 9.5 s
   accounts for about 1 s of it, and the rest is the iteration count. Do not read
   a large `--pbkdf-memory` as a slow boot, or a small one as a speed win.

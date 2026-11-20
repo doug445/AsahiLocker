@@ -80,13 +80,44 @@ esac
 # print the full plan, and exit BEFORE the point of no return. Nothing on the
 # TARGET is modified (config-only dry-run still asks for the passphrase to
 # unlock the container for discovery; all discovery mounts are read-only).
+# The short way (see README "Quick start"):
+#   sudo ./luks-deploy.sh --list                     the installs on this Mac
+#   sudo ./luks-deploy.sh /dev/nvme0n1p6 --defaults  encrypt that one
+# A root partition named on the command line takes its /boot and EFI from the
+# install's own /etc/fstab, matched by UUID: no partition menus. --defaults
+# (-y) also takes the recommended answer wherever a question has one: run the
+# btrfs check, the aggressive KDF profile, enrol a recovery key. Every safety
+# gate stays: the typed ENCRYPT, the Caps Lock check, cryptsetup's own YES
+# and the passphrase itself.
 DRY_RUN="${LUKS_DRY_RUN:-0}"
+USE_DEFAULTS=0
+CLI_ROOT=""
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
-        *) echo "Unknown argument: $arg (only --dry-run is accepted; everything else is via LUKS_* env vars — see the header of this script)" >&2; exit 1 ;;
+        --defaults|-y) USE_DEFAULTS=1 ;;
+        --list|-l)
+            exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/luks-mount.sh" list ;;
+        -h|--help)
+            sed -n '/^# The short way/,/^# and the passphrase itself\./p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            echo "Also: --dry-run (preview, changes nothing). Everything else is a LUKS_* environment"
+            echo "variable; see the header of this script."
+            exit 0 ;;
+        /dev/*)
+            [ -z "$CLI_ROOT" ] || { echo "Give one root partition, not two ($CLI_ROOT, $arg)." >&2; exit 1; }
+            CLI_ROOT="$arg" ;;
+        *) echo "Unknown argument: $arg (try --help)" >&2; exit 1 ;;
     esac
 done
+if [ -n "$CLI_ROOT" ]; then
+    if [ -n "${LUKS_TARGET_ROOT:-}" ] && [ "$LUKS_TARGET_ROOT" != "$CLI_ROOT" ]; then
+        echo "LUKS_TARGET_ROOT=$LUKS_TARGET_ROOT and the command line ($CLI_ROOT) disagree." >&2; exit 1
+    fi
+    LUKS_TARGET_ROOT="$CLI_ROOT"
+fi
+if [ "$USE_DEFAULTS" = 1 ]; then
+    LUKS_RECOVERY_KEY="${LUKS_RECOVERY_KEY:-default}"
+fi
 
 # ─── Non-interactive passphrase (fleet / automated testing) ──────────────────
 # LUKS_PASSPHRASE_FILE=<path>: read the passphrase from a file instead of the
@@ -155,10 +186,10 @@ harden_path() {                        # harden_path <octal-mode> <path>
 # THIS machine and shows a real estimated unlock time for each profile, rather
 # than quoting numbers from someone else's hardware.
 #
-#   aggressive  4 GiB  t=10   paranoid; 4 GiB is argon2id's maximum memory
+#   aggressive  4 GiB  t=10   the default; 4 GiB is argon2id's maximum memory
 #                              cost - cryptsetup refuses anything above
 #                              4194304 KiB - so cost above it buys iterations
-#   moderate    2 GiB  t=8    balanced; the default
+#   moderate    2 GiB  t=8    balanced; half the memory, a faster boot
 #   fast        1 GiB  t=9    the FLOOR, not a discount. cryptsetup's own
 #                              default is argon2id at 1 GiB with iterations
 #                              auto-tuned to ~2000 ms -- t=8 on an M2 Max.
@@ -215,11 +246,12 @@ if [ -n "${LUKS_PBKDF_MEMORY:-}" ] || [ -n "${LUKS_PBKDF_ITER:-}" ] || [ -n "${L
     KDF_PINNED_BY_ENV=1
 fi
 
-# Defaults = the moderate profile; the menu (or LUKS_PROFILE) may replace them.
-LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_MODERATE_MEM}"
-LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_MODERATE_ITER}"
+# Defaults = the aggressive profile, the strongest; the menu (or LUKS_PROFILE)
+# may replace them.
+LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_AGGRESSIVE_MEM}"
+LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_AGGRESSIVE_ITER}"
 LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-$KDF_DEFAULT_PARALLEL}"
-KDF_PROFILE_NAME="moderate"
+KDF_PROFILE_NAME="aggressive"
 
 case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
@@ -1015,6 +1047,42 @@ pinned_partition() {
     echo "$dev"
 }
 
+# ─── BOOT and EFI from the target's own fstab ───────────────────────────────
+# A root named on the command line (luks-deploy.sh /dev/nvme0n1pN) brings its
+# own /boot and EFI: they are read from that install's /etc/fstab, mounted
+# read-only, and matched by UUID. That is proof, where partition order is only
+# a guess, and it skips the two menus. A root that is already encrypted cannot
+# be read without its passphrase, and anything not found falls back to the
+# menus; the fstab cross-check further down verifies the pairing either way.
+if [ -n "$CLI_ROOT" ] && { [ -z "${LUKS_TARGET_BOOT:-}" ] || [ -z "${LUKS_TARGET_EFI:-}" ]; } \
+   && [ "$(blkid -s TYPE -o value "$CLI_ROOT" 2>/dev/null || true)" = "btrfs" ]; then
+    _fs_top=$(mktemp -d /tmp/luks-fstab.XXXXXX)
+    if mount -o ro,subvolid=5 "$CLI_ROOT" "$_fs_top" 2>/dev/null; then
+        _fs_tab=""
+        for _fs_sub in root @rootfs @; do
+            if [ -f "$_fs_top/$_fs_sub/etc/fstab" ]; then _fs_tab="$_fs_top/$_fs_sub/etc/fstab"; break; fi
+        done
+        if [ -n "$_fs_tab" ]; then
+            while read -r _fs_spec _fs_mp; do
+                _fs_dev=""
+                case "$_fs_spec" in
+                    UUID=*)     _fs_dev=$(blkid -U "${_fs_spec#UUID=}" 2>/dev/null || true) ;;
+                    PARTUUID=*) _fs_dev=$(readlink -f "/dev/disk/by-partuuid/${_fs_spec#PARTUUID=}" 2>/dev/null || true) ;;
+                esac
+                if [ -z "$_fs_dev" ] || [ ! -b "$_fs_dev" ]; then continue; fi
+                if [ "$_fs_mp" = "/boot" ] && [ -z "${LUKS_TARGET_BOOT:-}" ]; then
+                    LUKS_TARGET_BOOT="$_fs_dev"; log "BOOT from the target's own fstab: $_fs_dev"
+                elif [ "$_fs_mp" = "/boot/efi" ] && [ -z "${LUKS_TARGET_EFI:-}" ]; then
+                    LUKS_TARGET_EFI="$_fs_dev"; log "EFI from the target's own fstab: $_fs_dev"
+                fi
+            done < <(awk '$1 !~ /^#/ && ($2 == "/boot" || $2 == "/boot/efi") { print $1, $2 }' "$_fs_tab")
+        fi
+        umount "$_fs_top" 2>/dev/null || true
+    fi
+    rmdir "$_fs_top" 2>/dev/null || true
+    unset _fs_top _fs_tab _fs_sub _fs_spec _fs_mp _fs_dev
+fi
+
 # ROOT also accepts crypto_LUKS so an interrupted/half-configured previous
 # run can be re-selected and resumed (see mode detection below).
 if [ -n "${LUKS_TARGET_ROOT:-}" ]; then
@@ -1643,6 +1711,9 @@ CHECK_DEV="$TARGET_ROOT"
 if [ "$DRY_RUN" = "1" ]; then
     DO_CHECK="n"
     log "[dry-run] Skipping the btrfs integrity check (a real run offers it here)."
+elif [ "$USE_DEFAULTS" = 1 ]; then
+    DO_CHECK="Y"
+    log "--defaults: running the btrfs integrity check."
 else
     read -p "Run btrfs integrity check first? (Recommended, takes 5-30 min) [Y/n]: " DO_CHECK
 fi
@@ -1668,10 +1739,11 @@ if [ "$DEPLOY_MODE" = "config-only" ]; then
 elif [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
     KDF_PROFILE_NAME="custom (pinned by environment)"
     log "KDF pinned via environment: mem=$((LUKS_PBKDF_MEMORY / 1024)) MiB iters=$LUKS_PBKDF_ITER parallel=$LUKS_PBKDF_PARALLEL"
-elif [ -n "${LUKS_PROFILE:-}" ]; then
+elif [ -n "${LUKS_PROFILE:-}" ] || [ "$USE_DEFAULTS" = 1 ]; then
+    LUKS_PROFILE="${LUKS_PROFILE:-aggressive}"
     apply_kdf_profile "$LUKS_PROFILE" \
         || fatal "Unknown LUKS_PROFILE '$LUKS_PROFILE' (expected: aggressive, moderate, or fast)"
-    log "KDF profile from environment: $KDF_PROFILE_NAME"
+    log "KDF profile: $KDF_PROFILE_NAME (LUKS_PROFILE or --defaults)"
 else
     echo ""
     log "Benchmarking argon2id on this machine to estimate unlock times..."
@@ -1686,12 +1758,12 @@ else
     echo "   All three are argon2id. None uses pbkdf2."
     echo "  ════════════════════════════════════════════════════════════"
     echo ""
-    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
+    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
     echo   "      Strongest. A 24 GB GPU fits only ~6 guesses at once"
     echo   "      against this. 4 GiB is argon2id's maximum memory cost,"
     echo   "      so anything beyond it has to buy iterations instead."
     echo ""
-    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
+    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
     echo   "      Strong. ~12 concurrent guesses on that same GPU."
     echo ""
     printf "   3) fast          1 GiB,  9 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
@@ -1716,8 +1788,8 @@ else
     # Re-prompt on a typo: by this point the user may have sat through a
     # 5-30 minute btrfs check, so a mistyped digit must not abort the run.
     while true; do
-        read -p "  Select KDF profile [1-3, default 2=moderate]: " KDF_CHOICE
-        case "${KDF_CHOICE:-2}" in
+        read -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
+        case "${KDF_CHOICE:-1}" in
             1) apply_kdf_profile aggressive; break ;;
             2) apply_kdf_profile moderate;   break ;;
             3) apply_kdf_profile fast;       break ;;
@@ -2121,13 +2193,18 @@ log "[5/8] Recovery key + LUKS header backup..."
 SLOTS_IN_USE=$(cryptsetup luksDump "$TARGET_ROOT" 2>/dev/null | grep -cE '^[[:space:]]+[0-9]+: luks2' || true)
 RK_CHOICE="${LUKS_RECOVERY_KEY:-}"
 
-# Default the prompt to NO on a configuration-only re-run. Each acceptance
-# enrols another keyslot, so someone who re-runs the config phase a few times
-# and keeps hitting Enter ends up with a header full of recovery keys they
-# cannot tell apart. A fresh encrypt still defaults to yes: that is the run
-# where there is no recovery key yet, and no way back if the passphrase is lost.
+# Default to NO when the header already has a second keyslot. Each acceptance
+# enrols another one, so someone who re-runs the config phase a few times and
+# keeps hitting Enter would end up with a header full of recovery keys they
+# cannot tell apart. Otherwise yes: a fresh encrypt, and also a config-only run
+# after an interrupted one, has no recovery key yet, and no way back if the
+# passphrase is lost.
 RK_DEFAULT="yes"
-[ "$DEPLOY_MODE" = "config-only" ] && RK_DEFAULT="no"
+[ "$DEPLOY_MODE" = "config-only" ] && [ "${SLOTS_IN_USE:-0}" -gt 1 ] && RK_DEFAULT="no"
+if [ "$RK_CHOICE" = "default" ]; then
+    RK_CHOICE="$RK_DEFAULT"
+    log "  --defaults: recovery key: $RK_CHOICE"
+fi
 
 if [ -z "$RK_CHOICE" ]; then
     echo ""
@@ -2139,8 +2216,8 @@ if [ -z "$RK_CHOICE" ]; then
         warn "  Note: $SLOTS_IN_USE keyslots are already in use — a recovery key may already be enrolled."
     fi
     if [ "$RK_DEFAULT" = "no" ]; then
-        warn "  This is a configuration-only re-run: saying yes adds ANOTHER"
-        warn "  keyslot on top of what is already there. Defaulting to no."
+        warn "  The header already has $SLOTS_IN_USE keyslots: saying yes adds ANOTHER"
+        warn "  one on top of what is already there. Defaulting to no."
         read -p "  Generate and enroll a recovery key now? [y/N]: " RK_CHOICE
     else
         read -p "  Generate and enroll a recovery key now? [Y/n]: " RK_CHOICE
@@ -2165,7 +2242,7 @@ case "$RK_CHOICE" in
             printf '%s' "$RECOVERY_KEY" > "$RK_FILE"
             harden_path 0600 "$RK_FILE"
             # The slot gets the CURRENT LUKS_PBKDF_* parameters. In config-only
-            # mode these are the moderate defaults (or env), not necessarily
+            # mode these are the aggressive defaults (or env), not necessarily
             # what the header's other slots use — cryptographically irrelevant
             # for a random 256-bit key, but say so rather than surprise a
             # later luksDump audit.

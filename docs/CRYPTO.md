@@ -30,17 +30,20 @@ system load — at boot the machine is idle, so real unlocks land at the fast en
 *Times shown are from an M2 Max. Your machine is benchmarked at run time, so the
 numbers you see will be your own.*
 
-| Profile | Memory | Iterations | Threads | Unlock, M2 Max | vs stock |
-|---------|--------|-----------|---------|----------------|----------|
-| `aggressive` | 4 GiB | 10 | 4 | **9.5 s** (measured) | 5x |
-| `moderate` (default) | 2 GiB | 8 | 4 | ~3.8 s | 2x |
-| `fast` | 1 GiB | 9 | 4 | ~2.1 s | 1.125x |
+| Profile | Memory | Iterations | Threads | At boot, M2 Max | KDF alone, M2 Max | vs stock |
+|---------|--------|-----------|---------|-----------------|-------------------|----------|
+| `aggressive` (default) | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
+| `moderate` | 2 GiB | 8 | 4 | ~4.2 s | 3.2 s | 2x |
+| `fast` | 1 GiB | 9 | 4 | ~2.7 s | 2.0 s | 1.125x |
 
-Only `aggressive` is measured — from the boot journal, the gap between
-systemd-cryptsetup taking the passphrase and the volume opening. The other two
-scale from it at ~0.24 s per GiB-pass. The screenshot above shows a live
-`cryptsetup benchmark` run instead, which is a different basis and jitters with
-load, so its numbers sit slightly higher.
+*At boot:* `aggressive` measured from the boot journal (the gap between
+systemd-cryptsetup taking the passphrase and the volume opening); the others
+scaled from it. *KDF alone:* `cryptsetup open --test-passphrase`, median of five
+runs, re-clocked 2026-11-20 with cryptsetup 2.8.8. Boot runs about 1.3x the KDF
+alone. `luks-tune.sh` also offers `paranoid` (4 GiB x 12): 8.6 s KDF alone,
+~11.3 s at boot. The screenshot above shows the prompt's own estimate, from a live
+`cryptsetup benchmark` run: a third basis, which jitters with load and lands
+between the two.
 
 **"vs stock"** is work (memory x iterations) against what `cryptsetup` picks on
 this machine unaided — 1 GiB x 8, its `--iter-time` default of 2000 ms. Every
@@ -206,24 +209,24 @@ Then pick a tier. Each command converts the keyslot your passphrase opens
 and repeat per slot you want re-costed.
 
 ```bash
-# fast — 1 GiB, 9 iterations          (~2.1 s on an M2 Max; 12.5% more
+# fast — 1 GiB, 9 iterations          (~2.7 s at boot on an M2 Max; 12.5% more
 #                                      work than cryptsetup unaided here,
 #                                      which picks 1 GiB x 8)
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 1048576 --pbkdf-force-iterations 9 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-# moderate — 2 GiB, 8 iterations      (~3.8 s)   ← the shipped default
+# moderate — 2 GiB, 8 iterations      (~4.2 s)
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 2097152 --pbkdf-force-iterations 8 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-# aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)
+# aggressive — 4 GiB, 10 iterations   (~9.5 s, measured)   ← the shipped default
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 10 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
 
-# paranoid — 4 GiB, 12 iterations     (~11.4 s)
+# paranoid — 4 GiB, 12 iterations     (~11.3 s)
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
      /dev/nvme0n1p6
