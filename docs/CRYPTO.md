@@ -78,7 +78,7 @@ against a memory-free loop. `cryptsetup` refuses argon2id memory above
 `aggressive` already does. Every profile below it hands the attacker back
 some of that parallelism for a few seconds of your boot.
 
-##`paranoid` is the last 20 %.** Past the memory ceiling only time raises the
+**`paranoid` is the last 20 %.** Past the memory ceiling only time raises the
 price, and `paranoid` (4 GiB × 12) raises it 20 % on every guess, forever, for
 about two more seconds per boot. It is not in the deploy menu on purpose — it
 is a decision to make after the fact, with `luks-tune.sh`, once you have
