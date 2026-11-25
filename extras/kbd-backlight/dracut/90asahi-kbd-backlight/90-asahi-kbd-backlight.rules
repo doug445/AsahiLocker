@@ -1,0 +1,3 @@
+# Initramfs only: keyboard backlight to full brightness the moment its LED
+# device appears, so the keys are lit at the LUKS passphrase prompt.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="kbd_backlight", ATTR{brightness}="$attr{max_brightness}"

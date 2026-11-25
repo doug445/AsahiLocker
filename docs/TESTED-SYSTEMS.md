@@ -22,5 +22,5 @@ after a hard kill (`cryptsetup repair`), 4096-byte sectors on a 4Kn and a
 a passphrase refused at the prompt, which must write nothing. With it:
 `multi-install-selection-test.sh` (the partition menus on a two-install disk,
 12), `luks-mount-test.sh` (a loop-image install, plain and encrypted, 13),
-`cli-smoke-test.sh` (every script's command line, 26) and
+`cli-smoke-test.sh` (every script's command line, 29) and
 `uboot-efivar-test.sh` (14). None of these is a boot.

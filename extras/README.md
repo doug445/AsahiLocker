@@ -1,6 +1,8 @@
-# extras — `luks-fetch-cache`
+# extras — `luks-fetch-cache` and `kbd-backlight`
 
-Optional. An aligned, one-line-per-volume summary of every LUKS and BitLocker
+Both optional. [`kbd-backlight/`](#kbd-backlight--the-keyboard-lit-at-the-passphrase-prompt) is at the end.
+
+`luks-fetch-cache` gives an aligned, one-line-per-volume summary of every LUKS and BitLocker
 encrypted volume attached to the machine, for use as a fastfetch module.
 
 ```bash
@@ -71,3 +73,27 @@ half-parsed line for a header it was not allowed to read.
   to pbkdf2 — upgrade GRUB, or keep the volume off GRUB's unlock path. The root
   volume encrypted by this repo is unlocked by the initramfs, so it is
   unaffected either way.
+
+## `kbd-backlight/` — the keyboard lit at the passphrase prompt
+
+On a MacBook, the keyboard backlight is dark while you type the LUKS passphrase. This makes it light at 100% at the prompt, and it stays on for as long as the prompt waits.
+
+```bash
+sudo ./kbd-backlight/install.sh               # install, rebuild every initramfs, verify
+sudo ./kbd-backlight/install.sh --uninstall
+./kbd-backlight/install.sh --check            # status (sudo also inspects each image)
+```
+
+**Why it is dark:** the backlight is a PWM LED (`pwm-apple` + `leds-pwm`). The stock Asahi dracut configuration does not put either driver in the initramfs, so the LED does not exist until the root is unlocked.
+
+**What it installs:** a dracut module, `/usr/lib/dracut/modules.d/90asahi-kbd-backlight/`. It adds the two drivers and one udev rule, `ATTR{brightness}="$attr{max_brightness}"`, which runs in the initramfs only. It also adds `/etc/dracut.conf.d/90-asahi-kbd-backlight.conf`, so kernel updates include the module. After unlock, `systemd-backlight` and the desktop control the backlight as usual.
+
+**Images it rebuilds:**
+- Every kernel in `/boot`.
+- The `0-rescue` image. It is rebuilt with the dracut arguments recorded inside it (`usr/lib/dracut/build-parameter.txt`), so a host-only rescue stays host-only. The new image is written to `.new` and replaces the old one only after a check: the `rescue` module and the backlight module must both be present, and `/boot` must have had room. Kernel updates leave an existing rescue image alone, so re-run the installer after rebuilding it by hand.
+
+**Limits:**
+- It cannot light a GRUB `cryptomount` prompt for an encrypted `/boot`. That prompt comes before Linux loads its drivers. The root volume this repository encrypts is unlocked in the initramfs, so that prompt is covered.
+- It needs a MacBook. Desktop Macs have no `kbd_backlight`, and the installer refuses to run on them.
+
+Also published on its own: [asahi-luks-kbd-backlight](https://github.com/doug445/asahi-luks-kbd-backlight).
