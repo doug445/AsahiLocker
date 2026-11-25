@@ -179,10 +179,21 @@ sudo reboot
 
 Files written from the live environment (crypttab, the dracut conf, edited
 fstab) can end up mislabeled — the live system's policy did the labeling, not
-the target's. `luks-deploy.sh` runs `restorecon` on everything it touched from
-inside the chroot, but if you edited files by hand during a manual repair, the
-boot can still die on denials (root mounts, then systemd units fail en masse,
-or the boot hangs after the passphrase).
+the target's. `luks-deploy.sh` labels everything it wrote with the target's own
+policy and reads the labels back, but if you edited files by hand during a
+manual repair, the boot can still die on denials (root mounts, then systemd
+units fail en masse, or the boot hangs after the passphrase).
+
+**Encrypted from the RAM rescue with 3.0.0 or earlier?** That relabel did
+nothing, and the files the deploy wrote (`/etc/fstab`, `/etc/crypttab`, the
+initramfs images, the BLS entries and more) have no label at all. The system
+boots and unlocks, and the audit log fills with `unlabeled_t` denials. Run
+`post-encryption-setup.sh` from 3.1.0 or later once: it labels them. Or by
+hand:
+
+```bash
+sudo find / /home /boot -xdev -context '*:unlabeled_t:*' -print0 | sudo xargs -0 -r restorecon -v
+```
 
 Fix: at the GRUB menu, press `e`, append `enforcing=0` to the `linux` line, and
 boot once. Then relabel and re-enable:

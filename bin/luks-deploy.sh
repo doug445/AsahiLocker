@@ -196,6 +196,57 @@ harden_path() {                        # harden_path <octal-mode> <path>
     return 0
 }
 
+# ─── SELinux labels on the target ────────────────────────────────────────────
+# Label paths ON THE TARGET with the target's own policy, then read the labels
+# back from the files.
+#
+# restorecon cannot do this job here. It exits 0 without touching anything when
+# it finds SELinux "not enabled", and inside this script's chroot it never
+# finds it: /sys is bound without its submounts, so there is no selinuxfs to
+# see. `restorecon -n -v` prints nothing for the same reason, so a relabel that
+# did nothing used to be reported as "SELinux contexts OK". On a live USB with
+# SELinux on, the running kernel had at least given every new file a label. In
+# the RAM rescue no policy is loaded, a new file gets no label at all, and the
+# first enforcing boot met unlabeled_t on everything written here. (Issue #9.)
+#
+# setfiles is given the target's file_contexts and writes the labels whatever
+# the state of SELinux in the running kernel. The read-back uses stat, not the
+# tool that did the writing, so a relabel that silently did nothing cannot pass.
+#
+#   target_relabel <path-as-the-target-sees-it>...
+# Directories are labeled recursively, without crossing into another filesystem
+# (the EFI partition under /boot has no labels to set). Missing paths are
+# skipped. Returns 0 when every path is labeled, 2 when the target has no
+# SELinux policy to label for, anything else when a label is missing -- and
+# then prints "<label> <path>" for each such file, with what setfiles said.
+target_relabel() {
+    chroot /mnt /bin/bash -s -- "$@" <<'RELABEL'
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+[ -f /etc/selinux/config ] || exit 2
+command -v setfiles >/dev/null 2>&1 || exit 2
+st=$(sed -n 's/^[[:space:]]*SELINUXTYPE=[[:space:]]*//p' /etc/selinux/config | tail -n1 | sed 's/[[:space:]]*$//')
+fc="/etc/selinux/${st:-targeted}/contexts/files/file_contexts"
+[ -f "$fc" ] || exit 2
+paths=()
+for p in "$@"; do
+    if [ -e "$p" ] || [ -L "$p" ]; then paths+=("$p"); fi
+done
+[ "${#paths[@]}" -gt 0 ] || exit 0
+said=$(setfiles -F "$fc" "${paths[@]}" 2>&1)
+left=0
+for p in "${paths[@]}"; do
+    # %D is the device number: a mount point inside $p belongs to another
+    # filesystem and is left out. "?" is what stat prints for no label at all.
+    bad=$(find "$p" -xdev -exec stat -c '%D %C %n' {} + 2>/dev/null \
+        | awk 'NR == 1 { dev = $1 }
+               $1 == dev && ($2 == "?" || $2 ~ /:unlabeled_t(:|$)/) { sub(/^[^ ]+ /, ""); print }')
+    if [ -n "$bad" ]; then echo "$bad"; left=1; fi
+done
+if [ "$left" -ne 0 ] && [ -n "$said" ]; then echo "$said"; fi
+exit "$left"
+RELABEL
+}
+
 # ─── LUKS2 KDF profiles ──────────────────────────────────────────────────────
 # Three presets, chosen interactively before encryption starts. The KDF is
 # re-run in the INITRAMFS at every boot, so its memory cost must be allocatable
@@ -238,9 +289,12 @@ harden_path() {                        # harden_path <octal-mode> <path>
 #   LUKS_PASSPHRASE_FILE=<path>  read the passphrase from a file (fleet/testing);
 #                                the file's exact bytes are the passphrase
 #   LUKS_MAPPER_NAME=<name>      device-mapper name (default: fedora_crypt)
-#   LUKS_KEEP_SPLASH=1           do NOT strip 'rhgb quiet' from the boot args
-#                                (default: strip, so the passphrase prompt is
-#                                visible; post-encryption-setup.sh restores them)
+#   LUKS_KEEP_SPLASH=1           do NOT strip 'rhgb quiet' from the boot args:
+#                                the splash stays on. (Default: strip, so the
+#                                passphrase prompt is visible. After the first
+#                                boot post-encryption-setup.sh puts them back,
+#                                unless it is run with --keep-splash-off. This
+#                                variable is read here only, not by that script.)
 #   LUKS_SECTOR_SIZE=4096        encryption sector size (default: 4096 when the
 #                                btrfs sectorsize allows it, else 512); never
 #                                larger than the filesystem's sectorsize
@@ -1982,10 +2036,13 @@ if [ "$DRY_RUN" = "1" ]; then
     echo "     /etc/kernel/cmdline, /etc/dracut.conf.d/99-luks.conf   (originals saved as *.pre-luks)"
     if [ "${LUKS_KEEP_SPLASH:-0}" != "1" ]; then
         echo "     and strip 'rhgb quiet' so the passphrase prompt is visible"
-        echo "     (post-encryption-setup.sh restores them; LUKS_KEEP_SPLASH=1 to skip)"
+        echo "     (LUKS_KEEP_SPLASH=1 here leaves the splash on instead. After the first"
+        echo "     boot post-encryption-setup.sh puts the tokens back, unless it is run"
+        echo "     with --keep-splash-off)"
     fi
     echo "  7. in chroot: rebuild ALL initramfs images, update ALL BLS entries (grubby),"
-    echo "     regenerate /boot/grub2/grub.cfg (never the ESP stub), restorecon"
+    echo "     regenerate /boot/grub2/grub.cfg (never the ESP stub); then label"
+    echo "     everything written with the target's SELinux policy (setfiles)"
     echo "  8. run the verification gate; refuse the reboot message on any error"
     echo ""
     log "[dry-run] No changes were made to the target. Backups/plan artifacts: $STATE_DIR/"
@@ -2891,12 +2948,13 @@ fi
 # With the splash active, the first-boot LUKS prompt hides behind boot
 # graphics/text and looks like a hang. Strip both tokens now; a marker file
 # tells post-encryption-setup.sh to restore them after the first encrypted
-# boot. Opt out with LUKS_KEEP_SPLASH=1.
+# boot (it leaves them off when run with --keep-splash-off).
+# LUKS_KEEP_SPLASH=1 skips the strip: the splash stays on throughout.
 echo ""
 if [ "${LUKS_KEEP_SPLASH:-0}" = "1" ]; then
     echo "[CHROOT] LUKS_KEEP_SPLASH=1 — leaving 'rhgb quiet' in place."
 else
-    echo "[CHROOT] Stripping 'rhgb quiet' from boot args (post-encryption-setup.sh restores them)..."
+    echo "[CHROOT] Stripping 'rhgb quiet' from boot args (post-encryption-setup.sh restores them, or leaves them off with --keep-splash-off)..."
     strip_splash_tokens() {
         # $1 = file, $2 = sed address ('' = whole line applies)
         # Three boundary cases, each swept twice because adjacent tokens
@@ -2993,42 +3051,6 @@ for esp_cfg in /boot/efi/EFI/*/grub.cfg; do
     fi
 done
 
-# ── 7e: SELinux — relabel every file this deployment wrote ─────────────────
-# Files created from the live environment get labeled by the LIVE system's
-# policy (or not labeled at all, if its SELinux is off). A mislabeled
-# /etc/crypttab or dracut conf can fail the first boot in enforcing mode.
-# restorecon runs here IN the chroot, against the target's own policy.
-echo ""
-if command -v restorecon &>/dev/null && [ -f /etc/selinux/config ]; then
-    echo "[CHROOT] Restoring SELinux contexts on files written by this deployment..."
-    restorecon -F \
-        /etc/crypttab /etc/fstab /etc/fstab.pre-luks \
-        /etc/default/grub /etc/default/grub.pre-luks \
-        /etc/kernel/cmdline /etc/kernel/cmdline.pre-luks \
-        /etc/dracut.conf.d/99-luks.conf \
-        /boot/luks-header-backup.img 2>/dev/null || true
-    restorecon -RF /boot/loader/entries 2>/dev/null || true
-    # The freshly rebuilt initramfs images (and anything else dracut/grubby
-    # wrote) were created from a chroot with no SELinux policy loaded — sweep
-    # all of /boot and the marker dir so nothing is left unlabeled.
-    restorecon -RF /boot 2>/dev/null || true
-    restorecon -RF /var/lib/asahilocker 2>/dev/null || true
-    # -n -v lists anything STILL mislabeled; empty output means all clean
-    RELABEL_LEFT=$(restorecon -n -v /etc/crypttab /etc/fstab /etc/default/grub \
-        /etc/kernel/cmdline /etc/dracut.conf.d/99-luks.conf 2>/dev/null || true)
-    if [ -n "$RELABEL_LEFT" ]; then
-        echo "[CHROOT] WARN: some files could not be relabeled:"
-        echo "$RELABEL_LEFT"
-        echo "[CHROOT] If the first boot fails with SELinux denials, add 'enforcing=0'"
-        echo "[CHROOT] to the kernel command line for one boot, then run:"
-        echo "[CHROOT]     sudo restorecon -RFv /etc /boot && sudo setenforce 1"
-    else
-        echo "[CHROOT] SELinux contexts OK."
-    fi
-else
-    echo "[CHROOT] SELinux not present on target (no /etc/selinux/config or restorecon) — skipping relabel."
-fi
-
 echo ""
 echo "[CHROOT] ═══════════════════════════════════════════════"
 echo "[CHROOT] Chroot work complete. Errors: $ERRORS"
@@ -3042,6 +3064,34 @@ if [ "$CHROOT_RC" -ne 0 ]; then
     err "Chroot reported $CHROOT_RC error(s)!"
     warn "Continuing to verification to show full status..."
 fi
+
+# ─── 7e: SELinux — label every file this deployment wrote ───────────────────
+# A wrong or missing label on /etc/crypttab, /etc/fstab or a dracut conf is
+# denied in enforcing mode on the first boot. /boot is done whole: the rebuilt
+# initramfs images, the BLS entries, grub.cfg and the header backup are in it.
+echo ""
+log "  Labeling the files this deployment wrote (SELinux, the target's own policy)..."
+RELABEL_RC=0
+RELABEL_LEFT=$(target_relabel \
+    /etc/crypttab /etc/fstab /etc/fstab.pre-luks \
+    /etc/default/grub /etc/default/grub.pre-luks \
+    /etc/kernel/cmdline /etc/kernel/cmdline.pre-luks \
+    /etc/dracut.conf.d/99-luks.conf \
+    /var/lib/asahilocker /boot 2>&1) || RELABEL_RC=$?
+case "$RELABEL_RC" in
+    0)  log "  SELinux labels set and read back: OK." ;;
+    2)  log "  No SELinux policy on the target (no /etc/selinux/config, setfiles or file_contexts) — nothing to label." ;;
+    *)  warn "  SELinux: these files could not be labeled:"
+        # A here-string, not `echo | head`: with a long list head exits first,
+        # echo dies of SIGPIPE, and under pipefail + set -e that would end the
+        # deployment right here, before the verification gate.
+        sed -n '1,20s/^/      /p' <<< "$RELABEL_LEFT"
+        warn "  The system boots and unlocks all the same. post-encryption-setup.sh,"
+        warn "  which you run after the first boot, labels them. If that boot fails"
+        warn "  with SELinux denials instead, add 'enforcing=0' to the kernel command"
+        warn "  line for one boot, then run:"
+        warn "      sudo restorecon -RFv /etc /boot && sudo setenforce 1" ;;
+esac
 
 # Sync all writes to disk
 log "  Syncing all writes to disk..."
@@ -3257,7 +3307,7 @@ echo ""
 
 # Save log to target system's /boot (survives if USB is removed)
 cp "$DEPLOY_LOG" /mnt/boot/luks-deploy.log 2>/dev/null || true
-chroot /mnt /usr/sbin/restorecon -F /boot/luks-deploy.log 2>/dev/null || true
+target_relabel /boot/luks-deploy.log >/dev/null 2>&1 || true
 log "Log also saved to target: /boot/luks-deploy.log"
 echo ""
 if [ "$STATE_VOLATILE" = "1" ]; then
@@ -3290,7 +3340,7 @@ if [ -n "$KEEP_WHY" ]; then
     KEEP_DIR="/mnt/root/asahilocker-$(basename "$STATE_DIR")"
     if mountpoint -q /mnt && cp -a "$STATE_DIR" "$KEEP_DIR" 2>/dev/null; then
         chmod 0700 "$KEEP_DIR" 2>/dev/null || true
-        chroot /mnt /usr/sbin/restorecon -RF "/root/$(basename "$KEEP_DIR")" 2>/dev/null || true
+        target_relabel "/root/$(basename "$KEEP_DIR")" >/dev/null 2>&1 || true
         KEEP_NOTE="Copied onto the encrypted system: /root/$(basename "$KEEP_DIR")/"
     else
         KEEP_NOTE="Could NOT copy it onto the encrypted system -- do that by hand, now"

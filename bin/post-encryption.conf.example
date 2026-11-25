@@ -15,6 +15,12 @@ SNAPPER_CONFIGS="root home"
 # Units from boot-guards/ that are only safe to enable once root is encrypted.
 BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.timer)
 
+# --- Boot splash --------------------------------------------------------------
+# luks-deploy.sh takes 'rhgb quiet' off the kernel command line so the first
+# passphrase prompt is visible, and this script puts it back. Set
+# RESTORE_SPLASH=0 (or run with --keep-splash-off) to leave it off for good.
+RESTORE_SPLASH=1
+
 # --- Your own units ----------------------------------------------------------
 # Anything else you want enabled once the box is encrypted and booting. These
 # are examples from a real deployment — replace them with your own, or leave the

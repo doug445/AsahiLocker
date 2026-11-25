@@ -15,7 +15,7 @@ before it lets you reboot.
 | 4/8 | Resizes btrfs back to fill the container, mounts a chroot using the auto-detected subvolumes |
 | 5/8 | Backs up the LUKS header to `/boot/` **and** to the script's own directory |
 | 6/8 | Rewrites `crypttab`, `fstab`, `/etc/default/grub`, `/etc/kernel/cmdline`, dracut config |
-| 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg`, then `restorecon`s every file the deployment wrote (against the *target's* SELinux policy, inside the chroot) |
+| 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg`, then labels every file the deployment wrote with `setfiles` and the *target's* own SELinux `file_contexts`, and reads the labels back from the files |
 | 8/8 | 12-point verification gate — blocks the "you may reboot" message until every check passes |
 
 ## Resume and re-entrancy
@@ -137,7 +137,7 @@ working image intact rather than leaving you with zero bootable kernels.
 | Same-disk sanity check | Root/boot/EFI selections silently spanning different disks |
 | **fstab cross-validation** | Picking a boot/EFI partition that belongs to a *different* install on the same machine: the UUIDs of the selected BOOT and EFI partitions are checked against the `/boot` and `/boot/efi` entries in the target's own fstab, and a mismatch requires a typed `MISMATCH` override |
 | Already-encrypted check | Double-encrypting an already-LUKS partition (now offers resume / config-only instead of aborting) |
-| SELinux relabel | Files written from the live environment carrying the live system's labels (or none) into the target — `restorecon` runs in the chroot against the target's policy, and anything it cannot fix is reported with the `enforcing=0` escape hatch |
+| SELinux relabel | Files written from the live environment carrying the live system's labels into the target, or none at all: the RAM rescue has no policy loaded, and a file created there is `unlabeled_t` on the first enforcing boot. `setfiles` runs in the chroot with the target's `file_contexts`. It does not depend on SELinux being active in the running kernel, which `restorecon` does: inside the chroot `restorecon` exits 0 without doing anything, and up to 3.0.0 that was reported as success. The labels are then read back with `stat`, and a file still without one is listed with the `enforcing=0` escape hatch. `post-encryption-setup.sh` repeats the relabel on the booted system |
 | Subvolume auto-discovery | Modifying the wrong (stale or restored) root subvolume |
 | BLS consistency check | Boot entries and fstab disagreeing about which subvolume is root |
 | Optional `btrfs check` | Encrypting a filesystem that is already corrupt |

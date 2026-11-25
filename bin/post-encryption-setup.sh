@@ -32,6 +32,7 @@
 #
 #     sudo ./post-encryption-setup.sh
 #     sudo ./post-encryption-setup.sh --config /path/to/post-encryption.conf
+#     sudo ./post-encryption-setup.sh --keep-splash-off
 #
 # What it does (all idempotent — safe to re-run):
 #   0. Saves a labeled LUKS recovery bundle (header + boot state) to disk.
@@ -40,6 +41,10 @@
 #   2. Enables the LUKS/boot-dependent systemd units (the boot guards), which
 #      are unsafe to enable before the root is actually encrypted.
 #   3. Enables any extra units you list in the config file.
+#      Puts the boot splash (rhgb quiet) back, which luks-deploy.sh took off so
+#      the first passphrase prompt was visible. --keep-splash-off (or
+#      RESTORE_SPLASH=0 in the config file) leaves it off for good.
+#      Gives the files the deploy wrote their SELinux labels, if any lack one.
 #   4. Verifies the result and prints a summary.
 #
 # Written as a script on purpose: scripts do NOT source ~/.bashrc, so shell
@@ -77,19 +82,33 @@ FAILS=0
 # ignored would run with defaults while the caller believed their config was
 # in effect.
 CONFIG=""
-case "${1:-}" in
-    "") ;;
-    --config)
-        CONFIG="${2:-}"
-        if [ -z "$CONFIG" ] || [ ! -f "$CONFIG" ]; then
-            err "--config requires an existing file (got: '${2:-}')"; exit 2
-        fi
-        [ "$#" -le 2 ] || { err "unexpected argument: $3"; exit 2; }
-        ;;
-    *)
-        err "unknown option: $1 (only '--config <file>' and '--help' are accepted)"; exit 2
-        ;;
-esac
+KEEP_SPLASH_OFF=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --config)
+            CONFIG="${2:-}"
+            if [ -z "$CONFIG" ] || [ ! -f "$CONFIG" ]; then
+                err "--config requires an existing file (got: '${2:-}')"; exit 2
+            fi
+            shift
+            ;;
+        --keep-splash-off)
+            KEEP_SPLASH_OFF=1
+            ;;
+        *)
+            err "unknown option: $1 (accepted: '--config <file>', '--keep-splash-off', '--help')"; exit 2
+            ;;
+    esac
+    shift
+done
+# LUKS_KEEP_SPLASH belongs to luks-deploy.sh, where it means "do not take the
+# splash off". Here it would be ignored and the splash restored, the opposite
+# of what someone setting it for this script wants (issue #8). Stop instead.
+if [ -n "${LUKS_KEEP_SPLASH:-}" ]; then
+    err "LUKS_KEEP_SPLASH is a luks-deploy.sh setting and does nothing here."
+    err "To leave the boot splash off, run this script with --keep-splash-off."
+    exit 2
+fi
 [ -z "$CONFIG" ] && [ -f "$SELFDIR/post-encryption.conf" ] && CONFIG="$SELFDIR/post-encryption.conf"
 [ -z "$CONFIG" ] && [ -f /etc/post-encryption.conf ] && CONFIG=/etc/post-encryption.conf
 
@@ -99,6 +118,7 @@ SNAPPER_CONFIGS="root home"
 ENABLE_SNAPPER=1
 BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.timer)
 EXTRA_UNITS=()
+RESTORE_SPLASH=1
 
 if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
     # shellcheck disable=SC1090
@@ -106,6 +126,8 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
 else
     warn "no config file — using built-in defaults (see post-encryption.conf.example)"
 fi
+# The command line wins over the config file.
+[ "$KEEP_SPLASH_OFF" -eq 1 ] && RESTORE_SPLASH=0
 
 # ============================================================================
 hdr "0. LUKS recovery bundle"
@@ -212,6 +234,8 @@ hdr "3b. Restore boot splash (rhgb quiet) if luks-deploy stripped it"
 # luks-deploy.sh strips 'rhgb quiet' so the first LUKS passphrase prompt is
 # visible instead of hiding behind the splash, and leaves this marker so the
 # tokens come back once the encrypted system is up. Idempotent.
+# --keep-splash-off / RESTORE_SPLASH=0 leaves them off and removes the marker,
+# so a later run without the option does not restore them after all.
 SPLASH_MARKER=/var/lib/asahilocker/restore-splash
 # Before the AsahiLocker rename (<= v1.2.0) the marker lived under the old
 # project name; honour it so a mixed-version deploy still gets its splash back.
@@ -220,7 +244,20 @@ if [ ! -f "$SPLASH_MARKER" ] && [ -f "$LEGACY_SPLASH_MARKER" ]; then
     SPLASH_MARKER=$LEGACY_SPLASH_MARKER
 fi
 GRUBBY=/usr/sbin/grubby; [ -x "$GRUBBY" ] || GRUBBY=/usr/bin/grubby
-if [ -f "$SPLASH_MARKER" ]; then
+if [ "$RESTORE_SPLASH" != 1 ]; then
+    if [ -f "$SPLASH_MARKER" ]; then
+        if /usr/bin/rm -f "$SPLASH_MARKER"; then
+            ok "splash left off, as asked; marker removed, so a later run will not restore it"
+        else
+            err "could not remove $SPLASH_MARKER — a later run would restore the splash"; FAILS=$((FAILS+1))
+        fi
+    elif "$GREP" -qsw rhgb /etc/kernel/cmdline /boot/loader/entries/*.conf; then
+        warn "the splash is already on and there is no marker: this option only declines"
+        warn "the restore, it does not take the splash off. See 'Boot splash' in README.md."
+    else
+        ok "splash is off and there is no marker — nothing to do"
+    fi
+elif [ -f "$SPLASH_MARKER" ]; then
     TOKENS=$(/usr/bin/cat "$SPLASH_MARKER" 2>/dev/null)
     TOKENS=${TOKENS:-rhgb quiet}
     SPLASH_OK=1
@@ -253,6 +290,42 @@ if [ -f "$SPLASH_MARKER" ]; then
     fi
 else
     ok "no splash-restore marker — nothing to do"
+fi
+
+# ============================================================================
+hdr "3c. SELinux labels on the files luks-deploy wrote"
+# ============================================================================
+# Up to 3.0.0 the deploy's relabel did nothing and still reported success
+# (issue #9). Run from the RAM rescue, where no policy is loaded, that left
+# every file it wrote with no label at all: unlabeled_t, and denials on an
+# enforcing system. The rescue's own logs in /boot are in the same state.
+# restorecon works here, on the booted system. Idempotent.
+if /usr/sbin/selinuxenabled 2>/dev/null; then
+    LABEL_PATHS=()
+    for p in /etc/crypttab /etc/fstab /etc/fstab.pre-luks \
+             /etc/default/grub /etc/default/grub.pre-luks \
+             /etc/kernel/cmdline /etc/kernel/cmdline.pre-luks \
+             /etc/dracut.conf.d/99-luks.conf /var/lib/asahilocker /boot \
+             /root/asahilocker-pre-luks-state-*; do
+        [ -e "$p" ] && LABEL_PATHS+=("$p")
+    done
+    count_unlabeled() {
+        /usr/bin/find "${LABEL_PATHS[@]}" -xdev -context '*:unlabeled_t:*' 2>/dev/null | "$WC" -l
+    }
+    UNLABELED=$(count_unlabeled)
+    "$RESTORECON" -RF "${LABEL_PATHS[@]}" 2>/dev/null || true
+    LEFT=$(count_unlabeled)
+    if [ "$LEFT" -ne 0 ]; then
+        err "$LEFT file(s) written by the deploy still have no SELinux label:"
+        /usr/bin/find "${LABEL_PATHS[@]}" -xdev -context '*:unlabeled_t:*' 2>/dev/null | /usr/bin/head -n 10 | "$SED" 's/^/    /'
+        FAILS=$((FAILS+1))
+    elif [ "$UNLABELED" -ne 0 ]; then
+        ok "$UNLABELED file(s) written by the deploy had no SELinux label — labeled now"
+    else
+        ok "every file the deploy wrote has its SELinux label"
+    fi
+else
+    ok "SELinux is not enabled — nothing to label"
 fi
 
 # ============================================================================

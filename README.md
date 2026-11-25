@@ -366,8 +366,32 @@ Nothing on the target is modified.
 The deploy strips `rhgb quiet` from the boot args, because with the splash
 active the first LUKS passphrase prompt hides behind it and the boot looks
 hung. `post-encryption-setup.sh` restores both tokens after the first
-encrypted boot (via a marker in `/var/lib/asahilocker/`). Opt out
-with `LUKS_KEEP_SPLASH=1`.
+encrypted boot (via a marker in `/var/lib/asahilocker/`).
+
+Each script has its own setting, and they mean opposite things:
+
+| You want | Use |
+|---|---|
+| The splash left **on** throughout | `LUKS_KEEP_SPLASH=1` when you run `luks-deploy.sh`: nothing is stripped |
+| The splash **off** for good, so the prompt is visible at every boot | `sudo ./bin/post-encryption-setup.sh --keep-splash-off`, or `RESTORE_SPLASH=0` in `post-encryption.conf`: nothing is restored, and the marker is removed so a later run does not restore it after all |
+
+`LUKS_KEEP_SPLASH` is read by `luks-deploy.sh` only. `post-encryption-setup.sh`
+stops with a message if it is set, rather than ignore it and restore the
+splash.
+
+If the splash is already back and you want it off:
+
+```bash
+sudo grubby --update-kernel=ALL --remove-args="rhgb quiet"
+sudo sed -i -E 's/[[:space:]]+rhgb\b//; s/[[:space:]]+quiet\b//' /etc/kernel/cmdline /etc/default/grub
+```
+
+To bring it back later, write the marker again and run the script:
+
+```bash
+echo "rhgb quiet" | sudo tee /var/lib/asahilocker/restore-splash
+sudo ./bin/post-encryption-setup.sh
+```
 
 ### Recovery key
 
@@ -644,6 +668,19 @@ them. Nothing here has changed hands.
   dictionary that made cryptsetup refuse every passphrase.
   [docs/RAM-RESCUE.md](docs/RAM-RESCUE.md) and `bin/ram-rescue.sh` exist
   because of it.
+- **[piscisaureus](https://github.com/piscisaureus)** — for the first reported
+  run of `bin/ram-rescue.sh` on Apple hardware, a 14" MacBook Pro (M2 Max),
+  and three reports that each arrived with the cause already found.
+  [#7](https://github.com/doug445/AsahiLocker/issues/7): the build refused
+  every Apple Silicon Mac, because its image check took the compiled-in
+  `simple-pm-bus` driver for a missing module; the fix in 3.1.0 is the one
+  proposed in the report.
+  [#9](https://github.com/doug445/AsahiLocker/issues/9): the deploy's SELinux
+  relabel did nothing and reported success, which from the RAM rescue left
+  every file it wrote unlabeled; the report named `setfiles` and reading the
+  label back as the remedy, and that is what 3.1.0 does.
+  [#8](https://github.com/doug445/AsahiLocker/issues/8): there was no way to
+  keep the boot splash off, and the README read as if there were.
 
 ## License and contact
 

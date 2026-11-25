@@ -72,8 +72,9 @@ anything. **Check the `root` line**: that partition is the one the rescue
 will encrypt. Then it:
 
 1. builds the image under a temporary name and checks that every tool,
-   every kernel module between the root partition and the bus, the
-   dictionary and the launcher are really inside it. Only then does it move
+   every kernel module between the root partition and the bus (a driver
+   compiled into the kernel needs no file), the dictionary and the launcher
+   are really inside it. Only then does it move
    the image into place;
 2. writes `/etc/grub.d/42_asahilocker-rescue`, its own file, and regenerates
    `/boot/grub2/grub.cfg`. `40_custom` and any other file of yours are never
@@ -171,6 +172,16 @@ Enter the passphrase at the prompt. Then finish as on any route:
 sudo ./AsahiLocker/bin/post-encryption-setup.sh
 sudo ./AsahiLocker/boot-guards/install.sh
 ```
+
+`post-encryption-setup.sh` puts the boot splash back. To keep it off, so the
+passphrase prompt stays visible at every boot, run it with
+`--keep-splash-off`.
+
+No SELinux policy is loaded in the rescue, so nothing written there gets a
+label by itself. The deploy labels what it wrote with the installed system's
+own policy and reads the labels back, and the rescue's logs take the label of
+`/boot`. A system encrypted from the rescue with 3.0.0 or earlier has those
+files unlabeled: `post-encryption-setup.sh` from 3.1.0 labels them.
 
 ## Step 6 — Remove the rescue
 

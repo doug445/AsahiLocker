@@ -75,14 +75,15 @@ usage() {
     exit "${1:-0}"
 }
 
-# Every command luks-deploy.sh runs OUTSIDE its chroot, and luks-mount.sh's. dracut prints an error
-# for a missing one and still builds the image, so each is checked on the host
-# first and found in the finished image afterwards.
+# Every command luks-deploy.sh runs OUTSIDE its chroot, luks-mount.sh's, and
+# the launcher's (chcon). dracut prints an error for a missing one and still
+# builds the image, so each is checked on the host first and found in the
+# finished image afterwards.
 REQ_TOOLS="bash cryptsetup btrfs sgdisk partprobe partx blockdev blkid lsblk
   findmnt mount umount mountpoint chroot mktemp awk sed grep tee head tail wc
   sort cut tr stat sync basename dirname readlink date cp mv rm mkdir rmdir
   chmod cat touch env sleep uname df find free seq udevadm lsmod modprobe
-  modinfo od install which lsinitrd dmesg id"
+  modinfo od install which lsinitrd dmesg id chcon"
 # Not called by luks-deploy.sh; there for repairs by hand at the rescue prompt.
 EXTRA_TOOLS="dd truncate uniq less vi dmsetup wipefs e2fsck fuser"
 
@@ -276,7 +277,8 @@ cmd_build() {
         in_image "${f#/}" || { warn "  missing from image: $f"; fail=1; }
     done
     # Kernel modules: dm-crypt and btrfs, plus every driver between the root
-    # partition and the bus (nvme-apple on a Mac). Built-ins need no file.
+    # partition and the bus (nvme-apple and simple-pm-bus on a Mac). Built-ins
+    # need no file.
     local m mods=(dm_crypt btrfs) p
     p=$(readlink -f "/sys/class/block/$disk/device" 2>/dev/null || true)
     while [ -n "$p" ] && [ "$p" != "/sys" ] && [ "$p" != "/sys/devices" ] && [ "$p" != "/" ]; do
@@ -287,6 +289,15 @@ cmd_build() {
     done
     for m in "${mods[@]}"; do
         if grep -qE "/${m//_/[-_]}\.ko" "/lib/modules/$kver/modules.builtin" 2>/dev/null; then
+            continue
+        fi
+        # modules.builtin lists only what could have been a module. A driver
+        # that is always compiled in (simple-pm-bus on every Apple Silicon Mac:
+        # it is built with CONFIG_OF, which is not a module option) is not in
+        # it and has no .ko either, so the check below could never pass.
+        # $kver is the running kernel, and there sysfs tells the two apart:
+        # only a loadable module has an initstate file. (Issue #7.)
+        if [ -d "/sys/module/$m" ] && [ ! -e "/sys/module/$m/initstate" ]; then
             continue
         fi
         in_image ".*/${m//_/[-_]}\.ko(\.[a-z]+)?" || { warn "  missing from image: kernel module $m"; fail=1; }
@@ -381,6 +392,11 @@ save_logs() {
             cp "$s"*.conf "$dest/$(basename "$s")/" 2>/dev/null
         done
         echo "$rc" > "$dest/exit-code"
+        # No SELinux policy is loaded in the rescue, so a new file gets no
+        # label at all and would be unlabeled_t on the encrypted system. The
+        # policy labels everything under /boot the way it labels /boot itself,
+        # so give the logs the label of the directory they are in. (Issue #9.)
+        chcon -R --reference="$mp" "$mp/$LOG_DIR_NAME" 2>/dev/null
         sync
         umount "$mp" 2>/dev/null
         echo ""

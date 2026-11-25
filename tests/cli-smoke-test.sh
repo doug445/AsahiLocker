@@ -60,7 +60,7 @@ HELP=(
   "bin/luks-mount.sh|chroot ROOT"
   "bin/luks-tune.sh|--dry-run"
   "bin/ram-rescue.sh|build [--arm]"
-  "bin/post-encryption-setup.sh|--config"
+  "bin/post-encryption-setup.sh|--keep-splash-off"
   "bin/save-luks-recovery-bundle.sh|--no-boot-refresh"
   "boot-guards/install.sh|--uninstall"
   "extras/install.sh|--uninstall"
