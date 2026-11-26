@@ -182,8 +182,8 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
   default, the maximum `cryptsetup` allows (2 and 1 GiB on request).
   Memory-hard by design, so GPU and ASIC cracking stays expensive.
 - **Every profile is stronger than `cryptsetup`'s own defaults — enforced, not
-  asserted.** The weakest profile on offer does 1.125x the work of a plain
-  `luksFormat` on the same machine, and the strongest does 5x. Before it writes
+  asserted.** The weakest profile on offer (fast) does 1.125x the work of a plain
+  `luksFormat` on the same machine, and the strongest (aggresive) does 5x. Before it writes
   anything the installer benchmarks what `cryptsetup` would have chosen unaided
   and refuses to ship weaker: a named profile below that bar is raised past it,
   pinned parameters below it are fatal. There is no flag to opt out.
