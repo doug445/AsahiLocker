@@ -211,9 +211,8 @@ same way it treats a live USB's overlay. On top of that:
 ## Tested
 
 Tested end to end in a KVM guest running the official Fedora Asahi Remix 45
-image, including a power cut in the middle of the encryption. Not yet run on
-Apple hardware. kernelzeroday first demonstrated this route, on M1 hardware,
-in PR #5 and [asahi-ram-rescue](https://github.com/kernelzeroday/asahi-ram-rescue).
+image, including a power cut in the middle of the encryption and tested and
+deployed on a M2 Max. 
 
 ## Troubleshooting
 
