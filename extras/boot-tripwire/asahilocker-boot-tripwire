@@ -83,6 +83,17 @@ TAG=asahilocker-boot-tripwire
 # recorded or accepted by hand. In /run, so every boot starts without it.
 STAMP=${TRIPWIRE_STAMP:-/run/asahilocker/boot-tripwire.verified}
 verified() { mkdir -p "${STAMP%/*}" && : > "$STAMP"; }
+# To the journal; with TRIPWIRE_LOG=stderr (tests/boot-tripwire-test.sh) to
+# standard error instead, so a test run puts no alerts about a scratch
+# directory into the system journal, where a log watcher would take them as real.
+log() {     # log [-p PRIORITY] MESSAGE
+    if [ "${TRIPWIRE_LOG:-}" = stderr ]; then
+        [ "${1:-}" = -p ] && shift 2
+        echo "$TAG: $*" >&2
+    else
+        logger -t "$TAG" "$@"
+    fi
+}
 
 usage() { sed -n '/^# Usage:/,/^#            record you kept off/p' "$0" | sed 's/^# \{0,1\}//'; }
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo $0 ${1:-}" >&2; exit 1; }; }
@@ -143,7 +154,7 @@ record() {
     if [ "${1:-}" = --auto ]; then
         who="${2:-auto}"
         if [ ! -e "$STAMP" ]; then
-            logger -t "$TAG" "not recorded ($who): this boot was not verified clean, so /boot is not taken as the new record"
+            log "not recorded ($who): this boot was not verified clean, so /boot is not taken as the new record"
             return 0
         fi
     fi
@@ -157,7 +168,7 @@ record() {
         return 1
     fi
     if [ -n "$who" ]; then
-        logger -t "$TAG" "recorded ($who): $(wc -l < "$RECORD") files on /boot and the EFI partition"
+        log "recorded ($who): $(wc -l < "$RECORD") files on /boot and the EFI partition"
     else
         verified
     fi
@@ -166,19 +177,19 @@ record() {
 check() {
     local now changes n
     if [ ! -s "$RECORD" ]; then
-        record && logger -t "$TAG" "first record taken: $(wc -l < "$RECORD") files on /boot and the EFI partition"
+        record && log "first record taken: $(wc -l < "$RECORD") files on /boot and the EFI partition"
         return 0
     fi
     rm -f "$STAMP"
     now=$(mktemp "$STATE/.now.XXXXXX")
     if ! snapshot > "$now"; then
-        rm -f "$now"; logger -t "$TAG" "/boot is not mounted: nothing checked"; return 0
+        rm -f "$now"; log "/boot is not mounted: nothing checked"; return 0
     fi
     changes=$(compare "$RECORD" "$now")
     rm -f "$now"
     if [ -z "$changes" ]; then
         verified
-        logger -t "$TAG" "/boot and the EFI partition match the record ($(wc -l < "$RECORD") files)"
+        log "/boot and the EFI partition match the record ($(wc -l < "$RECORD") files)"
         return 0
     fi
     n=$(wc -l <<< "$changes")
@@ -189,8 +200,8 @@ check() {
         echo
     } >> "$ALERT"
     chmod 0644 "$ALERT"
-    logger -p auth.crit -t "$TAG" "$n file(s) on /boot or the EFI partition changed while this system was not running. See: sudo $TAG status"
-    sed 's/^/  /' <<< "$changes" | logger -p auth.crit -t "$TAG"
+    log -p auth.crit "$n file(s) on /boot or the EFI partition changed while this system was not running. See: sudo $TAG status"
+    while IFS= read -r l; do log -p auth.crit "  $l"; done <<< "$changes"
     # No stamp, so nothing records over the changes until they are accepted.
     # Exit 0 all the same: a failed unit is noise, and the alert says it all.
     return 0

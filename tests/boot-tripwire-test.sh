@@ -71,8 +71,9 @@ for f in vmlinuz-7.3 initramfs-7.3.img loader/entries/fedora-7.3.conf grub2/grub
 done
 ln -s dtb-a "$B/dtb"
 # The stamp too, or this test would mark the running system's own boot as
-# verified.
-export TRIPWIRE_STATE="$W/state" TRIPWIRE_ROOTS="$B" TRIPWIRE_STAMP="$W/run/verified"
+# verified; and the log to stderr, or its alerts about this scratch directory
+# would land in the system journal.
+export TRIPWIRE_STATE="$W/state" TRIPWIRE_ROOTS="$B" TRIPWIRE_STAMP="$W/run/verified" TRIPWIRE_LOG=stderr
 ALERT="$W/state/ALERT"
 
 echo "== 1. first record, then an unchanged tree =="
