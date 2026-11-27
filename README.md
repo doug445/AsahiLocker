@@ -78,7 +78,8 @@ An unencrypted `/boot` is the normal LUKS arrangement, not a shortcut.
 Fedora's, Ubuntu's and Debian's installers, the ones most people use, encrypt
 the root and leave `/boot` unencrypted. Where an installer does encrypt `/boot`,
 GRUB opens it with PBKDF2; an argon2id `/boot` needs a GRUB 2.14 built by hand,
-and on x86 stops at exactly 1 GiB. On a Mac, encrypting it would buy almost nothing, because the
+and on x86 stops at exactly 1 GiB. What installers call "full disk
+encryption" is the root: `/boot` stays unencrypted there too. On a Mac, encrypting it would buy almost nothing, because the
 boot code on the EFI partition would stay just as open; [the
 FAQ](docs/FAQ.md#why-is-boot-left-unencrypted) has the measurements.
 

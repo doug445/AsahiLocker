@@ -41,7 +41,8 @@ Mac would cost a great deal and protect almost nothing.
   Debian's installers, the ones most people use, encrypt the root and leave
   `/boot` unencrypted. Where an installer does encrypt `/boot`, GRUB opens it
   with PBKDF2; an argon2id `/boot` needs a GRUB 2.14 built by hand, and on x86
-  stops at exactly 1 GiB. The kernel and initramfs are read from
+  stops at exactly 1 GiB. What installers call "full disk encryption" is the
+  root: `/boot` stays unencrypted there too. The kernel and initramfs are read from
   `/boot`, and the initramfs unlocks the root. That is exactly what AsahiLocker
   sets up.
 - **On Apple Silicon it would move the weak spot, not remove it.** m1n1
