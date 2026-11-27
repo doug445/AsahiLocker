@@ -74,12 +74,11 @@ interrupted encryption and finishes it.
 | **Swap.** The installer refuses to leave swap on the disk outside the encryption without telling you. Fedora's default, zram, never touches the disk. | **Someone with repeated physical access who changes `/boot` or the EFI partition** to capture the passphrase at your next boot. Both stay unencrypted and unsigned, as on every Asahi install: only m1n1 stage 1 is verified on this platform. The optional [boot tripwire](extras/README.md#boot-tripwire--was-boot-changed-while-the-mac-was-off) tells you at the next boot if they were changed while the Mac was off. It detects; nothing here can prevent it. |
 | | **macOS**, on its own APFS partitions: that is FileVault's job. |
 
-An unencrypted `/boot` is the normal LUKS arrangement, not a shortcut. No
-mainstream Linux installer encrypts `/boot`: Fedora's leaves it plain when you
-tick "Encrypt my data", so do Ubuntu's and Debian's, and openSUSE's and
-Manjaro's do not encrypt by default at all. Wherever `/boot` is encrypted, that
-is a job done after installing, by hand: PBKDF2, or a GRUB 2.14 built from
-source for argon2id. On a Mac, encrypting it would buy almost nothing, because the
+An unencrypted `/boot` is the normal LUKS arrangement, not a shortcut.
+Fedora's, Ubuntu's and Debian's installers, the ones most people use, encrypt
+the root and leave `/boot` unencrypted. Where an installer does encrypt `/boot`,
+GRUB opens it with PBKDF2; an argon2id `/boot` needs a GRUB 2.14 built by hand,
+and on x86 stops at exactly 1 GiB. On a Mac, encrypting it would buy almost nothing, because the
 boot code on the EFI partition would stay just as open; [the
 FAQ](docs/FAQ.md#why-is-boot-left-unencrypted) has the measurements.
 
@@ -371,8 +370,8 @@ GRUB — see [docs/INTERNALS.md](docs/INTERNALS.md#why-boot-stays-unencrypted).
 > `/boot` keyslot as strong as the root's cannot be had; anything weaker becomes
 > the cheapest way in. It would not close the gap anyway: m1n1 stage 2, U-Boot
 > and GRUB sit on the EFI partition, which nothing can encrypt. An unencrypted
-> `/boot` is how LUKS is normally set up: no mainstream Linux installer
-> encrypts `/boot`. The record is kept in
+> `/boot` is how LUKS is normally set up: Fedora's, Ubuntu's and Debian's
+> installers leave it unencrypted. The record is kept in
 > [docs/BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md).
 
 ### Partition layout, before and after

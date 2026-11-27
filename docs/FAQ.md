@@ -37,12 +37,11 @@ What you cannot sensibly do is swap the algorithm out — see
 Because that is the normal LUKS arrangement, and because encrypting it on a
 Mac would cost a great deal and protect almost nothing.
 
-- **It is how encrypted Linux is normally installed.** No mainstream Linux
-  installer encrypts `/boot`. Fedora's, with "Encrypt my data" ticked, leaves it
-  unencrypted; so do Ubuntu's and Debian's; openSUSE's and Manjaro's do not
-  encrypt by default at all. An encrypted `/boot` is always a job done after
-  installing, by hand: PBKDF2, or a GRUB 2.14 built from source for argon2id,
-  which on x86 stops at exactly 1 GiB. The kernel and initramfs are read from
+- **It is how encrypted Linux is normally installed.** Fedora's, Ubuntu's and
+  Debian's installers, the ones most people use, encrypt the root and leave
+  `/boot` unencrypted. Where an installer does encrypt `/boot`, GRUB opens it
+  with PBKDF2; an argon2id `/boot` needs a GRUB 2.14 built by hand, and on x86
+  stops at exactly 1 GiB. The kernel and initramfs are read from
   `/boot`, and the initramfs unlocks the root. That is exactly what AsahiLocker
   sets up.
 - **On Apple Silicon it would move the weak spot, not remove it.** m1n1
