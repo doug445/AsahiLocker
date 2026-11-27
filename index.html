@@ -35,7 +35,7 @@
       "description": "In-place LUKS2 encryption of the root filesystem of an installed Fedora Asahi Remix system on Apple Silicon Macs (M1, M2, M3).",
       "applicationCategory": "SecurityApplication",
       "operatingSystem": "Fedora Asahi Remix (Linux, aarch64)",
-      "softwareVersion": "4.0.0",
+      "softwareVersion": "4.1.0",
       "license": "https://opensource.org/licenses/MIT",
       "url": "https://doug445.github.io/AsahiLocker/",
       "downloadUrl": "https://github.com/doug445/AsahiLocker",
@@ -143,7 +143,7 @@
     </p>
     <p class="lede">
       It is the complete job, with the strongest key derivation <code>cryptsetup</code> can write,
-      tested with 177 checks on every push, run on real Macs by people other than the author, and
+      tested with 187 checks on every push, run on real Macs by people other than the author, and
       <a href="#proof">audited in full three times</a>.
     </p>
     <div class="cta">
@@ -152,7 +152,7 @@
       <a class="btn" href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md">Full install docs</a>
     </div>
     <ul class="facts" aria-label="At a glance">
-      <li>v4.0.0</li>
+      <li>v4.1.0</li>
       <li>Free and open source</li>
       <li>MIT licence</li>
       <li>M1 · M2 · M3</li>
@@ -161,7 +161,7 @@
       <li>argon2id at 4 GiB, never pbkdf2</li>
       <li>AES-256-XTS</li>
       <li>Resumable after a power cut</li>
-      <li>177 checks on every push</li>
+      <li>187 checks on every push</li>
       <li>Audited three times</li>
       <li>Unofficial: not an Asahi Linux or Fedora project</li>
     </ul>
@@ -275,8 +275,9 @@
     would put what the kernel swaps out on the disk unencrypted. The installer finds it and stops
     until you say so.</li>
   <li><strong>An optional boot tripwire.</strong> It records every file on <code>/boot</code> and
-    the EFI partition at shutdown, on the encrypted root, and tells you at the next boot if any
-    changed while the Mac was off.</li>
+    the EFI partition on the encrypted root, and tells you at the next boot if any changed while
+    the Mac was off. Updates, Discover's offline updates included, are recorded as they happen and
+    raise no alarm; a changed <code>/boot</code> is never recorded over until you accept it.</li>
 </ul>
 
 <h2 id="protects">What it protects, and what it does not</h2>
@@ -309,7 +310,7 @@
     <a href="https://github.com/doug445/AsahiLocker/releases/tag/v3.0.0">Version 3.0.0</a> marks
     that audited state. The record, findings included, is in the
     <a href="https://github.com/doug445/AsahiLocker#audit">README</a>.</li>
-  <li><strong>177 automated checks on every push.</strong> The real
+  <li><strong>187 automated checks on every push.</strong> The real
     <code>cryptsetup</code> sequence the script runs, against a loop device: encrypt, hard-kill in
     mid-reencrypt, repair, resume, recovery key, 4096-byte sectors. A passphrase refused at the
     prompt, which must write nothing. The partition menus on a disk carrying two installs.
@@ -515,7 +516,7 @@ systemctl --failed</code></pre></div>
     <tr><td>Interrupted run</td><td>You debug the header state</td><td>Detected and resumed; <code>cryptsetup repair</code> handled</td></tr>
     <tr><td>Mistyped passphrase</td><td><code>cryptsetup</code> exits; you start again</td><td>Proves nothing was written, then asks again</td></tr>
     <tr><td>Needs a USB stick</td><td>Yes, or a second install</td><td>No: built-in RAM rescue</td></tr>
-    <tr><td>Tested</td><td>On your disk, by you</td><td>177 checks on every push; real Macs; three full audits</td></tr>
+    <tr><td>Tested</td><td>On your disk, by you</td><td>187 checks on every push; real Macs; three full audits</td></tr>
     <tr><td>SELinux</td><td>Relabel yourself, or boot into AVC denials</td><td>Relabelled and verified</td></tr>
     <tr><td>Recovery</td><td>Whatever you thought to save</td><td>Header backups + a labelled bundle of every changed file</td></tr>
     <tr><td>Asahi footguns</td><td><code>grub2-mkconfig</code> clobbering the ESP stub; stale U-Boot entries</td><td>Boot guards undo both</td></tr>
@@ -623,7 +624,7 @@ systemctl --failed</code></pre></div>
   <summary>How do I know it is safe to run?</summary>
   <p>Don't take it on trust. Run <code>--dry-run</code> and read what it would do;
     <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INTERNALS.md">INTERNALS.md</a>
-    documents every file it changes and every gate check. 177 automated checks run on
+    documents every file it changes and every gate check. 187 automated checks run on
     every push, among them the exact encrypt, hard-kill, repair and resume sequence against a
     throwaway loop device. It has been audited in full three times, every finding reproduced
     before it was fixed; the record is in the
