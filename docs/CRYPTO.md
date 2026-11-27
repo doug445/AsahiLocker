@@ -552,9 +552,9 @@ For those volumes: **never use 4 GiB** — a 32-bit overflow in GRUB's
 rejecting the parameters. That rule is unconditional.
 
 Below that, the usable maximum is set by the **firmware**, not by GRUB, and
-has to be measured per platform. On x86 vendor UEFI more than 1 GiB has never
-worked — that firmware leaves GRUB too little heap, which is where the usual
-"GRUB caps at 1 GiB" comes from. Under Asahi's U-Boot it is not the same
+has to be measured per platform. On x86 vendor UEFI the ceiling is 1 GiB exactly: 1 GiB works, and 1 GiB plus
+1 KiB fails (tested and verified by the author) — that firmware leaves GRUB too
+little heap, which is where "GRUB caps at 1 GiB" comes from. Under Asahi's U-Boot it is not the same
 number: 2 GiB is measured working on an M2 Max. Use 1 GiB as the portable
 default; treat more as opt-in and measured. An allocation failure here means
 the machine does not boot. GRUB 2.12 (current in Fedora 45) has no argon2

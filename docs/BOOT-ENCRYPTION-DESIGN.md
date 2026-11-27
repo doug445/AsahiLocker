@@ -9,8 +9,8 @@
 > anything that fits is weaker than the root and becomes the cheapest way in.
 > And it would protect almost nothing on Apple Silicon: m1n1 stage 2, U-Boot and
 > GRUB sit on the EFI partition, which nothing can encrypt and nothing verifies.
-> An unencrypted `/boot` is also the normal LUKS arrangement: Fedora's, Ubuntu's
-> and Debian's installers all leave it so. The text below is as it was when the
+> An unencrypted `/boot` is also the normal LUKS arrangement: no mainstream Linux
+> installer encrypts it; where it is encrypted, that was done by hand afterwards. The text below is as it was when the
 > work stopped, open questions included; read it as history, not as plans.
 
 > **STATUS: DESIGN ONLY. NOT IMPLEMENTED. NOTHING HERE HAS BEEN TESTED ON

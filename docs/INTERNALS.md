@@ -187,9 +187,10 @@ it not worth having, and retired the work; why is in
 > (`DEFAULT_HEAP_SIZE 0x2000000`) and grows on demand through
 > `grub_efi_mm_add_regions`; how far it gets is the firmware's decision.
 >
-> On **x86 vendor UEFI, more than 1 GiB has never worked** — that firmware
-> leaves GRUB too constrained an environment, which is where the widely-quoted
-> "GRUB caps at 1 GiB" comes from. On **Asahi / U-Boot it is not the same
+> On **x86 vendor UEFI the ceiling is 1 GiB, exactly**: 1 GiB works and 1 GiB
+> plus 1 KiB fails (tested and verified by the author). That firmware leaves
+> GRUB too constrained an environment, which is where the widely-quoted "GRUB
+> caps at 1 GiB" comes from. On **Asahi / U-Boot it is not the same
 > number**: this project measured 2 GiB allocating *and* completing a real
 > keyslot decryption on an M2 Max. Treat 1 GiB as the portable default and
 > anything above it as opt-in and measured — an 8 GiB M1 is a different heap

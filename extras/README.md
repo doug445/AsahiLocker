@@ -63,7 +63,7 @@ half-parsed line for a header it was not allowed to read.
   initramfs) with `(GRUB boot)`. Empty by default:
   `GRUB_UUIDS=" <uuid> " luks-fetch-cache`. Such volumes are KDF-constrained:
   the usable argon2id memory cost is set by the **firmware's** heap and must be
-  measured per platform — ~1 GiB on x86 vendor UEFI, 2 GiB measured working
+  measured per platform — exactly 1 GiB on x86 vendor UEFI (1 KiB more fails), 2 GiB measured working
   under U-Boot on an M2 Max (see
   [BOOT-ENCRYPTION-STATUS.md](../docs/BOOT-ENCRYPTION-STATUS.md)). Use 1 GiB as
   the portable default; an allocation failure there means the machine does not
