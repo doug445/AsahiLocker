@@ -291,7 +291,8 @@
   <li><strong>An unencrypted <code>/boot</code> is normal.</strong> Fedora's, Ubuntu's and
     Debian's installers, the ones most people use, encrypt the root and leave <code>/boot</code>
     unencrypted. Where an installer does encrypt <code>/boot</code>, GRUB opens it with PBKDF2; an
-    argon2id <code>/boot</code> needs a GRUB 2.14 built by hand.</li>
+    argon2id <code>/boot</code> needs a GRUB 2.14 built by hand. What installers call "full disk
+    encryption" is the root: <code>/boot</code> stays unencrypted there too.</li>
 </ul>
 
 <h2 id="proof">The evidence: tests, machines, audits</h2>

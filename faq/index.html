@@ -137,7 +137,8 @@ Mac would cost a great deal and protect almost nothing.</p>
 Debian's installers, the ones most people use, encrypt the root and leave
 <code>/boot</code> unencrypted. Where an installer does encrypt <code>/boot</code>, GRUB opens it
 with PBKDF2; an argon2id <code>/boot</code> needs a GRUB 2.14 built by hand, and on x86
-stops at exactly 1 GiB. The kernel and initramfs are read from
+stops at exactly 1 GiB. What installers call "full disk encryption" is the
+root: <code>/boot</code> stays unencrypted there too. The kernel and initramfs are read from
 <code>/boot</code>, and the initramfs unlocks the root. That is exactly what AsahiLocker
 sets up.</li>
 <li>
