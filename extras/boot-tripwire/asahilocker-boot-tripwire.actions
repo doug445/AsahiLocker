@@ -1,0 +1,7 @@
+# AsahiLocker boot tripwire: after every dnf transaction, record /boot and the
+# EFI partition, so an update that does not go through kernel-install (GRUB,
+# shim) is not reported as a change nobody made if the machine crashes before
+# its next clean shutdown. Records only on a boot whose check came back clean.
+# Read by libdnf5-plugin-actions; boot-tripwire/install.sh puts it in place
+# only when that plugin is installed.
+post_transaction::::/usr/local/sbin/asahilocker-boot-tripwire record --auto dnf

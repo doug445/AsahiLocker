@@ -15,7 +15,7 @@ jobs:
       - name: bash syntax check (bash -n)
         run: |
           set -e
-          for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline extras/bin/luks-fetch-cache extras/boot-tripwire/asahilocker-boot-tripwire; do
+          for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline extras/bin/luks-fetch-cache extras/boot-tripwire/asahilocker-boot-tripwire extras/boot-tripwire/999-asahilocker-boot-tripwire.install; do
             bash -n "$f"
             echo "syntax OK: $f"
           done
@@ -28,7 +28,8 @@ jobs:
             $(git ls-files '*.sh') \
             boot-guards/bin/esp-grub-stub-rebaseline \
             extras/bin/luks-fetch-cache \
-            extras/boot-tripwire/asahilocker-boot-tripwire
+            extras/boot-tripwire/asahilocker-boot-tripwire \
+            extras/boot-tripwire/999-asahilocker-boot-tripwire.install
 
   cli:
     # --help, unknown options and the no-root path of every script: no root,

@@ -29,6 +29,17 @@ it at `EFI/$ID/grub.cfg`, where `$ID` comes from `/etc/os-release`. On Fedora
 Asahi Remix `ID` is `fedora-asahi-remix` and the stub lives in `EFI/fedora`,
 so that check never fires.
 
+Fedora's own package can do it too. On the official Fedora Asahi Remix 45
+image, `/usr/lib/efi/grub2/<version>/EFI/fedora/grub.cfg` is a stub written
+when the image was built: it names the build machine's `/boot` UUID and a
+prefix inside its build directory. The `grub2-efi-aa64` scriptlet copies that
+file over the ESP stub, so `dnf reinstall grub2-efi-aa64`, a common first step
+when GRUB misbehaves, leaves a stub that points at a filesystem the Mac does
+not have. Seen in the test VM on 2026-11-27: the guard put the right stub
+back and kept the image's as `grub.cfg.broken.*`. A grub2
+version update rewrites that file from the running system, which is why an
+install that has had one (like the M2 Max this was checked on) is not affected.
+
 The guard restores the stub **as soon as anything writes it**. A systemd path
 unit watches the stub's directory and starts the guard when a write there is
 closed; the guard compares the stub's sha512 with the baseline and, if it has

@@ -39,6 +39,11 @@
 #      and records anew
 #   5. verify, the live-USB check, compares an install mounted elsewhere with
 #      its record: 0 when they match, 2 and the path when they do not
+#   6. the gate: an automatic record (shutdown, kernel-install, dnf) is taken
+#      only on a boot whose check came back clean; a changed /boot is never
+#      recorded over, and so is reported again at the next check
+#   7. the kernel-install plugin records on add and remove, ignores every
+#      other command, and never fails
 #
 # Touches nothing outside its own temporary directory. Root only because the
 # tool insists on it for record, check, accept and verify.
@@ -65,7 +70,9 @@ for f in vmlinuz-7.3 initramfs-7.3.img loader/entries/fedora-7.3.conf grub2/grub
     echo "original $f" > "$B/$f"
 done
 ln -s dtb-a "$B/dtb"
-export TRIPWIRE_STATE="$W/state" TRIPWIRE_ROOTS="$B"
+# The stamp too, or this test would mark the running system's own boot as
+# verified.
+export TRIPWIRE_STATE="$W/state" TRIPWIRE_ROOTS="$B" TRIPWIRE_STAMP="$W/run/verified"
 ALERT="$W/state/ALERT"
 
 echo "== 1. first record, then an unchanged tree =="
@@ -130,6 +137,52 @@ cp "$I/var/lib/asahilocker/boot-tripwire/record" "$W/kept-off-the-machine"
 out=$(TRIPWIRE_ROOTS="$I/boot" "$TOOL" verify "$I" "$W/kept-off-the-machine" 2>&1); rc=$?
 if [ "$rc" -eq 2 ]; then pass "verify against a copy kept off the machine"
 else fail "verify against a kept copy: exit $rc: $out"; fi
+
+echo "== 6. the gate: nothing records over a boot that was not verified =="
+REC="$W/state/record"
+sum() { sha256sum "$REC" | cut -d' ' -f1; }
+rm -f "$ALERT"; "$TOOL" record >/dev/null 2>&1          # a clean start, by hand
+rm -f "$TRIPWIRE_STAMP"
+before=$(sum); echo "new kernel" > "$B/vmlinuz-7.4"
+"$TOOL" record --auto test >/dev/null 2>&1
+if [ "$(sum)" = "$before" ]; then pass "no check this boot: an automatic record is refused"
+else fail "an unchecked boot was recorded"; fi
+rm -f "$B/vmlinuz-7.4"
+"$TOOL" check >/dev/null 2>&1
+if [ -e "$TRIPWIRE_STAMP" ]; then pass "a clean check marks the boot verified"
+else fail "no stamp after a clean check"; fi
+echo "an update" > "$B/vmlinuz-7.4"
+"$TOOL" record --auto test >/dev/null 2>&1
+if grep -q "vmlinuz-7.4" "$REC"; then pass "on a verified boot an update is recorded"
+else fail "a verified boot's update was not recorded"; fi
+before=$(sum); echo "implant" >> "$B/initramfs-7.3.img"
+"$TOOL" check >/dev/null 2>&1
+if [ ! -e "$TRIPWIRE_STAMP" ] && [ -s "$ALERT" ]; then pass "changes found: alert, and the boot is not verified"
+else fail "a check that found changes left the boot verified"; fi
+"$TOOL" record --auto shutdown >/dev/null 2>&1
+if [ "$(sum)" = "$before" ]; then pass "the shutdown does not record over the changes"
+else fail "the shutdown recorded the changed initramfs"; fi
+rm -f "$ALERT"; "$TOOL" check >/dev/null 2>&1
+if grep -q "changed  $B/initramfs-7.3.img" "$ALERT" 2>/dev/null; then pass "the next boot reports the change again"
+else fail "the change was not reported again"; fi
+"$TOOL" accept >/dev/null 2>&1
+if [ -e "$TRIPWIRE_STAMP" ] && [ ! -e "$ALERT" ] && [ "$(sum)" != "$before" ]; then
+    pass "accept records, clears the alert and marks the boot verified"
+else
+    fail "accept did not record, clear and mark"
+fi
+
+echo "== 7. the kernel-install plugin =="
+PLUGIN="$(cd "$(dirname "$0")/.." && pwd)/extras/boot-tripwire/999-asahilocker-boot-tripwire.install"
+before=$(sum); echo "another kernel" > "$B/vmlinuz-7.5"
+TRIPWIRE_TOOL="$TOOL" sh "$PLUGIN" inspect 7.5 >/dev/null 2>&1
+if [ "$(sum)" = "$before" ]; then pass "'inspect' records nothing"; else fail "'inspect' recorded"; fi
+TRIPWIRE_TOOL="$TOOL" sh "$PLUGIN" add 7.5 /boot/x/vmlinuz >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && grep -q "vmlinuz-7.5" "$REC"; then pass "'add' records, exit 0"
+else fail "'add': exit $rc, recorded: $(grep -c vmlinuz-7.5 "$REC")"; fi
+TRIPWIRE_TOOL=/bin/false sh "$PLUGIN" remove 7.5 >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then pass "a failing tripwire does not fail kernel-install"
+else fail "the plugin failed kernel-install (exit $rc)"; fi
 
 echo
 echo "boot-tripwire-test: $PASS passed, $FAIL failed"

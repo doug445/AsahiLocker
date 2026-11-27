@@ -28,9 +28,12 @@
 # changed while this system was not running.
 #
 # Usage: asahilocker-boot-tripwire record|check|status|accept|notify
+#        asahilocker-boot-tripwire record --auto WHO
 #        asahilocker-boot-tripwire verify DIR [RECORD]
-#   record   record every file on /boot and the EFI partition (sha256) now;
-#            the service does this at every shutdown
+#   record   record every file on /boot and the EFI partition (sha256) now,
+#            and take this boot as verified
+#            --auto WHO: how the shutdown, kernel-install and dnf call it; it
+#            records only if this boot's check came back clean
 #   check    compare them with that record; the service does this at boot
 #   status   show the alert, if there is one (no root needed)
 #   accept   you have looked and it was you: clear the alert, record anew
@@ -47,6 +50,15 @@
 # root, where it cannot be changed without the passphrase, and anything added,
 # changed or removed between a shutdown and the next boot is reported, and
 # stays reported until accepted.
+#
+# When it records: at every clean shutdown, after every kernel or m1n1 update
+# (its kernel-install plugin), and after every dnf transaction when dnf's
+# actions plugin is installed, so neither an update nor a crash after one is
+# reported. Offline updates (Discover, GNOME Software, dnf offline, dnf
+# system-upgrade) install in a boot of their own; the check runs there before
+# the update does. None of that happens on a boot whose check found changes:
+# a changed /boot is never taken as the record unless you accept it, so it is
+# reported again at every boot until you do.
 #
 # What it cannot do: prevent the change, or catch someone who knows it is
 # here. By the time it reports, the changed initramfs has run with the root
@@ -67,6 +79,10 @@ STATE=${TRIPWIRE_STATE:-/var/lib/asahilocker/boot-tripwire}
 RECORD="$STATE/record"
 ALERT="$STATE/ALERT"
 TAG=asahilocker-boot-tripwire
+# Exists while this boot counts as verified: its check came back clean, or you
+# recorded or accepted by hand. In /run, so every boot starts without it.
+STAMP=${TRIPWIRE_STAMP:-/run/asahilocker/boot-tripwire.verified}
+verified() { mkdir -p "${STAMP%/*}" && : > "$STAMP"; }
 
 usage() { sed -n '/^# Usage:/,/^#            record you kept off/p' "$0" | sed 's/^# \{0,1\}//'; }
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo $0 ${1:-}" >&2; exit 1; }; }
@@ -119,14 +135,31 @@ compare() {
                 END { for (p in old) print "removed  " p }' "$1" "$2" | sort -k2
 }
 
+# record            by hand: record now, and vouch for this boot
+# record --auto WHO  shutdown, kernel-install, dnf: only on a verified boot,
+#                    and never an error, which would fail the caller
 record() {
-    local tmp
+    local tmp who=""
+    if [ "${1:-}" = --auto ]; then
+        who="${2:-auto}"
+        if [ ! -e "$STAMP" ]; then
+            logger -t "$TAG" "not recorded ($who): this boot was not verified clean, so /boot is not taken as the new record"
+            return 0
+        fi
+    fi
     mkdir -p "$STATE"; chmod 0755 "$STATE"
     tmp=$(mktemp "$STATE/.record.XXXXXX")
     if snapshot > "$tmp"; then
         chmod 0644 "$tmp"; mv -f "$tmp" "$RECORD"
     else
-        rm -f "$tmp"; echo "/boot is not mounted: nothing recorded" >&2; return 1
+        rm -f "$tmp"; echo "/boot is not mounted: nothing recorded" >&2
+        [ -n "$who" ] && return 0
+        return 1
+    fi
+    if [ -n "$who" ]; then
+        logger -t "$TAG" "recorded ($who): $(wc -l < "$RECORD") files on /boot and the EFI partition"
+    else
+        verified
     fi
 }
 
@@ -136,6 +169,7 @@ check() {
         record && logger -t "$TAG" "first record taken: $(wc -l < "$RECORD") files on /boot and the EFI partition"
         return 0
     fi
+    rm -f "$STAMP"
     now=$(mktemp "$STATE/.now.XXXXXX")
     if ! snapshot > "$now"; then
         rm -f "$now"; logger -t "$TAG" "/boot is not mounted: nothing checked"; return 0
@@ -143,7 +177,8 @@ check() {
     changes=$(compare "$RECORD" "$now")
     rm -f "$now"
     if [ -z "$changes" ]; then
-        logger -t "$TAG" "/boot and the EFI partition match the record of the last shutdown ($(wc -l < "$RECORD") files)"
+        verified
+        logger -t "$TAG" "/boot and the EFI partition match the record ($(wc -l < "$RECORD") files)"
         return 0
     fi
     n=$(wc -l <<< "$changes")
@@ -156,8 +191,8 @@ check() {
     chmod 0644 "$ALERT"
     logger -p auth.crit -t "$TAG" "$n file(s) on /boot or the EFI partition changed while this system was not running. See: sudo $TAG status"
     sed 's/^/  /' <<< "$changes" | logger -p auth.crit -t "$TAG"
-    # Exit 0 all the same: a failed unit would skip its ExecStop, and with it
-    # the record that the next boot is compared with.
+    # No stamp, so nothing records over the changes until they are accepted.
+    # Exit 0 all the same: a failed unit is noise, and the alert says it all.
     return 0
 }
 
@@ -173,6 +208,7 @@ status() {
     fi
     if [ -s "$RECORD" ]; then
         echo "No alert. Record of $(date -r "$RECORD" '+%F %T'): $(wc -l < "$RECORD") files on /boot and the EFI partition."
+        [ -e "$STAMP" ] || echo "This boot has not been checked, so updates made now are not recorded: sudo $TAG check"
     else
         echo "No record yet: the first is taken at the next boot, or with: sudo $TAG record"
     fi
@@ -221,7 +257,10 @@ notify() {
 }
 
 case "${1:-}" in
-    record) need_root record; record ;;
+    record)
+        need_root record
+        if [ "$#" -gt 1 ] && [ "${2:-}" != --auto ]; then usage >&2; exit 2; fi
+        shift; record "$@" ;;
     check)  need_root check;  check ;;
     status) status ;;
     accept) need_root accept; accept ;;

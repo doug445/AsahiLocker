@@ -31,7 +31,9 @@
 # shutdown, on the encrypted root, and compares at every boot. A difference
 # goes to the journal and to an alert that stays until you accept it, and a
 # desktop notification at every login says so. It detects; it cannot prevent.
-# See extras/README.md, "boot-tripwire", for what it can and cannot catch.
+# Updates are recorded as they happen, so they are never reported: a
+# kernel-install plugin, a dnf hook when dnf's actions plugin is installed, and
+# a check inside offline-update boots. See extras/README.md, "boot-tripwire".
 #
 #     sudo ./install.sh               install, take the first record, enable
 #     sudo ./install.sh --uninstall   remove it, record and alert included
@@ -60,6 +62,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL=/usr/local/sbin/asahilocker-boot-tripwire
 UNIT=/etc/systemd/system/asahilocker-boot-tripwire.service
 AUTOSTART=/etc/xdg/autostart/asahilocker-boot-tripwire.desktop
+KHOOK=/etc/kernel/install.d/999-asahilocker-boot-tripwire.install
+DNFDIR=/etc/dnf/libdnf5-plugins/actions.d
+DNFHOOK=$DNFDIR/asahilocker-boot-tripwire.actions
 STATE=/var/lib/asahilocker/boot-tripwire
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -70,7 +75,7 @@ if [ "${1:-}" = "--uninstall" ]; then
         warn "removing an alert that was never accepted:"
         /usr/bin/sed 's/^/      /' "$STATE/ALERT"
     fi
-    "$RM" -f "$UNIT" "$TOOL" "$AUTOSTART"
+    "$RM" -f "$UNIT" "$TOOL" "$AUTOSTART" "$KHOOK" "$DNFHOOK" /run/asahilocker/boot-tripwire.verified
     "$RM" -rf "$STATE"
     "$SYSTEMCTL" daemon-reload
     ok "boot tripwire removed"
@@ -85,14 +90,31 @@ mountpoint -q /boot || { err "/boot is not a mounted filesystem here; there is n
 "$MKDIR" -p "${AUTOSTART%/*}"
 "$CP" -f "$HERE/asahilocker-boot-tripwire.desktop" "$AUTOSTART" && "$CHMOD" 0644 "$AUTOSTART" \
     && ok "installed $AUTOSTART (a notification at login, if there is an alert)"
+"$MKDIR" -p "${KHOOK%/*}"
+"$CP" -f "$HERE/999-asahilocker-boot-tripwire.install" "$KHOOK" && "$CHMOD" 0755 "$KHOOK" \
+    && ok "installed $KHOOK (records after every kernel or m1n1 update)"
+if [ -d "$DNFDIR" ]; then
+    "$CP" -f "$HERE/asahilocker-boot-tripwire.actions" "$DNFHOOK" && "$CHMOD" 0644 "$DNFHOOK" \
+        && ok "installed $DNFHOOK (records after every dnf transaction)"
+else
+    warn "dnf's actions plugin is not installed, so there is no dnf hook. Kernel and m1n1"
+    warn "  updates are still recorded, and everything at shutdown; only a crash right after"
+    warn "  a GRUB or shim update would be reported. To close that: sudo dnf install"
+    warn "  libdnf5-plugin-actions, then run this installer again."
+fi
 "$SYSTEMCTL" daemon-reload
-# restart: on a first install this only starts it, and the check takes the
-# first record. Over an earlier install the stop records the current state
-# (this system is running, so its own changes are its own) and the start
-# compares with it. An alert that is waiting stays until it is accepted.
-if "$SYSTEMCTL" enable asahilocker-boot-tripwire.service >/dev/null 2>&1 \
+# Over an earlier install, with no alert waiting, record now: this system is
+# running and its own updates since the last check are its own (the earlier
+# release did not mark checked boots, so without this the restart below could
+# report them). With an alert waiting, nothing is recorded: it stays until it
+# is accepted. reenable, not enable: the unit now also starts in offline-update
+# boots, and the symlink for that is new.
+if "$SYSTEMCTL" is-active -q asahilocker-boot-tripwire.service && [ ! -s "$STATE/ALERT" ]; then
+    "$TOOL" record && ok "recorded /boot and the EFI partition as they are now (an upgrade)"
+fi
+if "$SYSTEMCTL" reenable asahilocker-boot-tripwire.service >/dev/null 2>&1 \
    && "$SYSTEMCTL" restart asahilocker-boot-tripwire.service; then
-    ok "enabled asahilocker-boot-tripwire.service (records at shutdown, checks at boot)"
+    ok "enabled asahilocker-boot-tripwire.service (checks at boot, offline-update boots too; records at shutdown)"
 else
     err "could not start asahilocker-boot-tripwire.service: systemctl status asahilocker-boot-tripwire.service"
     exit 1

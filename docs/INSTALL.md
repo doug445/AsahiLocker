@@ -207,6 +207,9 @@ tar xzf AsahiLocker.tar.gz && mv AsahiLocker-main AsahiLocker
 A particular release instead: replace `refs/heads/main` with
 `refs/tags/vX.Y.Z`, and `AsahiLocker-main` with `AsahiLocker-X.Y.Z`, using a
 version from the [Releases page](https://github.com/doug445/AsahiLocker/releases).
+Releases are immutable and carry GitHub's signed attestation:
+`gh release verify vX.Y.Z -R doug445/AsahiLocker` prints the tag's SHA, and
+`git rev-parse vX.Y.Z` in a clone must print the same.
 
 No network on the stick? If you cloned AsahiLocker into your home folder on
 the installed system, copy it from there:

@@ -1,17 +1,23 @@
 [Unit]
 Description=AsahiLocker boot tripwire: were /boot and the EFI partition changed while this system was off?
 RequiresMountsFor=/boot /boot/efi /var/lib
+# Offline updates (Discover, GNOME Software, dnf offline, dnf system-upgrade)
+# install in a boot of their own, under system-update.target. The check runs
+# there too, before the update touches /boot (systemd.offline-updates(7)), so
+# that boot is verified and what the update writes is recorded at its shutdown,
+# instead of being reported at the next boot as a change nobody made.
+Wants=system-update-pre.target
+Before=system-update-pre.target
 
 [Service]
-# Compared at boot with the record taken at the last shutdown; recorded again
-# at this shutdown. RequiresMountsFor orders the stop before /boot and the EFI
-# partition are unmounted. The check exits 0 even when it finds changes (they
-# go to the journal and to an alert file): a failed unit would skip ExecStop,
-# and with it the record the next boot is compared with.
+# Compared at boot with the record. Recorded again at this shutdown, but only
+# if the check came back clean: changes found at boot are never recorded over
+# until they are accepted. RequiresMountsFor orders the stop before /boot and
+# the EFI partition are unmounted.
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/asahilocker-boot-tripwire check
-ExecStop=/usr/local/sbin/asahilocker-boot-tripwire record
+ExecStop=/usr/local/sbin/asahilocker-boot-tripwire record --auto shutdown
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target system-update.target

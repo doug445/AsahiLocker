@@ -96,7 +96,7 @@ FAQ](docs/FAQ.md#why-is-boot-left-unencrypted) has the measurements.
   `luksFormat` on the same Mac (on a Mac with 8 GB, 2 GiB x 8 by default:
   twice the work). Measured on your machine, enforced at run
   time. No profile, flag or code path goes below stock, and none uses pbkdf2.
-- **Tested where you can check it.** Eight test suites, 177 checks, run on
+- **Tested where you can check it.** Eight test suites, 187 checks, run on
   every push on GitHub's runners, the core of them on aarch64: the real
   encrypt, hard-kill, repair and resume sequence against a loop device, the
   partition menus on a two-install disk, the boot guards upgraded over the
@@ -168,6 +168,15 @@ one of three:
 | [B. A live USB](#b-a-live-usb) | A Fedora Asahi stick your Mac's U-Boot can see | You already keep one, for repairs and new installs |
 | [C. A second, minimal Asahi install](#c-a-second-asahi-install) | ~20 GB, set up from macOS | You want a whole system to work from |
 
+**Check what you download** (optional). Every release is immutable and carries
+a signed attestation from GitHub:
+
+```bash
+gh release verify -R doug445/AsahiLocker     # the latest release: its tag and SHA, signed
+git clone --branch <that tag> https://github.com/doug445/AsahiLocker.git
+git -C AsahiLocker rev-parse <that tag>      # must print the same SHA
+```
+
 ### A. The RAM rescue: nothing to plug in
 
 On the system you want encrypted:
@@ -237,7 +246,7 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 ## Tested
 
 **On every push**, on GitHub's runners ([CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)),
-eight suites, 177 checks; the loop-device ones on aarch64:
+eight suites, 187 checks; the loop-device ones on aarch64:
 
 | Suite | What it proves |
 |---|---|
@@ -245,7 +254,7 @@ eight suites, 177 checks; the loop-device ones on aarch64:
 | [`multi-install-selection-test.sh`](tests/multi-install-selection-test.sh) | The partition menus on a disk with two installs: the running one refused, the right root recommended, `/boot` and EFI paired with it |
 | [`luks-mount-test.sh`](tests/luks-mount-test.sh) | `luks-mount.sh` on a plain and an encrypted loop-image install |
 | [`boot-guards-test.sh`](tests/boot-guards-test.sh) | The boot guards installed over 3.1.0's under a real systemd, an overwrite of the ESP stub undone, a re-run, removal |
-| [`boot-tripwire-test.sh`](tests/boot-tripwire-test.sh) | Tampering with a `/boot` tree reported by path; what changes at every boot ignored; the live-USB `verify` |
+| [`boot-tripwire-test.sh`](tests/boot-tripwire-test.sh) | Tampering with a `/boot` tree reported by path, and never recorded over until accepted; what changes at every boot ignored; the kernel-install plugin; the live-USB `verify` |
 | [`deploy-checks-test.sh`](tests/deploy-checks-test.sh) | The default KDF per Mac, the plain-swap check, the lower-case typed words |
 | [`cli-smoke-test.sh`](tests/cli-smoke-test.sh), [`uboot-efivar-test.sh`](tests/uboot-efivar-test.sh) | Every script's command line; the U-Boot variable-file editor |
 
@@ -317,8 +326,9 @@ review of the code is just as welcome, as an issue or a
   delete never reaches. Re-running the installer upgrades guards from any
   earlier release.
 - **An optional boot tripwire.** Records every file on `/boot` and the EFI
-  partition at shutdown, on the encrypted root, and tells you at the next boot
-  if any of them changed while the Mac was off.
+  partition, on the encrypted root, and tells you at the next boot if any of
+  them changed while the Mac was off. Updates, offline updates from Discover
+  included, are recorded as they happen and never raise an alarm.
 - **Tested in CI on every push**, on aarch64 runners, against a real loop device.
 
 ---

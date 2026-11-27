@@ -112,16 +112,33 @@ sudo ./boot-tripwire/install.sh --uninstall
 asahilocker-boot-tripwire status              # any time; no root needed
 ```
 
-**How it works.** At every shutdown it records a sha256 of every file and
-symlink on `/boot` and the EFI partition, in `/var/lib/asahilocker/boot-tripwire/`
-on the encrypted root, where the record cannot be changed without the
-passphrase. At every boot it compares. Updates made while the system runs (a
-new kernel, a GRUB or m1n1 update) are recorded at the next shutdown and never
-reported. Anything added, changed or removed *between* a shutdown and the next
-boot is reported by path: in the journal at critical priority
+**How it works.** It records a sha256 of every file and symlink on `/boot` and
+the EFI partition, in `/var/lib/asahilocker/boot-tripwire/` on the encrypted
+root, where the record cannot be changed without the passphrase, and compares
+at every boot. Anything added, changed or removed while the system was off is
+reported by path: in the journal at critical priority
 (`journalctl -t asahilocker-boot-tripwire`), in a desktop notification at every
 login, and in `status`, until you accept it. A check of 5,000 files takes well
 under a second.
+
+**Updates are not alarms.** What the system itself writes to `/boot` is
+recorded as it happens, so it is never reported:
+
+- at every clean shutdown;
+- after every kernel or m1n1 update, by a kernel-install plugin
+  (`/etc/kernel/install.d/999-asahilocker-boot-tripwire.install`), so a crash
+  or power cut right after one is not reported either;
+- after every dnf transaction, if dnf's actions plugin is installed
+  (`sudo dnf install libdnf5-plugin-actions`, then run the installer again):
+  that covers a GRUB or shim update cut off by a crash;
+- in offline updates (Discover, GNOME Software, `dnf offline`, `dnf
+  system-upgrade`), which install in a boot of their own: the check runs there
+  before the update does, and the update is recorded.
+
+**A changed `/boot` is never recorded over.** All of those records are taken
+only on a boot whose check came back clean. When the check finds changes,
+nothing records until you accept them, so they are reported again at every boot,
+and a `verify` from a live USB against the record still sees them.
 
 Left out of the record, because they change at every boot by design:
 `/boot/grub2/grubenv` (GRUB's boot counters), `ubootefi.var` (U-Boot's
@@ -130,8 +147,8 @@ on `/boot` if there is one.
 
 **When it reports.** First ask whether it was you. Running the RAM rescue, a
 live USB or another install on this Mac changes `/boot` while this system is
-off, and so does a crash or power cut after an update but before a clean
-shutdown. If so:
+off. So does a crash right after a GRUB or shim update when dnf's actions
+plugin is not installed. If so:
 
 ```bash
 sudo asahilocker-boot-tripwire accept     # shows the changes, clears the alert, records anew
