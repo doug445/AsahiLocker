@@ -10,7 +10,7 @@ sudo ./install.sh --uninstall
 
 ## esp-grub-stub-guard
 
-`/boot/efi/EFI/fedora/grub.cfg` on Asahi is a four-line **stub** that finds
+`/boot/efi/EFI/fedora/grub.cfg` on Asahi is a three- or four-line **stub** that finds
 `/boot` by UUID and chainloads the real `grub.cfg` from there:
 
 ```
@@ -24,10 +24,31 @@ Plenty of guides — and the muscle memory of anyone who has used GRUB on a PC �
 say to run `grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg`. On Asahi that
 replaces the stub with a **full generated config**, which on an encrypted root
 does not know how to reach `/boot`, and you land at a `rescue>` prompt.
+Fedora's `grub2-mkconfig` does refuse to overwrite the stub, but it looks for
+it at `EFI/$ID/grub.cfg`, where `$ID` comes from `/etc/os-release`. On Fedora
+Asahi Remix `ID` is `fedora-asahi-remix` and the stub lives in `EFI/fedora`,
+so that check never fires.
 
-The guard hashes the stub at boot and every 60 seconds. If it drifts, the current
-copy is preserved as `grub.cfg.broken.<timestamp>`, the known-good stub is
-restored, and the event is logged to the journal (`journalctl -t esp-grub-stub-guard`).
+The guard restores the stub **as soon as anything writes it**. A systemd path
+unit watches the stub's directory and starts the guard when a write there is
+closed; the guard compares the stub's sha512 with the baseline and, if it has
+drifted, keeps the current copy as `grub.cfg.broken.<timestamp>`, puts the
+known-good stub back and logs it (`journalctl -t esp-grub-stub-guard`). On an
+M2 Max the stub was back 17 ms after the overwrite closed. It also runs once
+at every boot, for anything written while this system was not running.
+
+It watches the directory, not the file, for a reason measured on Fedora Asahi
+Remix 45 with SELinux enforcing: the policy does not let systemd read files on
+the EFI partition, so a path unit pointed at `grub.cfg` is refused its watch,
+falls back to waiting for the file to be *created*, and never sees an
+overwrite. The audit log shows the denial (`avc: denied { read } ...
+comm="systemd" name="grub.cfg"`). A watch on the directory is allowed, and a
+write to another file there (a GRUB or shim update) costs one hash comparison
+and changes nothing.
+
+Releases up to 3.1.0 used a timer that looked every 60 seconds, which left up
+to a minute in which a reboot would land on the overwritten file. Installing
+this release over one of those removes the timer.
 
 The baseline is generated **from your own machine** at install time — the stub
 embeds your `/boot` filesystem UUID, so it cannot be shipped. It lives at

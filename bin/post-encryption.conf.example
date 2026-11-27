@@ -13,7 +13,8 @@ SNAPPER_CONFIGS="root home"
 
 # --- Boot guards -------------------------------------------------------------
 # Units from boot-guards/ that are only safe to enable once root is encrypted.
-BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.timer)
+# (esp-grub-stub-guard.timer, the name up to 3.1.0, is read as the .path unit.)
+BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.path esp-grub-stub-guard.service)
 
 # --- Boot splash --------------------------------------------------------------
 # luks-deploy.sh takes 'rhgb quiet' off the kernel command line so the first

@@ -33,18 +33,21 @@
 #   — which plenty of guides and some packaging hooks still tell you to run —
 #   overwrites that stub with a FULL generated config. On an encrypted root the
 #   full config in the ESP does not know how to cryptomount, and the box drops to
-#   a GRUB rescue prompt on the next boot.
+#   a GRUB rescue prompt on the next boot. Fedora's grub2-mkconfig refuses to
+#   write EFI/$ID/grub.cfg, but on Fedora Asahi Remix ID is fedora-asahi-remix
+#   and the stub is in EFI/fedora, so that check never fires here.
 #
 #   This guard hashes the stub and restores it from a known-good reference if it
-#   drifts. Idempotent; runs at boot and every 60s via esp-grub-stub-guard.timer.
+#   drifts. Idempotent. esp-grub-stub-guard.path runs it as soon as a write to
+#   the stub is closed, and esp-grub-stub-guard.service once more at boot.
 #
 # The reference copy and its hash are generated PER MACHINE by boot-guards/install.sh
 # (the stub embeds your own /boot filesystem UUID, so it cannot be shipped).
 #   REF  = /root/grub-esp-stub.cfg.known-good
 #   HASH = /root/grub-esp-stub.sha512
 #
-# If you legitimately change the stub (e.g. after encrypting /boot, or after
-# reinstalling GRUB), re-baseline it:
+# If you legitimately change the stub (e.g. after reinstalling GRUB, or after
+# /boot was reformatted and has a new UUID), re-baseline it:
 #     sudo /usr/local/sbin/esp-grub-stub-rebaseline
 set -eu
 
@@ -79,8 +82,8 @@ ts=$(date +%Y%m%d-%H%M%S)
 cp -a "$ESP" "${ESP}.broken.${ts}"
 cp -a "$REF" "$ESP"
 # Keep forensics bounded: if something rewrites the stub repeatedly, this
-# fires every 60s — prune all but the 5 newest drifted copies so the ESP
-# does not silently fill with .broken files.
+# fires on every write — prune all but the 5 newest drifted copies so the
+# ESP does not silently fill with .broken files.
 ls -1t "${ESP}".broken.* 2>/dev/null | tail -n +6 | while read -r old; do
     rm -f "$old"
 done

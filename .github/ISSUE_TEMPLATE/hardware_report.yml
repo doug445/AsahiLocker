@@ -1,0 +1,71 @@
+name: Tested on my Mac
+description: Report a run of AsahiLocker on your hardware, whether it worked or not. Reports are added to docs/COMPATIBILITY.md and credited.
+title: "[hardware] "
+labels: ["hardware report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. A report from a real Mac is the evidence the compatibility table
+        is built on. Successful runs matter as much as failures. Never paste a
+        passphrase, a recovery key or a LUKS header.
+
+  - type: input
+    id: model
+    attributes:
+      label: Mac model
+      description: "`cat /proc/device-tree/model`"
+      placeholder: "Apple MacBook Air (13-inch, M2, 2022)"
+    validations:
+      required: true
+
+  - type: input
+    id: ram
+    attributes:
+      label: Memory
+      placeholder: "8 GB"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: route
+    attributes:
+      label: Encrypted from
+      options:
+        - The RAM rescue (ram-rescue.sh)
+        - A live USB
+        - A second Asahi install
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: AsahiLocker version, Fedora Asahi Remix release, kernel
+      placeholder: "v4.0.0, Fedora Asahi Remix 45, 7.3.4-401.asahi.fc45"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Encrypted, passed the 12-point gate, boots with the passphrase
+        - Encrypted, but something needed fixing (say what below)
+        - Did not complete (say where below)
+    validations:
+      required: true
+
+  - type: input
+    id: profile
+    attributes:
+      label: KDF profile and unlock time at boot
+      description: The profile you chose, and roughly how long the unlock took after you pressed Enter.
+      placeholder: "aggressive, about 10 s"
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What surprised you, what the docs got wrong, a link to a write-up.

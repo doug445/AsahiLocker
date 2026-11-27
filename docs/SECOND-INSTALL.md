@@ -1,8 +1,12 @@
 # Encrypting from a second Asahi install
 
-The live USB is the recommended way to run `luks-deploy.sh`. This is the other
-way: install a second, minimal Fedora Asahi alongside your real one, boot
-that, encrypt from there, then delete it and give the space back to macOS.
+There are three places to run `luks-deploy.sh` from: the built-in RAM rescue
+([RAM-RESCUE.md](RAM-RESCUE.md), nothing to plug in, nothing to install), a
+live USB ([LIVE-USB.md](LIVE-USB.md)), and this one: install a second, minimal
+Fedora Asahi alongside your real one, boot that, encrypt from there, then
+delete it and give the space back to macOS. The RAM rescue is the lighter way
+round a Mac that will not boot USB; this route is for when you want a full
+system to work from.
 
 It exists because the live USB route has a hard dependency on something Apple
 Silicon is not reliable about — U-Boot enumerating a USB mass storage device.
@@ -101,7 +105,7 @@ the tool and the target live on the same disk. The script knows it:
   default to the partitions immediately below the root you chose, which on an
   Asahi layout are that install's own.
 - Before the KDF benchmark it prints both systems side by side and asks you to
-  type `SIBLING`:
+  type `sibling`:
 
   ```text
     Running FROM  : /dev/nvme0n1p9  [fedora]  20G
@@ -203,7 +207,8 @@ refuses outright — this is the one gate with no override word.
 
 ## See also
 
-- [LIVE-USB.md](LIVE-USB.md) — the recommended route, and `usb start`
+- [RAM-RESCUE.md](RAM-RESCUE.md) — the route with nothing to plug in and nothing to install
+- [LIVE-USB.md](LIVE-USB.md) — the live USB route, and `usb start`
 - [UBOOT-BOOTFLOW.md](UBOOT-BOOTFLOW.md) — getting to the `=>` prompt
 - [INSTALL.md](INSTALL.md) — the full walkthrough every route shares
 - [RECOVERY.md](RECOVERY.md) — when something has already gone wrong

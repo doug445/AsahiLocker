@@ -1,0 +1,17 @@
+[Unit]
+Description=AsahiLocker boot tripwire: were /boot and the EFI partition changed while this system was off?
+RequiresMountsFor=/boot /boot/efi /var/lib
+
+[Service]
+# Compared at boot with the record taken at the last shutdown; recorded again
+# at this shutdown. RequiresMountsFor orders the stop before /boot and the EFI
+# partition are unmounted. The check exits 0 even when it finds changes (they
+# go to the journal and to an alert file): a failed unit would skip ExecStop,
+# and with it the record the next boot is compared with.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/asahilocker-boot-tripwire check
+ExecStop=/usr/local/sbin/asahilocker-boot-tripwire record
+
+[Install]
+WantedBy=multi-user.target

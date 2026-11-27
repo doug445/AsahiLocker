@@ -1,6 +1,6 @@
-# extras — `luks-fetch-cache` and `kbd-backlight`
+# extras — `luks-fetch-cache`, `kbd-backlight` and `boot-tripwire`
 
-Both optional. [`kbd-backlight/`](#kbd-backlight--the-keyboard-lit-at-the-passphrase-prompt) is at the end.
+All three optional. [`kbd-backlight/`](#kbd-backlight--the-keyboard-lit-at-the-passphrase-prompt) and [`boot-tripwire/`](#boot-tripwire--was-boot-changed-while-the-mac-was-off) are at the end.
 
 `luks-fetch-cache` gives an aligned, one-line-per-volume summary of every LUKS and BitLocker
 encrypted volume attached to the machine, for use as a fastfetch module.
@@ -97,3 +97,70 @@ sudo ./kbd-backlight/install.sh --uninstall
 - It needs a MacBook. Desktop Macs have no `kbd_backlight`, and the installer refuses to run on them.
 
 Also published on its own: [asahi-luks-kbd-backlight](https://github.com/doug445/asahi-luks-kbd-backlight).
+
+## `boot-tripwire/` — was /boot changed while the Mac was off?
+
+`/boot` and the EFI partition cannot be encrypted, and nothing on this platform
+verifies them (see [What this protects, and what it does not](../README.md#what-this-protects-and-what-it-does-not)).
+Someone with the Mac to themselves could change the initramfs or the boot loader
+there to capture the passphrase at the next boot. This does not stop that. It
+tells you afterwards.
+
+```bash
+sudo ./boot-tripwire/install.sh               # install, take the first record, enable
+sudo ./boot-tripwire/install.sh --uninstall
+asahilocker-boot-tripwire status              # any time; no root needed
+```
+
+**How it works.** At every shutdown it records a sha256 of every file and
+symlink on `/boot` and the EFI partition, in `/var/lib/asahilocker/boot-tripwire/`
+on the encrypted root, where the record cannot be changed without the
+passphrase. At every boot it compares. Updates made while the system runs (a
+new kernel, a GRUB or m1n1 update) are recorded at the next shutdown and never
+reported. Anything added, changed or removed *between* a shutdown and the next
+boot is reported by path: in the journal at critical priority
+(`journalctl -t asahilocker-boot-tripwire`), in a desktop notification at every
+login, and in `status`, until you accept it. A check of 5,000 files takes well
+under a second.
+
+Left out of the record, because they change at every boot by design:
+`/boot/grub2/grubenv` (GRUB's boot counters), `ubootefi.var` (U-Boot's
+variables), the dot-folders macOS leaves on the EFI partition, and a swap file
+on `/boot` if there is one.
+
+**When it reports.** First ask whether it was you. Running the RAM rescue, a
+live USB or another install on this Mac changes `/boot` while this system is
+off, and so does a crash or power cut after an update but before a clean
+shutdown. If so:
+
+```bash
+sudo asahilocker-boot-tripwire accept     # shows the changes, clears the alert, records anew
+```
+
+If nobody should have touched it, treat the passphrase typed at that boot as
+seen. Do not type it on this Mac again until the boot files are known good:
+from a live USB you trust, unlock and mount the install (`luks-mount.sh mount`),
+reinstall the kernel, GRUB, shim and m1n1 packages into it (`luks-mount.sh
+chroot`, then `dnf reinstall`), and change the passphrase and the recovery key
+(`cryptsetup luksChangeKey`, `luksAddKey`/`luksKillSlot`).
+
+**The check that does not trust this system.** `check` runs on the system whose
+boot files it is checking. From a live USB, compare the install's `/boot` and
+EFI partition with its record, or with a copy of the record you keep off the
+machine (`sudo cp /var/lib/asahilocker/boot-tripwire/record` to a stick):
+
+```bash
+sudo ./bin/luks-mount.sh mount /dev/nvme0n1p6        # /mnt, with its /boot and EFI
+sudo ./extras/boot-tripwire/asahilocker-boot-tripwire verify /mnt [/path/to/kept/record]
+```
+
+Exit 0 is a match, 2 lists the differences.
+
+**What it cannot do.** Prevent anything: by the time it reports, the changed
+initramfs has run and seen the passphrase. Catch someone who knows it is here:
+that initramfs runs with the root unlocked and could put the files back, or
+rewrite the record, before the check (a record kept off the machine and
+`verify` from a live USB close the second gap, not the first). Say what was
+done: only which files changed. What it catches is a change that does not cover
+its tracks, which is most of them, and every change made from outside this
+system.

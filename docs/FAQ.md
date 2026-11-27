@@ -34,19 +34,30 @@ What you cannot sensibly do is swap the algorithm out — see
 
 ## Why is `/boot` left unencrypted?
 
-GRUB has to read the kernel and initramfs before anything is unlocked. The
-encrypted root is opened by the *initramfs*, not by GRUB, so keeping `/boot`
-plain avoids putting GRUB on the unlock path at all — where the KDF is limited
-by however much heap the **firmware** grants it, and where GRUB 2.12 (current
-in Fedora 44) has no argon2 support whatsoever. With GRUB 2.14 (which does
-support argon2id), that firmware limit has always been 1 GiB on x86 vendor
-UEFI; under Asahi's U-Boot it is higher — this project's self-built GRUB 2.14
-measured 2 GiB working on an M2 Max. Exceeding whatever the firmware affords
-does not mean a slow boot, it means no boot: GRUB fails to allocate. And at
-exactly 4 GiB it is worse than a failure — a 32-bit overflow in its
-`argon2_init` wraps the allocation to zero, so it proceeds instead of rejecting
-the parameters. The trade-off of keeping `/boot` plain is that it is unsigned;
-see [Risks](../README.md#risks--read-this).
+Because that is the normal LUKS arrangement, and because encrypting it on a
+Mac would cost a great deal and protect almost nothing.
+
+- **It is how encrypted Linux is normally installed.** Fedora's own installer,
+  with "Encrypt my data" ticked, leaves `/boot` unencrypted; so do Ubuntu's and
+  Debian's. The kernel and initramfs are read from `/boot`, and the initramfs
+  unlocks the root. That is exactly what AsahiLocker sets up.
+- **On Apple Silicon it would move the weak spot, not remove it.** m1n1
+  stage 2, U-Boot and GRUB live on the EFI partition, which nothing can
+  encrypt and nothing on this platform verifies (only m1n1 stage 1 is
+  verified). Anyone who could change `/boot` could change those instead.
+- **GRUB is the wrong place to run argon2id.** Measured on an M2 Max, GRUB's
+  argon2id is 8.5 times slower than the kernel's. The root's 4 GiB x 10 would
+  take about 80 seconds there, past the point where the machine was seen to
+  reset (somewhere between 40 and 80 seconds of uninterrupted work), and GRUB
+  cannot take 4 GiB at all: a 32-bit overflow in its `argon2_init`. Whatever
+  fits is a weaker keyslot than the root's, and so the cheapest way in.
+  GRUB 2.12, the one in Fedora 45, has no argon2 support at all.
+
+The research that measured all this is retired and kept as a record:
+[BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md). What is left open by
+an unencrypted, unsigned `/boot`, and what helps (the optional boot tripwire
+that reports changes to it), is in
+[What this protects, and what it does not](../README.md#what-this-protects-and-what-it-does-not).
 
 ## What happens if the encryption is interrupted — power loss, a crash, a closed lid?
 
@@ -90,7 +101,7 @@ specific, and none of it lands on a LUKS2 volume at rest:
 
 What quantum *will* eventually change, for context: TLS and SSH key exchange,
 GPG or age files encrypted to RSA/ECC public keys, and the RSA signatures that
-Secure Boot verifies — including on a UKI this tool re-signs. Those are the
+Secure Boot verifies (not used on Asahi). Those are the
 firmware and protocol ecosystems' migrations, they are not a way into the data
 on this disk, and the disk does not need to wait for them.
 
@@ -102,13 +113,60 @@ Yes. `LUKS_PROFILE` or the `LUKS_PBKDF_*` variables pin the KDF,
 [docs/FLEET.md](FLEET.md) first — there is a real UUID-uniqueness footgun
 when imaging several boxes from one source.
 
-## Will this work on an M1 with only 8 GB of RAM?
+## Will this work on a Mac with only 8 GB of RAM?
 
-Yes, on any profile including `aggressive` at 4 GiB. The memory cost only has to
-be allocatable in the initramfs, which has the machine entirely to itself. A base
-M1 is slower than an M2 Max at identical parameters because argon2id is
-memory-bandwidth-bound — which is why the installer benchmarks your machine
+Yes. On any Mac with 8 GB, M1, M2 or M3 alike, the default profile is
+`moderate`, 2 GiB x 8: twice the work per guess of `cryptsetup`'s own default,
+and the one the menu and `--defaults` choose there. The KDF's memory has to be
+free in the initramfs at every boot or the volume does not open; 4 GiB is half
+of an 8 GB machine, and the initramfs only grows as firmware and GPU support are
+added to it. The rule is the RAM, not the chip. `aggressive` stays on the menu,
+and `LUKS_PROFILE=aggressive` takes it. Every Mac with more than 8 GB keeps
+`aggressive` as the default.
+
+A base M1 is slower than an M2 Max at identical parameters because argon2id is
+memory-bandwidth-bound, which is why the installer benchmarks your machine
 instead of quoting someone else's numbers.
+
+## Can swap leak what the encryption protects?
+
+Only if it is on the disk outside the encryption. Fedora Asahi Remix swaps to
+**zram**, compressed RAM that never reaches the disk; that needs nothing. A
+swap *partition*, or a swap *file* on any filesystem but the root (on `/boot`,
+say), stays plain: whatever the kernel swaps out, keys, passwords and open
+documents included, lands on the disk unencrypted, root encrypted or not. A
+swap file on the root filesystem is inside the encryption and fine.
+
+`luks-deploy.sh` reads the install's fstab and its `.swap` units before it
+encrypts, names any such swap and stops until you type `swap`;
+`post-encryption-setup.sh` checks again what is actually swapping.
+
+Two ways to fix it, on the encrypted system:
+
+**Swap to zram only, Fedora's default** (the simple one):
+
+```bash
+sudo swapoff /boot/swapfile     # the swap the check named
+sudoedit /etc/fstab             # delete its line
+sudo rm /boot/swapfile
+```
+
+For a swap partition, `swapoff` it and delete its fstab line the same way. Its
+old contents are still on it in plain text: `sudo blkdiscard /dev/nvme0n1pN`
+discards them; then reuse or delete the partition.
+
+**Keep a disk swap, encrypted with a new random key at every boot.** In
+`/etc/crypttab`, and in `/etc/fstab` in place of the old swap line:
+
+```text
+swap  PARTUUID=<its PARTUUID>  /dev/urandom  swap,cipher=aes-xts-plain64,size=512,sector-size=4096
+/dev/mapper/swap  none  swap  defaults  0 0
+```
+
+Name the partition by `PARTUUID` (`lsblk -o NAME,PARTUUID`), never `UUID=` or
+`LABEL=`: the random key rewrites the swap signature at every boot, and the
+filesystem UUID with it. Nothing survives a reboot, so there is no hibernation,
+which Asahi does not offer anyway.
 
 ## Does it work on anything other than Asahi?
 

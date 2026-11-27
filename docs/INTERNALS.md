@@ -13,7 +13,7 @@ before it lets you reboot.
 | 2/8 | In-place encrypts the partition with LUKS2 — 4096-byte encryption sectors when the btrfs sectorsize allows it (Apple NVMe is 4Kn), checksum resilience enabled so an interrupted run can resume |
 | 3/8 | Verifies the LUKS header (`luksDump`), opens the container, confirms btrfs is intact inside and the UUID was preserved |
 | 4/8 | Resizes btrfs back to fill the container, mounts a chroot using the auto-detected subvolumes |
-| 5/8 | Backs up the LUKS header to `/boot/` **and** to the script's own directory |
+| 5/8 | Enrols the optional recovery key, then backs up the LUKS header to `/boot/` **and** to the script's own directory |
 | 6/8 | Rewrites `crypttab`, `fstab`, `/etc/default/grub`, `/etc/kernel/cmdline`, dracut config |
 | 7/8 | Rebuilds **all** initramfs images (with self-repair), updates **all** BLS entries via `grubby`, regenerates `grub.cfg`, then labels every file the deployment wrote with `setfiles` and the *target's* own SELinux `file_contexts`, and reads the labels back from the files |
 | 8/8 | 12-point verification gate — blocks the "you may reboot" message until every check passes |
@@ -26,7 +26,7 @@ both interruption classes automatically:
 | Where it died | How re-running recovers |
 |---|---|
 | **Mid-encryption** (power loss, killed terminal) | The LUKS2 header carries the `online-reencrypt` requirement flag. The script detects it, offers to finish with `cryptsetup reencrypt --resume-only`, then continues into the normal config phase. |
-| **During the config phase** (steps 5–8) | The header is complete but boot config is half-written. The script offers **configuration-only mode**: it unlocks the container, discovers subvolumes *through the mapper*, skips the shrink/encrypt steps, redoes every config step (all idempotent — fstab conversion, crypttab dedupe, grubby, dracut), and re-runs the full verification gate. Confirmation word is `CONFIGURE` instead of `ENCRYPT`. |
+| **During the config phase** (steps 5–8) | The header is complete but boot config is half-written. The script offers **configuration-only mode**: it unlocks the container, discovers subvolumes *through the mapper*, skips the shrink/encrypt steps, redoes every config step (all idempotent — fstab conversion, crypttab dedupe, grubby, dracut), and re-runs the full verification gate. Confirmation word is `configure` instead of `encrypt`. |
 | **Header unreadable** (`luksDump` fails on a `crypto_LUKS` partition) | Refuses with a pointer to `cryptsetup repair` — nothing destructive is attempted. |
 
 A stale open mapper from a previous run can be kept (`keep`) and is reused,
@@ -43,7 +43,9 @@ pinning it (fstab, snapshots, backup configs) keeps working.
 /etc/crypttab            + fedora_crypt UUID=<LUKS_UUID> none luks,discard
 /etc/fstab                 UUID=<btrfs_UUID> → /dev/mapper/fedora_crypt  (/ and /home)
 /etc/default/grub        + GRUB_ENABLE_CRYPTODISK=y
-                         + GRUB_CMDLINE_LINUX: rd.luks.uuid=… rd.luks.name=…=fedora_crypt
+                         + GRUB_CMDLINE_LINUX_DEFAULT (or GRUB_CMDLINE_LINUX, whichever
+                           exists; Fedora Asahi Remix has only the first):
+                           rd.luks.uuid=… rd.luks.name=…=fedora_crypt
 /etc/kernel/cmdline      + rd.luks.uuid=… rd.luks.name=…=fedora_crypt
 /boot/loader/entries/*   + rd.luks.uuid + rd.luks.name on EVERY entry's options line
 /etc/dracut.conf.d/99-luks.conf   (new) add_dracutmodules+=" crypt dm btrfs "
@@ -51,9 +53,10 @@ pinning it (fstab, snapshots, backup configs) keeps working.
 /boot/initramfs-*.img      rebuilt for every installed kernel
 ```
 
-Originals are kept as `fstab.pre-luks`, `grub-defaults.pre-luks`,
-`kernel-cmdline.pre-luks`, plus a full copy in `pre-luks-state-<timestamp>/`
-next to the script.
+Originals are kept on the target as `/etc/fstab.pre-luks`,
+`/etc/default/grub.pre-luks` and `/etc/kernel/cmdline.pre-luks`, and next to
+the script in `pre-luks-state-<timestamp>/` as `fstab`, `grub-defaults` and
+`kernel-cmdline`, with the BLS entries, `blkid`, `lsblk` and the subvolume list.
 
 ### Why all four of cmdline, GRUB defaults, BLS entries and crypttab
 
@@ -135,7 +138,10 @@ working image intact rather than leaving you with zero bootable kernels.
 | Battery / AC check | Power loss mid-encryption (refuses below 50% without override) |
 | Stale mapper detection | Colliding with a half-finished previous run |
 | Same-disk sanity check | Root/boot/EFI selections silently spanning different disks |
-| **fstab cross-validation** | Picking a boot/EFI partition that belongs to a *different* install on the same machine: the UUIDs of the selected BOOT and EFI partitions are checked against the `/boot` and `/boot/efi` entries in the target's own fstab, and a mismatch requires a typed `MISMATCH` override |
+| **fstab cross-validation** | Picking a boot/EFI partition that belongs to a *different* install on the same machine: the UUIDs of the selected BOOT and EFI partitions are checked against the `/boot` and `/boot/efi` entries in the target's own fstab, and a mismatch requires a typed `mismatch` override |
+| Plain-swap check | Encrypting the root while the install swaps to the disk outside the encryption: a swap partition, a swap file on `/boot` or another plain filesystem, a mapper crypttab does not list. Read from the target's fstab and `.swap` units; zram and a swap file on the root are fine. A fresh encryption stops until `swap` is typed; a resume or configuration-only run warns |
+| Lower-case typed words | Caps Lock left on for the passphrase. Every word the script asks for (`encrypt`, `configure`, `swap`, `battery`, `mismatch`, `force`, `sibling`, `align`, `uuid-changed`) is lower case, which cannot be typed with Caps Lock on; the word in capitals is answered with a Caps Lock warning and asked for again. Up to 3.1.0 they were all capitals |
+| Default KDF by RAM | A Mac with 8 GB starting with a KDF that takes half its memory at every boot: `moderate` is its default, whatever the chip; `aggressive` everywhere else |
 | Already-encrypted check | Double-encrypting an already-LUKS partition (now offers resume / config-only instead of aborting) |
 | SELinux relabel | Files written from the live environment carrying the live system's labels into the target, or none at all: the RAM rescue has no policy loaded, and a file created there is `unlabeled_t` on the first enforcing boot. `setfiles` runs in the chroot with the target's `file_contexts`. It does not depend on SELinux being active in the running kernel, which `restorecon` does: inside the chroot `restorecon` exits 0 without doing anything, and up to 3.0.0 that was reported as success. The labels are then read back with `stat`, and a file still without one is listed with the `enforcing=0` escape hatch. `post-encryption-setup.sh` repeats the relabel on the booted system |
 | Subvolume auto-discovery | Modifying the wrong (stale or restored) root subvolume |
@@ -164,8 +170,10 @@ entry.
 
 Encrypting `/boot` too is a separate and much harder problem: GRUB itself would
 have to unlock the container, and GRUB is far more KDF-constrained than the
-initramfs. GRUB ≥ 2.14 supports argon2id; GRUB 2.12 — current in Fedora 44 —
-has no argon2 support at all.
+initramfs. GRUB ≥ 2.14 supports argon2id; GRUB 2.12 — current in Fedora 45 —
+has no argon2 support at all. This project measured what it would take, found
+it not worth having, and retired the work; why is in
+[FAQ: Why is /boot left unencrypted?](FAQ.md#why-is-boot-left-unencrypted).
 
 > ### The KDF limit for a GRUB-unlocked volume is set by the firmware
 >
@@ -198,9 +206,10 @@ has no argon2 support at all.
 > rejecting the parameters cleanly. Copying the root volume's 4 GiB figure
 > onto a GRUB-unlocked volume walks directly into this.
 
-> **Note:** work is on-going to encrypt `/boot` at that 1 GiB ceiling. It is
-> possible with GRUB ≥ 2.14, but testing continues because of the complexity of
-> the Fedora Asahi Remix boot chain.
+> **Retired.** Encrypting `/boot` was researched here and is not pursued: GRUB's
+> argon2id runs 8.5 times slower than the kernel's on an M2 Max, and on Apple
+> Silicon the boot code on the EFI partition would stay as open as `/boot` is
+> now. The record: [BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md).
 
 The answer to that is **not** to weaken the KDF. Dropping a volume to pbkdf2 to
 satisfy an old GRUB trades a memory-hard KDF for one that GPUs and ASICs chew
@@ -220,8 +229,7 @@ argon2 in **2.14** (`grub-core/lib/argon2.c`; `luks2.c` parses `argon2i` and
 Encrypted `/boot` is therefore out of scope for the current release **as
 unsupported**, not as a known-failing configuration — no failure mode is claimed
 here, because on stock Fedora the argon2id path cannot be exercised at all until
-a GRUB carrying `argon2.mod` is in place. That is the work the note above refers
-to.
+a GRUB carrying `argon2.mod` is in place.
 
 What this means for your threat model: an attacker with repeated physical access
 could modify the unencrypted kernel or initramfs. LUKS here protects **data at

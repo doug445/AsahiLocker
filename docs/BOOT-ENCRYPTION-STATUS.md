@@ -1,4 +1,17 @@
-# Encrypted `/boot` — research status, and a request for help
+# Encrypted `/boot` — research record (retired)
+
+> ### Retired, kept as a record (2026-11-27)
+>
+> Encrypting `/boot` is not pursued, and nothing here will ship. What this
+> research measured is why: GRUB's argon2id runs **8.5 times slower** than the
+> kernel's on an M2 Max, so a `/boot` keyslot as strong as the root's would take
+> about 80 seconds in GRUB, past the point where the machine was seen to reset;
+> anything that fits is weaker than the root and becomes the cheapest way in.
+> And it would protect almost nothing on Apple Silicon: m1n1 stage 2, U-Boot and
+> GRUB sit on the EFI partition, which nothing can encrypt and nothing verifies.
+> An unencrypted `/boot` is also the normal LUKS arrangement: Fedora's, Ubuntu's
+> and Debian's installers all leave it so. The text below is as it was when the
+> work stopped, open questions included; read it as history, not as plans.
 
 > ### ⚠️ NOT SHIPPED. NOT ENABLED. DO NOT RUN THIS ON A MACHINE YOU NEED.
 >

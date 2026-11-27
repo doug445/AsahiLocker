@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=AsahiLocker boot tripwire
+Comment=Warns at login if /boot or the EFI partition was changed while this Mac was off
+Exec=/usr/local/sbin/asahilocker-boot-tripwire notify
+NoDisplay=true
+X-KDE-autostart-phase=2

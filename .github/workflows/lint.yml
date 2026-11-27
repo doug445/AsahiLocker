@@ -15,7 +15,7 @@ jobs:
       - name: bash syntax check (bash -n)
         run: |
           set -e
-          for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline extras/bin/luks-fetch-cache; do
+          for f in $(git ls-files '*.sh') boot-guards/bin/esp-grub-stub-rebaseline extras/bin/luks-fetch-cache extras/boot-tripwire/asahilocker-boot-tripwire; do
             bash -n "$f"
             echo "syntax OK: $f"
           done
@@ -27,7 +27,8 @@ jobs:
           shellcheck -S warning \
             $(git ls-files '*.sh') \
             boot-guards/bin/esp-grub-stub-rebaseline \
-            extras/bin/luks-fetch-cache
+            extras/bin/luks-fetch-cache \
+            extras/boot-tripwire/asahilocker-boot-tripwire
 
   cli:
     # --help, unknown options and the no-root path of every script: no root,
@@ -37,6 +38,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: command-line smoke test
         run: bash tests/cli-smoke-test.sh
+      - name: default KDF profile and plain-swap check
+        run: bash tests/deploy-checks-test.sh
 
   uboot-efivar:
     runs-on: ubuntu-latest
@@ -75,3 +78,9 @@ jobs:
         run: sudo timeout 300 bash tests/multi-install-selection-test.sh
       - name: luks-mount.sh on a loop-image install, plain and encrypted
         run: sudo timeout 300 bash tests/luks-mount-test.sh
+      - name: boot tripwire on a throwaway /boot tree
+        run: sudo timeout 300 bash tests/boot-tripwire-test.sh
+      - name: boot guards, installed over 3.1.0's, re-run, removed
+        # Installs units into the runner itself, which is thrown away after
+        # the job; the test refuses to run anywhere CI is not set.
+        run: sudo CI=true timeout 300 bash tests/boot-guards-test.sh

@@ -1,8 +1,14 @@
 [Unit]
-Description=Restore ESP grub.cfg stub if altered
-Documentation=man:systemd.service(5)
+Description=Restore the ESP grub.cfg stub if it was overwritten
+Documentation=man:systemd.path(5)
 ConditionPathExists=/boot/efi/EFI/fedora/grub.cfg
+RequiresMountsFor=/boot/efi
 
 [Service]
+# Started by esp-grub-stub-guard.path whenever the stub is written, and once
+# at boot for anything written while this system was not running.
 Type=oneshot
 ExecStart=/usr/local/sbin/restore-esp-grub-stub.sh
+
+[Install]
+WantedBy=multi-user.target

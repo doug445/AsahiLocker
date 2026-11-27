@@ -32,7 +32,7 @@ numbers you see will be your own.*
 
 | Profile | Memory | Iterations | Threads | At boot, M2 Max | KDF alone, M2 Max | vs stock |
 |---------|--------|-----------|---------|-----------------|-------------------|----------|
-| `aggressive` (default) | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
+| `aggressive` (default)¹ | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
 | `moderate` | 2 GiB | 8 | 4 | ~4.2 s | 3.2 s | 2x |
 | `fast` | 1 GiB | 9 | 4 | ~2.7 s | 2.0 s | 1.125x |
 
@@ -49,9 +49,19 @@ between the two.
 this machine unaided — 1 GiB x 8, its `--iter-time` default of 2000 ms. Every
 profile is above 1.0x by construction, and a runtime guard enforces it (below).
 
+¹ On every Mac with more than 8 GB. On a Mac with 8 GB of RAM, whatever the
+chip (M1, M2 and M3 base models all come with 8 GB), the default is `moderate`,
+and the menu says why: the KDF's memory has to be free in the initramfs at
+every boot, or the volume does not open; 4 GiB is half of such a machine, and
+the initramfs only grows as firmware and GPU support are added to it. The rule
+is the RAM, not the model. `aggressive` stays on the menu, and
+`LUKS_PROFILE=aggressive` takes it. The detection reads `MemTotal` (under
+12 GiB reported counts as 8 GB); anything pinned with
+`LUKS_PBKDF_*` falls back to `aggressive` on every machine, so a fleet's pinned
+parameters do not change from one Mac to the next.
+
 **All three are argon2id — none uses pbkdf2.** Memory cost only has to be
-allocatable in the initramfs, which has the machine to itself, so any profile is
-safe on any Asahi-supported Mac including an 8 GiB M1.
+allocatable in the initramfs, which has the machine to itself.
 
 ### The case for `aggressive` — and for `paranoid` after it
 
@@ -118,9 +128,6 @@ The two conditions are separate because they fail differently: dropping below
 1 GiB loses the memory-hardness that is the entire point, and dropping total
 work below `fast` is cheaper per guess however you trade the two off.
 
-If you genuinely want a cheaper KDF, run `cryptsetup luksConvertKey` yourself.
-This script will not write one for you.
-
 **And a runtime guard on top of that.** Before formatting, the script reads
 what `cryptsetup` itself would have chosen on this machine (argon2id at its
 default memory with iterations auto-tuned to `--iter-time`, 2000 ms) and
@@ -151,7 +158,7 @@ much RAM happened to be free while it was being written.
 
 The partition menus can be pinned the same way as the KDF (each pinned device
 is still fstype-checked and cross-checked against the target's own fstab, and
-the typed `ENCRYPT` confirmation still applies):
+the typed `encrypt` confirmation still applies):
 
 ```bash
 sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
@@ -232,7 +239,7 @@ sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      /dev/nvme0n1p6
 ```
 
-Two things that trip people up:
+Three things that trip people up:
 
 - **`--hash sha512` is not optional here.** `luksConvertKey` rewrites the
   keyslot area, so it re-runs the anti-forensic split and re-stamps that
@@ -247,6 +254,7 @@ Two things that trip people up:
   (2000 ms by default). That is why a stock 1 GiB volume unlocks in about two
   seconds while these profiles take longer — the memory figure is the same, the
   iteration count is not.
+
 - **`--pbkdf-memory` is in KiB**, not MiB or GiB — and `4194304` (4 GiB) is the
   hard maximum: `cryptsetup` refuses anything above it. Past that ceiling only
   the iteration count can raise the cost, which is the entire difference
@@ -535,9 +543,9 @@ appropriate for a volume you expect to outlive the hardware.
 
 None of this constrains the root volume, because
 GRUB never unlocks it — the initramfs does. It only matters if you have some
-*other* volume that GRUB itself must unlock — for example the experimental
-encrypted-`/boot` research, which runs a self-built GRUB 2.14 with argon2id
-(see [docs/BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md)).
+*other* volume that GRUB itself must unlock. The encrypted-`/boot` research
+these numbers come from is retired and kept as a record
+([BOOT-ENCRYPTION-STATUS.md](BOOT-ENCRYPTION-STATUS.md)).
 
 For those volumes: **never use 4 GiB** — a 32-bit overflow in GRUB's
 `argon2_init` wraps the allocation size to zero, so it proceeds instead of
@@ -549,7 +557,7 @@ worked — that firmware leaves GRUB too little heap, which is where the usual
 "GRUB caps at 1 GiB" comes from. Under Asahi's U-Boot it is not the same
 number: 2 GiB is measured working on an M2 Max. Use 1 GiB as the portable
 default; treat more as opt-in and measured. An allocation failure here means
-the machine does not boot. GRUB 2.12 (current in Fedora 44) has no argon2
+the machine does not boot. GRUB 2.12 (current in Fedora 45) has no argon2
 support at all.
 
 Do not answer any of that by downgrading the volume to pbkdf2 — argon2id at

@@ -1,0 +1,232 @@
+#!/bin/bash
+#
+# AsahiLocker — in-place LUKS2 encryption for Fedora Asahi Remix on Apple Silicon
+# https://github.com/doug445/AsahiLocker
+#
+# Copyright (c) 2026 William MacKinnon <spilled-bowline0j@icloud.com>
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# asahilocker-boot-tripwire — tells you when /boot or the EFI partition was
+# changed while this system was not running.
+#
+# Usage: asahilocker-boot-tripwire record|check|status|accept|notify
+#        asahilocker-boot-tripwire verify DIR [RECORD]
+#   record   record every file on /boot and the EFI partition (sha256) now;
+#            the service does this at every shutdown
+#   check    compare them with that record; the service does this at boot
+#   status   show the alert, if there is one (no root needed)
+#   accept   you have looked and it was you: clear the alert, record anew
+#   notify   a desktop notification if there is an alert (run at login)
+#   verify   the check that does not trust this system: from a live USB, with
+#            the install mounted at DIR (luks-mount.sh mount), compare its
+#            /boot and EFI partition with its record, or with a copy of the
+#            record you kept off the machine. Exit 0 match, 2 differences
+#
+# /boot and the EFI partition cannot be encrypted, and nothing on this platform
+# verifies them. Someone with the Mac to themselves can change the initramfs or
+# the boot loader there to capture the passphrase at the next boot. This does
+# not stop that. It notices it afterwards: the record is kept on the encrypted
+# root, where it cannot be changed without the passphrase, and anything added,
+# changed or removed between a shutdown and the next boot is reported, and
+# stays reported until accepted.
+#
+# What it cannot do: prevent the change, or catch someone who knows it is
+# here. By the time it reports, the changed initramfs has run with the root
+# unlocked, and it could have put the files back first. What it catches is a
+# change that does not cover its tracks, and every change made from outside
+# this system: the RAM rescue, a live USB, another install on this Mac.
+#
+# Left out of the record, because they change at every boot by design:
+# /boot/grub2/grubenv (GRUB's boot counters), ubootefi.var on the EFI
+# partition (U-Boot's variables), and the dot-folders macOS leaves on it.
+# Also a swap file, if one is on /boot: it changes whenever the system swaps.
+# ============================================================================
+set -euo pipefail
+export LC_ALL=C
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+STATE=${TRIPWIRE_STATE:-/var/lib/asahilocker/boot-tripwire}
+RECORD="$STATE/record"
+ALERT="$STATE/ALERT"
+TAG=asahilocker-boot-tripwire
+
+usage() { sed -n '/^# Usage:/,/^#            record you kept off/p' "$0" | sed 's/^# \{0,1\}//'; }
+need_root() { [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo $0 ${1:-}" >&2; exit 1; }; }
+
+# Where the install's / is: "" for this system, the mount point for verify.
+PREFIX=""
+
+# The filesystems to record: /boot and the EFI partition, whichever are
+# mounted. (TRIPWIRE_ROOTS, for tests/boot-tripwire-test.sh: directories,
+# mounted or not.)
+roots() {
+    local r
+    if [ -n "${TRIPWIRE_ROOTS:-}" ]; then
+        for r in $TRIPWIRE_ROOTS; do [ -d "$r" ] && echo "$r"; done
+        return 0
+    fi
+    for r in "$PREFIX/boot" "$PREFIX/boot/efi"; do mountpoint -q "$r" && echo "$r"; done
+    return 0
+}
+
+# One line per file and symlink, sorted by path: "<sha256><TAB><path>", or
+# "L:<target><TAB><path>" for a symlink. Paths as the install itself sees
+# them, so a record taken here compares with one taken from a live USB.
+snapshot() {
+    local -a r skip=()
+    local tab f
+    tab=$(printf '\t')
+    mapfile -t r < <(roots)
+    [ "${#r[@]}" -gt 0 ] || return 1
+    # A swap file on /boot changes whenever the system swaps: left out, by its
+    # fstab entry and, on the running system, by /proc/swaps.
+    while read -r f; do
+        case "$f" in /*) skip+=(-o -path "$PREFIX$f") ;; esac
+    done < <(awk '$1 !~ /^#/ && $3 == "swap" { print $1 }' "$PREFIX/etc/fstab" 2>/dev/null
+             [ -n "$PREFIX" ] || awk 'NR > 1 && $2 == "file" { print $1 }' /proc/swaps 2>/dev/null)
+    {
+        find "${r[@]}" -xdev \( -name lost+found -o -path '*/efi/.*' -o -path '*/grub2/grubenv' \
+             -o -name 'ubootefi.var*' "${skip[@]}" \) -prune -o -type f -print0 \
+            | xargs -0 -r sha256sum | sed 's/^\([0-9a-f]\{64\}\)  /\1\t/'
+        find "${r[@]}" -xdev \( -name lost+found -o -path '*/efi/.*' \) -prune -o -type l -printf 'L:%l\t%p\n'
+    } | sed "s|${tab}${PREFIX}/|${tab}/|" | sort -t "$tab" -k2
+}
+
+# "added|changed|removed  <path>" for every difference between two snapshots.
+compare() {
+    awk -F'\t' 'NR == FNR { old[$2] = $1; next }
+                !($2 in old)   { print "added    " $2; next }
+                old[$2] != $1  { print "changed  " $2 }
+                { delete old[$2] }
+                END { for (p in old) print "removed  " p }' "$1" "$2" | sort -k2
+}
+
+record() {
+    local tmp
+    mkdir -p "$STATE"; chmod 0755 "$STATE"
+    tmp=$(mktemp "$STATE/.record.XXXXXX")
+    if snapshot > "$tmp"; then
+        chmod 0644 "$tmp"; mv -f "$tmp" "$RECORD"
+    else
+        rm -f "$tmp"; echo "/boot is not mounted: nothing recorded" >&2; return 1
+    fi
+}
+
+check() {
+    local now changes n
+    if [ ! -s "$RECORD" ]; then
+        record && logger -t "$TAG" "first record taken: $(wc -l < "$RECORD") files on /boot and the EFI partition"
+        return 0
+    fi
+    now=$(mktemp "$STATE/.now.XXXXXX")
+    if ! snapshot > "$now"; then
+        rm -f "$now"; logger -t "$TAG" "/boot is not mounted: nothing checked"; return 0
+    fi
+    changes=$(compare "$RECORD" "$now")
+    rm -f "$now"
+    if [ -z "$changes" ]; then
+        logger -t "$TAG" "/boot and the EFI partition match the record of the last shutdown ($(wc -l < "$RECORD") files)"
+        return 0
+    fi
+    n=$(wc -l <<< "$changes")
+    {
+        echo "$(date '+%F %T'): $n file(s) on /boot or the EFI partition changed while this"
+        echo "system was not running (since the record of $(date -r "$RECORD" '+%F %T')):"
+        sed 's/^/    /' <<< "$changes"
+        echo
+    } >> "$ALERT"
+    chmod 0644 "$ALERT"
+    logger -p auth.crit -t "$TAG" "$n file(s) on /boot or the EFI partition changed while this system was not running. See: sudo $TAG status"
+    sed 's/^/  /' <<< "$changes" | logger -p auth.crit -t "$TAG"
+    # Exit 0 all the same: a failed unit would skip its ExecStop, and with it
+    # the record that the next boot is compared with.
+    return 0
+}
+
+status() {
+    if [ -s "$ALERT" ]; then
+        cat "$ALERT"
+        echo "If you made these changes (an update that a crash or power cut cut off"
+        echo "before shutdown, the RAM rescue, a live USB, another install on this Mac),"
+        echo "accept them:  sudo $TAG accept"
+        echo "If nobody should have: treat the passphrase typed since then as seen."
+        echo "What to do: extras/README.md, 'boot-tripwire', in the AsahiLocker repository."
+        return 1
+    fi
+    if [ -s "$RECORD" ]; then
+        echo "No alert. Record of $(date -r "$RECORD" '+%F %T'): $(wc -l < "$RECORD") files on /boot and the EFI partition."
+    else
+        echo "No record yet: the first is taken at the next boot, or with: sudo $TAG record"
+    fi
+}
+
+accept() {
+    [ -s "$ALERT" ] && { cat "$ALERT"; echo "Accepted."; }
+    record
+    rm -f "$ALERT"
+    echo "/boot and the EFI partition recorded as they are now ($(wc -l < "$RECORD") files)."
+}
+
+# The same comparison, run from somewhere this install's boot files have not
+# run: a live USB, with the install mounted at $1. Against its own record by
+# default, or against a copy kept off the machine, which a changed initramfs
+# could not have rewritten.
+verify() {
+    local dir="${1:-}" rec now changes
+    [ -n "$dir" ] && [ -d "$dir/boot" ] || { echo "usage: $TAG verify DIR [RECORD]  (the install mounted at DIR)" >&2; return 1; }
+    PREFIX=$(cd "$dir" && pwd)
+    [ "$PREFIX" != / ] || { echo "verify is for an install mounted elsewhere; on this system use: check" >&2; return 1; }
+    rec="${2:-$PREFIX/var/lib/asahilocker/boot-tripwire/record}"
+    [ -s "$rec" ] || { echo "no record at $rec" >&2; return 1; }
+    now=$(mktemp "${TMPDIR:-/tmp}/tripwire-verify.XXXXXX")
+    if ! snapshot > "$now"; then
+        rm -f "$now"; echo "$PREFIX/boot is not mounted" >&2; return 1
+    fi
+    changes=$(compare "$rec" "$now")
+    rm -f "$now"
+    if [ -z "$changes" ]; then
+        echo "MATCH: $PREFIX/boot and its EFI partition are as recorded ($(wc -l < "$rec") files, record of $(date -r "$rec" '+%F %T'))."
+        return 0
+    fi
+    echo "DIFFERENT from the record of $(date -r "$rec" '+%F %T'):"
+    sed 's/^/    /' <<< "$changes"
+    return 2
+}
+
+notify() {
+    [ -s "$ALERT" ] || return 0
+    command -v notify-send >/dev/null 2>&1 || return 0
+    notify-send -u critical -a AsahiLocker -i dialog-warning \
+        "/boot changed while this Mac was off" \
+        "Files on /boot or the EFI partition were changed while this system was not running. In a terminal: sudo $TAG status" \
+        || true
+}
+
+case "${1:-}" in
+    record) need_root record; record ;;
+    check)  need_root check;  check ;;
+    status) status ;;
+    accept) need_root accept; accept ;;
+    notify) notify ;;
+    verify) need_root verify; shift; verify "$@" ;;
+    -h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

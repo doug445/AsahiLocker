@@ -56,7 +56,8 @@ Three choices make that work at every stage:
   partition, exactly as the other two do.
 
 RAM is not a concern on any Apple Silicon Mac. The image is small, and the
-Argon2id KDF needs at most the memory of the profile you pick (1–4 GiB).
+Argon2id KDF needs at most the memory of the profile you pick (1–4 GiB). On a
+Mac with 8 GB the default profile is `moderate`, 2 GiB.
 
 ## Step 1 — Build the rescue
 
@@ -211,8 +212,8 @@ same way it treats a live USB's overlay. On top of that:
 ## Tested
 
 Tested end to end in a KVM guest running the official Fedora Asahi Remix 45
-image, including a power cut in the middle of the encryption and tested and
-deployed on a M2 Max. 
+image, including a power cut in the middle of the encryption, and tested and
+deployed on an M2 Max.
 
 ## Troubleshooting
 

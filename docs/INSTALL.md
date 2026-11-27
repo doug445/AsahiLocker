@@ -92,6 +92,7 @@ cd asahi-fedora-usb
 lsblk -o NAME,SIZE,TYPE,MODEL,VENDOR       # identify your USB — NOT nvme0n1
 
 sudo su -                                   # the build script rejects `sudo` on itself
+cd /path/to/asahi-fedora-usb                # su - starts in /root
 ./build.sh -d /dev/sda                      # ← substitute YOUR usb device
 ```
 
@@ -187,23 +188,25 @@ sudo /root/AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults
 encrypted, encryption interrupted, or the system you are running). Naming the
 root partition takes its `/boot` and EFI from that install's own `/etc/fstab`,
 so there are no partition menus. `--defaults` answers the questions that have a
-recommended answer: run the btrfs check, use the `aggressive` KDF, enrol a
-recovery key. You still type `ENCRYPT`, confirm Caps Lock, and choose the
-passphrase.
+recommended answer: run the btrfs check, use the default KDF profile
+(`aggressive`; `moderate` on a Mac with 8 GB), enrol a recovery key. You
+still type `encrypt`, confirm Caps Lock, and choose the passphrase.
 
 **`command not found`?** The copy never reached the stick. Download it
 straight onto the stick instead; the live image has `wget` and `tar`. From the
-live USB, as root, set `V` to the latest version on the
-[Releases page](https://github.com/doug445/AsahiLocker/releases):
+live USB, as root (this is the same code `git clone` gives you):
 
 ```bash
 nmcli dev wifi connect <ssid> password <password>
-V=3.1.0
 cd /root
-wget https://github.com/doug445/AsahiLocker/archive/refs/tags/v$V.tar.gz
-tar xzf v$V.tar.gz && mv AsahiLocker-$V AsahiLocker
+wget -O AsahiLocker.tar.gz https://github.com/doug445/AsahiLocker/archive/refs/heads/main.tar.gz
+tar xzf AsahiLocker.tar.gz && mv AsahiLocker-main AsahiLocker
 /root/AsahiLocker/bin/luks-deploy.sh
 ```
+
+A particular release instead: replace `refs/heads/main` with
+`refs/tags/vX.Y.Z`, and `AsahiLocker-main` with `AsahiLocker-X.Y.Z`, using a
+version from the [Releases page](https://github.com/doug445/AsahiLocker/releases).
 
 No network on the stick? If you cloned AsahiLocker into your home folder on
 the installed system, copy it from there:
@@ -228,7 +231,8 @@ Two things to know about that route:
   so and stops before changing anything.
 
 The script will ask you to choose a KDF profile (see the prompt table below); no
-flags are needed, and Enter takes `aggressive`, the strongest. To pick one
+flags are needed, and Enter takes the default: `aggressive`, the strongest, on
+every Mac with more than 8 GB; on an 8 GB Mac it is `moderate`. To pick one
 non-interactively instead:
 
 ```bash
@@ -237,25 +241,29 @@ sudo LUKS_PROFILE=fast /root/AsahiLocker/bin/luks-deploy.sh
 
 ### What it will ask you
 
-The script is interactive but every prompt has a sensible default. In order:
+The script is interactive but every prompt has a sensible default. Every word
+it asks you to type is lower case, so none of them sends a hand to Caps Lock
+before the passphrase; type one in capitals and it says Caps Lock is on and asks
+again. In order:
 
 | Prompt | What it means | What to answer |
 |--------|---------------|----------------|
 | `Keep or close? (keep/close)` | `/dev/mapper/fedora_crypt` is still open from an earlier run. (Only appears in that case — and then it is the very first prompt.) | `keep` to reuse it (saves a passphrase prompt when re-running), `close` for a fresh start |
-| `Confirm (Type 'SIBLING' to proceed)` | Only appears when you are running from an installed system rather than live media — the [second-install route](SECOND-INSTALL.md). It prints the install you booted from and the install about to be encrypted, one above the other. | Check they are the right way round, then `SIBLING`. Anything else aborts |
-| `Continue on battery?` | Below 50% battery, no AC. | Plug in the charger and restart the script. `BATTERY` overrides. |
+| `Confirm (Type 'sibling' to proceed)` | Only appears when you are running from an installed system rather than live media — the [second-install route](SECOND-INSTALL.md). It prints the install you booted from and the install about to be encrypted, one above the other. | Check they are the right way round, then `sibling`. Anything else aborts |
+| `Continue on battery?` | Below 50% battery, no AC. | Plug in the charger and restart the script. `battery` overrides. |
 | `Select [1-N] or device path` | Numbered menu of candidate partitions for root / boot / EFI. Candidates are scored: NVMe is preferred, matching labels score higher, the larger of two identically-labelled roots wins, and `BOOT`/`EFI` prefer the neighbours of the root you just chose. Anything the running system is using is marked `IN USE`, is never recommended, and cannot be selected at all. The default is almost always right. | Press Enter to accept the default, or type a number |
 | `Accept anyway? (yes/no)` | The chosen partition scored poorly (e.g. it looks like it is on the USB). | `no` unless you are certain |
 | `Unmount it now? (yes/no)` | The target partition is mounted somewhere (live desktops automount internal disks); encryption cannot run on a mounted device. | `yes` — the script unmounts it for you |
 | `Proceed? (yes/no)` | Your root/boot/EFI selections span different physical disks. | `no` unless that is genuinely your layout |
 | `Resume the interrupted encryption now?` | The selected root has a LUKS header with an **unfinished** encryption (a previous run was interrupted). | `yes` — the script finishes it with `--resume-only`, then redoes the config phase |
 | `Re-run configuration + verification?` | The selected root is fully encrypted already — either a previous run died during the config phase, or you picked a working encrypted system. | `yes` to repair a half-configured install; `no` if the system already boots fine |
-| `Type 'MISMATCH' to override` | The BOOT or EFI partition you selected does **not** match the UUID the target's own fstab expects — you probably picked a partition belonging to a different install. | Almost always abort and re-select. Only override if you know the fstab is the thing that is wrong |
+| `Type 'mismatch' to override` | The BOOT or EFI partition you selected does **not** match the UUID the target's own fstab expects — you probably picked a partition belonging to a different install. | Almost always abort and re-select. Only override if you know the fstab is the thing that is wrong |
+| `Encrypt anyway, and fix the swap afterwards? (Type 'swap' to continue)` | The install swaps to the disk outside the encryption: a swap partition, or a swap file on `/boot` or another plain filesystem. What the kernel swaps out would reach the disk unencrypted. Fedora's default, zram, never asks this. | Stop, switch to zram or encrypt the swap ([FAQ](FAQ.md#can-swap-leak-what-the-encryption-protects)), run again. `swap` goes ahead, and you fix it afterwards |
 | `Continue anyway? (yes/no)` | The BLS boot entries disagree with `/etc/fstab` about which subvolume is root. | `no` — investigate first; see [RECOVERY.md](RECOVERY.md) |
 | `Run btrfs integrity check?` | A read-only `btrfs check`. Takes 5–30 min. | **`Y`** — this is your last chance to find pre-existing corruption |
-| `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `FORCE` overrides |
-| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `1`, the strongest |
-| `Type 'ENCRYPT' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `CONFIGURE` instead, and nothing is re-encrypted. | Read the summary carefully, then type `ENCRYPT` (or `CONFIGURE`) |
+| `Continue despite btrfs errors?` | The integrity check found problems. | Abort and repair the filesystem first. `force` overrides |
+| `Select KDF profile [1-3]` | How hard your passphrase is to brute-force, versus how long you wait at every boot. The script benchmarks your machine and prints an estimate for each, so use the numbers it shows you rather than any figure quoted here. All three are argon2id. | `1` aggressive (4 GiB, 10 iters), `2` moderate (2 GiB, 8 iters), `3` fast (1 GiB, 9 iters). Default is `1`, the strongest; on a Mac with 8 GB it is `2`, and the menu says why |
+| `Type 'encrypt' to begin` | The point of no return, shown after a full pre-flight summary. In configuration-only mode (already-encrypted root) the word is `configure` instead, and nothing is re-encrypted. | Read the summary carefully, then type `encrypt` (or `configure`) |
 | `Type 'yes' in lower case to confirm Caps Lock is off` | The Caps Lock check, right before the passphrase. A lower-case word cannot be typed with Caps Lock on, so typing it is the proof. `cryptsetup` asks for the passphrase twice, so an inverted one verifies fine and only fails at the boot prompt. | `yes`, in lower case. If it arrives as `YES`, Caps Lock is on: turn it off and type it again |
 | `Are you sure? (Type 'yes' in capital letters)` | `cryptsetup`'s own confirmation. | `YES` — hold **Shift**, do not reach for Caps Lock |
 | *LUKS passphrase (twice)* | `cryptsetup` prompting for the new passphrase. | Type it carefully — a typo here becomes your real passphrase |
@@ -264,13 +272,13 @@ The script is interactive but every prompt has a sensible default. In order:
 | `Generate and enroll a recovery key now? [Y/n]` | A random 64-hex-character key in a second keyslot, saved next to the script: the way back in if the passphrase is ever forgotten. Asked after the encryption has finished; `cryptsetup` then asks for your passphrase once more to add the slot. | Enter (yes), then move the key to offline storage afterwards. See [Recovery key](../README.md#recovery-key) |
 
 If the script is interrupted at **any** point — power loss, closed lid, killed
-terminal — just boot the live USB and run it again. It detects the interrupted
+terminal — just boot the live USB (or the RAM rescue entry) and run it again. It detects the interrupted
 state and resumes or repairs automatically; see
 [RECOVERY.md](RECOVERY.md#encryption-was-interrupted).
 
 ### The pre-flight summary
 
-Before the `ENCRYPT` prompt you get a box like this. **Read it.** It is the last
+Before the `encrypt` prompt you get a box like this. **Read it.** It is the last
 checkpoint:
 
 ```
@@ -297,8 +305,8 @@ do not unplug. When it finishes, the script asks for your passphrase again to
 open the new volume, and waits for you there: nothing is at risk if you are
 away, but the configuration steps do not start until you answer.
 
-The script runs 8 steps, then a 12-point verification gate. **If any check fails
-it tells you and refuses to declare success** — do not reboot until you have
+The script runs 8 steps; the eighth is the 12-point verification gate. **If any
+check fails it tells you and refuses to declare success** — do not reboot until you have
 resolved it. See [RECOVERY.md](RECOVERY.md).
 
 Everything is logged to `luks-deploy-<timestamp>.log` next to the script, and
@@ -362,15 +370,32 @@ Two guards, both worth having on an encrypted Asahi box:
   stub that chainloads the real config from `/boot`. Plenty of guides tell you to
   run `grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg`, which replaces that stub
   with a full generated config that has no idea how to reach an encrypted root —
-  and you land in a GRUB rescue prompt. This guard hashes the stub every 60s and
-  restores it if it drifts. The baseline is generated from *your* stub at install
-  time, since it embeds your own `/boot` UUID.
+  and you land in a GRUB rescue prompt. (Fedora's `grub2-mkconfig` refuses to
+  do that elsewhere, but its check looks in `EFI/fedora-asahi-remix/` and never
+  fires on Asahi.) This guard puts the stub back the moment anything writes it,
+  milliseconds later, and checks it once more at every boot. The baseline is
+  generated from *your* stub at install time, since it embeds your own `/boot`
+  UUID. Installed over an older release's guards, it replaces their 60-second
+  timer: re-running the installer is the whole upgrade.
 - **Stale EFI entry cleaner** — U-Boot auto-registers an EFI boot entry for every
   `shim.efi` it finds on removable media. They persist after you unplug the
   installer USB and produce `can't find boot XXXX` errors. This removes entries
   whose partition is no longer attached — from `ubootefi.var` on the ESP, the
   file U-Boot actually reads them from; a runtime `efibootmgr -B` only edits
   U-Boot's in-memory copy and is undone by the next boot.
+
+### Optional: the boot tripwire
+
+```bash
+sudo ./AsahiLocker/extras/boot-tripwire/install.sh
+```
+
+`/boot` and the EFI partition stay unencrypted (see
+[the README](../README.md#what-this-protects-and-what-it-does-not)). The
+tripwire records a checksum of every file on them at each shutdown, on the
+encrypted root, compares at each boot, and tells you, at login and in the
+journal, if anything changed while the Mac was off. It detects; it cannot
+prevent. Details: [extras/README.md](../extras/README.md#boot-tripwire--was-boot-changed-while-the-mac-was-off).
 
 ### Optional: encryption status readout
 
@@ -426,6 +451,8 @@ verified.
 ```bash
 sudo ./AsahiLocker/boot-guards/install.sh --uninstall
 sudo ./AsahiLocker/extras/install.sh --uninstall
+sudo ./AsahiLocker/extras/boot-tripwire/install.sh --uninstall   # if installed
+sudo ./AsahiLocker/extras/kbd-backlight/install.sh --uninstall   # if installed
 sudo ./AsahiLocker/bin/ram-rescue.sh remove     # if you built the RAM rescue
 ```
 

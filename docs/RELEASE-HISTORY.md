@@ -285,7 +285,7 @@ RHEL, Rocky, AlmaLinux, Debian, Ubuntu, Mint, Pop!_OS, Raspberry Pi OS, Arch,
 Manjaro, EndeavourOS and openSUSE, handles systemd-boot and signed UKIs
 alongside GRUB, and is tested on its own terms.
 
-The README and [docs/FAQ.md](docs/FAQ.md) now send non-Apple-Silicon readers
+The README and [docs/FAQ.md](FAQ.md) now send non-Apple-Silicon readers
 there, instead of the old half-claim that the core script "also works on"
 Fedora x86_64, Arch and Manjaro. It still does; it is simply not where it is
 developed or tested first.

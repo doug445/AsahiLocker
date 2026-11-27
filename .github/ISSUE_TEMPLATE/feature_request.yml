@@ -34,7 +34,10 @@ body:
       label: Which area
       options:
         - Deploy / reencrypt path
+        - RAM rescue
+        - luks-mount.sh / maintenance
         - Boot guards and ESP handling
+        - Extras (boot tripwire, keyboard backlight, status readout)
         - Recovery bundle and recovery keys
         - Fleet deployment
         - Test harness
@@ -50,5 +53,5 @@ body:
       description: Confirm the request fits these, or argue above why one should change.
       options:
         - label: It does not weaken the KDF. Substituting pbkdf2 to satisfy an old GRUB is not an acceptable fix here.
-        - label: It does not require encrypting `/boot`, which Fedora's aarch64 GRUB cannot open on an argon2id volume.
+        - label: It does not require encrypting `/boot` (researched and retired; see docs/BOOT-ENCRYPTION-STATUS.md).
         - label: Anything touching the encrypt path can be tested in `tests/loopback-core-test.sh`.

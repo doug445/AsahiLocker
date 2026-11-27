@@ -143,6 +143,7 @@ echo " rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=fedora_crypt" >> /etc/ker
 
 # dracut modules
 echo 'add_dracutmodules+=" crypt dm btrfs "' > /etc/dracut.conf.d/99-luks.conf
+echo 'add_drivers+=" dm-crypt "' >> /etc/dracut.conf.d/99-luks.conf
 
 # rebuild every initramfs
 dracut --regenerate-all --force
@@ -310,7 +311,8 @@ Mount with `-o subvolid=5` instead to see the top level with every subvolume.
 
 You cannot brick the Mac — Apple Silicon DFU / System Recovery always works, and
 macOS is on separate APFS partitions this tooling never touches. Worst case you
-reinstall Fedora Asahi and restore from the backup you took in Step 2.
+reinstall Fedora Asahi and restore from the backup you took before you began
+([INSTALL.md → Before you begin](INSTALL.md#before-you-begin), item 2).
 
 When asking for help, include:
 

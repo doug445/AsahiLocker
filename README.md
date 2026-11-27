@@ -35,8 +35,9 @@ tooling is model-specific: partitions, subvolumes, the boot layout, the disk's
 sector size and the initramfs contents are all read at run time. Which machines
 are verified, which are expected to work, and what changes on a desktop (a
 Bluetooth keyboard cannot type the passphrase; there is no battery to ride out
-a mains dip) is in **[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)**. M4 is
-not claimed: the kernel ships its device trees, but Asahi does not boot it yet.
+a mains dip) is in **[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)**. M4 and
+later (M4 Pro and Max, M5, the A18 Pro MacBook Neo) are not claimed: the
+kernel ships their device trees, but Asahi does not boot them yet.
 
 **New here?** The one-page guide, [Encrypt Asahi Linux with LUKS2, in
 place](https://doug445.github.io/AsahiLocker/), walks through the whole job
@@ -64,6 +65,21 @@ interrupted encryption and finishes it.
 > Read [`docs/INSTALL.md`](docs/INSTALL.md) before running anything, and have a
 > verified backup. See [Risks](#risks--read-this).
 
+## What this protects, and what it does not
+
+| Protected | Not protected |
+|---|---|
+| **A lost or stolen Mac, switched off.** Your root and `/home` cannot be read without the passphrase or the recovery key. | **A Mac that is on, or asleep.** While it runs, the key is in memory and the disk is open; closing the lid does not lock the disk. |
+| **An image of the disk, attacked offline.** Every guess at the passphrase costs argon2id at 4 GiB x 10 (2 GiB x 8 on a Mac with 8 GB). | **A weak or reused passphrase.** The KDF multiplies the cost of each guess; it cannot make a short passphrase long. |
+| **Swap.** The installer refuses to leave swap on the disk outside the encryption without telling you. Fedora's default, zram, never touches the disk. | **Someone with repeated physical access who changes `/boot` or the EFI partition** to capture the passphrase at your next boot. Both stay unencrypted and unsigned, as on every Asahi install: only m1n1 stage 1 is verified on this platform. The optional [boot tripwire](extras/README.md#boot-tripwire--was-boot-changed-while-the-mac-was-off) tells you at the next boot if they were changed while the Mac was off. It detects; nothing here can prevent it. |
+| | **macOS**, on its own APFS partitions: that is FileVault's job. |
+
+An unencrypted `/boot` is the normal LUKS arrangement, not a shortcut: Fedora's
+own installer leaves it so when you tick "Encrypt my data", and so do Ubuntu's
+and Debian's. On a Mac, encrypting it would buy almost nothing, because the
+boot code on the EFI partition would stay just as open; [the
+FAQ](docs/FAQ.md#why-is-boot-left-unencrypted) has the measurements.
+
 ---
 
 ## Why AsahiLocker
@@ -74,8 +90,21 @@ interrupted encryption and finishes it.
   that needs no USB stick and no second install.
 - **The strongest key derivation `cryptsetup` can write, by default.**
   argon2id at 4 GiB x 10: five times the work per guess of a stock
-  `luksFormat` on the same Mac. Measured on your machine, enforced at run
+  `luksFormat` on the same Mac (on a Mac with 8 GB, 2 GiB x 8 by default:
+  twice the work). Measured on your machine, enforced at run
   time. No profile, flag or code path goes below stock, and none uses pbkdf2.
+- **Tested where you can check it.** Eight test suites, 177 checks, run on
+  every push on GitHub's runners, the core of them on aarch64: the real
+  encrypt, hard-kill, repair and resume sequence against a loop device, the
+  partition menus on a two-install disk, the boot guards upgraded over the
+  previous release under a real systemd. Every release since 2.1.0 has also
+  encrypted the official Fedora Asahi Remix image in a VM and booted it.
+  [The record](#tested).
+- **Run on real Macs, by people other than the author.** An M3 MacBook Air,
+  written up on kirsle.net; a 14" M2 Max MacBook Pro from the RAM rescue,
+  issues #7 to #9; two M1 machines in PR #5. Plus the author's three Macs,
+  encrypted with it and in daily use. Every report is linked under
+  [Tested](#tested).
 - **Built so that a mistake does not cost you the machine.** A 12-point gate
   checks every boot file before you may reboot. A run that is interrupted,
   power cut included, resumes when you run the same command again. A
@@ -86,17 +115,6 @@ interrupted encryption and finishes it.
   Nothing counted as a finding until it had been reproduced, and every
   finding was fixed. The record, with what was found, is under
   [Audit](#audit).
-- **More than 100 automated checks on every push.** The real encrypt,
-  hard-kill, repair and resume sequence against a loop device; a refused
-  passphrase; the partition menus on a two-install disk; `luks-mount.sh` on a
-  plain and an encrypted install; the command line of every script. Since
-  2.1.0 every release has also been run end to end in a virtual machine on
-  the official Fedora Asahi Remix image: encrypt, pass the gate, boot.
-- **In daily use on three Macs.** The author's M2 MacBook Air, M1 Pro MacBook
-  Pro and M2 Max MacBook Pro were encrypted with it and have asked for the
-  passphrase at every boot since;
-  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) says exactly what is known
-  about every other M-series Mac, and how.
 - **Documented like it matters.** Every prompt and what to answer, every file
   it changes, every failure mode and the way out, every number and where it
   was measured.
@@ -109,7 +127,8 @@ interrupted encryption and finishes it.
 
 - **AES-256-XTS** with a 512-bit key, in 4096-byte encryption sectors that match
   Apple's NVMe.
-- **argon2id at 4 GiB x 10 iterations, by default.** 4 GiB is the most memory
+- **argon2id at 4 GiB x 10 iterations, by default** (2 GiB x 8 on a Mac
+  with 8 GB, where 4 GiB is half the machine). 4 GiB is the most memory
   `cryptsetup` will let a keyslot cost. Every single guess at your passphrase
   has to fill 4 GiB, ten passes over: a 24 GB GPU holds about **six guesses at
   once**.
@@ -135,35 +154,73 @@ The numbers, their sources and the FileVault comparison:
 
 ## Quick start
 
-Encrypting needs a system that is **not** the one being encrypted. Boot any one
-of these three, then run the same two commands:
+Before any route: **a backup you have actually restored from**, the charger
+plugged in, and a passphrase chosen and written down somewhere that is not this
+Mac. Encrypting needs a system that is **not** the one being encrypted, so pick
+one of three:
 
-| Boot from | Needs | Guide |
+| Route | Needs | Pick it when |
 |---|---|---|
-| **The built-in RAM rescue** | Nothing extra: no USB stick, no second install | [docs/RAM-RESCUE.md](docs/RAM-RESCUE.md) |
-| A Fedora Asahi live USB | A USB stick that your Mac's U-Boot can see | [docs/LIVE-USB.md](docs/LIVE-USB.md) |
-| A second, minimal Asahi install | ~20 GB of disk, set up from macOS | [docs/SECOND-INSTALL.md](docs/SECOND-INSTALL.md) |
+| [**A. The built-in RAM rescue**](#a-the-ram-rescue-nothing-to-plug-in) | Nothing extra | Almost always: no stick, no second install |
+| [B. A live USB](#b-a-live-usb) | A Fedora Asahi stick your Mac's U-Boot can see | You already keep one, for repairs and new installs |
+| [C. A second, minimal Asahi install](#c-a-second-asahi-install) | ~20 GB, set up from macOS | You want a whole system to work from |
+
+### A. The RAM rescue: nothing to plug in
+
+On the system you want encrypted:
 
 ```bash
 git clone https://github.com/doug445/AsahiLocker.git
-
-# RAM rescue: build it on the system you want encrypted, then reboot into it.
-# At its prompt, `asahilocker` runs everything below for you.
-sudo ./AsahiLocker/bin/ram-rescue.sh build --arm && sudo reboot
-
-# From a live USB or a second install:
-sudo ./AsahiLocker/bin/luks-deploy.sh --list          # find your install
-sudo ./AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults
-
-# Reboot, type your passphrase, then finish on the encrypted system:
-sudo ./AsahiLocker/bin/post-encryption-setup.sh
-sudo ./AsahiLocker/boot-guards/install.sh
+sudo ./AsahiLocker/bin/ram-rescue.sh build --arm
+sudo reboot
 ```
 
+It boots into the rescue. At its prompt type `asahilocker`, then follow
+[After any route](#after-any-route). Full guide:
+[docs/RAM-RESCUE.md](docs/RAM-RESCUE.md).
+
+### B. A live USB
+
+Boot the stick ([docs/LIVE-USB.md](docs/LIVE-USB.md) builds and boots one), with
+AsahiLocker on it, then:
+
+```bash
+sudo ./AsahiLocker/bin/luks-deploy.sh --list                     # find your install
+sudo ./AsahiLocker/bin/luks-deploy.sh /dev/nvme0n1p6 --defaults  # encrypt that one
+```
+
+### C. A second Asahi install
+
+Boot the second install, clone AsahiLocker there, and run the same two commands
+as B. The install you are booted from is marked `IN USE` and cannot be chosen.
+Full guide, including removing it afterwards:
+[docs/SECOND-INSTALL.md](docs/SECOND-INSTALL.md).
+
+### After any route
+
+The script asks, in order: `encrypt` (after a summary of exactly what it will
+do), `yes` to prove Caps Lock is off, `cryptsetup`'s own `YES` (hold Shift, do
+not use Caps Lock), the new passphrase twice, the passphrase once more to open
+the volume, and Enter for a recovery key. Then it verifies 12 things and says
+whether you may reboot. Reboot, type the passphrase at the prompt (it can sit
+behind boot text: just type), and finish on the encrypted system:
+
+```bash
+sudo ./AsahiLocker/bin/post-encryption-setup.sh
+sudo ./AsahiLocker/boot-guards/install.sh
+sudo ./AsahiLocker/bin/ram-rescue.sh remove     # route A only
+```
+
+Move the recovery key (in `/root/asahilocker-pre-luks-state-*/`, or next to
+the script on a stick) to offline storage.
+
 `--defaults` takes the recommended answer to every question that has one: the
-btrfs check, the `aggressive` KDF, a recovery key. `/boot` and EFI come from
-your install's own `/etc/fstab`. What stays is what protects you: you type
-`ENCRYPT`, confirm Caps Lock is off, and choose the passphrase. Mistype the
+btrfs check, the default KDF profile (`aggressive`; `moderate` on a Mac
+with 8 GB), a recovery key. `/boot` and EFI come from your install's own
+`/etc/fstab`. What stays is what protects you: you type `encrypt`, confirm Caps
+Lock is off, and choose the passphrase. Every word the scripts ask you to type
+is lower case, so none of them sends a hand to Caps Lock just before the
+passphrase. Mistype the
 passphrase, or pick one `cryptsetup` refuses as too weak, and it asks again
 instead of making you start over. If anything is interrupted, power cut
 included, run the same command again and it picks up where it stopped.
@@ -171,6 +228,43 @@ included, run the same command again and it picks up where it stopped.
 Every script answers `--help`, and none of them needs root for that.
 
 Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
+
+---
+
+## Tested
+
+**On every push**, on GitHub's runners ([CI](https://github.com/doug445/AsahiLocker/actions/workflows/lint.yml)),
+eight suites, 177 checks; the loop-device ones on aarch64:
+
+| Suite | What it proves |
+|---|---|
+| [`loopback-core-test.sh`](tests/loopback-core-test.sh) | The exact `cryptsetup reencrypt` the script runs, on a loop device: shrink, encrypt, header and content survival, recovery key, resume after a hard kill (`cryptsetup repair`), 4096-byte sectors, a refused passphrase that must write nothing |
+| [`multi-install-selection-test.sh`](tests/multi-install-selection-test.sh) | The partition menus on a disk with two installs: the running one refused, the right root recommended, `/boot` and EFI paired with it |
+| [`luks-mount-test.sh`](tests/luks-mount-test.sh) | `luks-mount.sh` on a plain and an encrypted loop-image install |
+| [`boot-guards-test.sh`](tests/boot-guards-test.sh) | The boot guards installed over 3.1.0's under a real systemd, an overwrite of the ESP stub undone, a re-run, removal |
+| [`boot-tripwire-test.sh`](tests/boot-tripwire-test.sh) | Tampering with a `/boot` tree reported by path; what changes at every boot ignored; the live-USB `verify` |
+| [`deploy-checks-test.sh`](tests/deploy-checks-test.sh) | The default KDF per Mac, the plain-swap check, the lower-case typed words |
+| [`cli-smoke-test.sh`](tests/cli-smoke-test.sh), [`uboot-efivar-test.sh`](tests/uboot-efivar-test.sh) | Every script's command line; the U-Boot variable-file editor |
+
+**Every release since 2.1.0**, end to end in a KVM guest running the official
+Fedora Asahi Remix image: RAM rescue, encrypt, the 12-point gate, an encrypted
+boot ([docs/TESTED-SYSTEMS.md](docs/TESTED-SYSTEMS.md) has each run).
+
+**On real Macs**, with the evidence:
+
+| Mac | Who | Route | Evidence |
+|---|---|---|---|
+| MacBook Air 13" (M3) | Noah Petherbridge | second install | "Asahi Linux with LUKS Encryption", 19 Sept 2026, [kirsle.net](https://www.kirsle.net/asahi-linux-with-luks-encryption) |
+| MacBook Pro 14" (M2 Max) | [piscisaureus](https://github.com/piscisaureus) | RAM rescue | issues [#7](https://github.com/doug445/AsahiLocker/issues/7), [#8](https://github.com/doug445/AsahiLocker/issues/8), [#9](https://github.com/doug445/AsahiLocker/issues/9), fixed in 3.1.0 |
+| MacBook Air (M1), MacBook Pro 13" (M1) | [kernelzeroday](https://github.com/kernelzeroday) | RAM rescue (her builder) | [PR #5](https://github.com/doug445/AsahiLocker/pull/5) |
+| MacBook Pro 14" (M2 Max), MacBook Pro 16" (M1 Pro), MacBook Air 13" (M2) | the author | in place, in daily use | [docs/TESTED-SYSTEMS.md](docs/TESTED-SYSTEMS.md) |
+
+Every other M-series Mac, and what is known about each:
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). **Run it on yours?** [Report
+it](https://github.com/doug445/AsahiLocker/issues/new?template=hardware_report.yml),
+whether it worked or not; reports go into that table, credited. Independent
+review of the code is just as welcome, as an issue or a
+[discussion](https://github.com/doug445/AsahiLocker/discussions).
 
 ---
 
@@ -182,8 +276,8 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
   default, the maximum `cryptsetup` allows (2 and 1 GiB on request).
   Memory-hard by design, so GPU and ASIC cracking stays expensive.
 - **Every profile is stronger than `cryptsetup`'s own defaults — enforced, not
-  asserted.** The weakest profile on offer (fast) does 1.125x the work of a plain
-  `luksFormat` on the same machine, and the strongest (aggresive) does 5x. Before it writes
+  asserted.** The weakest profile on offer (`fast`) does 1.125x the work of a plain
+  `luksFormat` on the same machine, and the strongest (`aggressive`) does 5x. Before it writes
   anything the installer benchmarks what `cryptsetup` would have chosen unaided
   and refuses to ship weaker: a named profile below that bar is raised past it,
   pinned parameters below it are fatal. There is no flag to opt out.
@@ -209,10 +303,19 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
   exact `cryptsetup reencrypt` invocation it would issue, with nothing modified.
 - **Recovery you can actually use.** Optional 64-hex recovery key in a second
   keyslot, plus a labeled bundle with the LUKS header and every changed config.
-- **Asahi-specific boot guards.** Stops a stray `grub2-mkconfig` from bricking
-  an encrypted boot, and clears U-Boot's stale EFI entries — in the file they
+- **No swap left behind.** A swap partition, or a swap file outside the root,
+  would write what the kernel swaps out to the disk unencrypted. The installer
+  finds it in the install's fstab and stops until you say so; the setup after
+  the first boot checks again.
+- **Asahi-specific boot guards.** Undo a stray `grub2-mkconfig` over the ESP
+  stub the moment it happens (Fedora's own check for it never fires on Asahi:
+  it looks in the wrong directory), and clear U-Boot's stale EFI entries — in the file they
   actually live in (`ubootefi.var` on the ESP), which a runtime `efibootmgr`
-  delete never reaches.
+  delete never reaches. Re-running the installer upgrades guards from any
+  earlier release.
+- **An optional boot tripwire.** Records every file on `/boot` and the EFI
+  partition at shutdown, on the encrypted root, and tells you at the next boot
+  if any of them changed while the Mac was off.
 - **Tested in CI on every push**, on aarch64 runners, against a real loop device.
 
 ---
@@ -228,11 +331,11 @@ Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**
 | `bin/luks-tune.sh` | An ncurses front-end (`dialog`, falling back to `whiptail`) for inspecting and re-costing the argon2id parameters of keyslots on volumes that already exist. Shows the measured unlock time and what the cost buys against a GPU fleet before you commit, backs the header up first, and hands the passphrase prompt to `cryptsetup` rather than reading it. Pins `--hash sha512` so a re-cost cannot walk a slot's AF hash back to cryptsetup's `sha256` default. Never creates or destroys a keyslot, never changes a passphrase, never touches data. `--dry-run` prints the command and changes nothing. |
 | `bin/save-luks-recovery-bundle.sh` | Labeled recovery bundle: a fresh, **verified** header backup of **every** LUKS volume on the machine (not just root), the public `luksDump` of each, the **partition table** of every disk holding one (`sfdisk --dump`, so a header backup is never a puzzle about offsets), crypttab/fstab/every command-line carrier/boot entries/EFI boot variables, sha256 sums, and a README with the repair steps for this machine's initramfs style and the checks to make before any header is restored. Refreshes a stale `/boot` emergency copy (keeping the old one). Key files named in crypttab are listed, never copied. `--dry-run` writes nothing. **Key material — never attach it to a bug report.** |
 | `bin/post-encryption.conf.example` | Optional config for the above — snapper subvolumes and any extra units you want enabled post-encryption. |
-| `boot-guards/` | Two small Asahi-specific boot guards, plus an installer: **ESP stub guard** (stops a stray `grub2-mkconfig` from bricking an encrypted boot) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
-| `extras/` | Optional. `luks-fetch-cache` is an aligned LUKS/BitLocker status readout for fastfetch; it reads public header metadata only, no key material. `kbd-backlight/` lights a MacBook keyboard at 100% at the LUKS passphrase prompt: a dracut module that adds the backlight drivers to the initramfs, including the rescue image's. |
-| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`, and a passphrase refused at `cryptsetup`'s prompt, which must leave the device untouched. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Both run in CI on every push (aarch64); safe to run locally with sudo. `luks-mount-test.sh`: builds a three-partition loop image laid out like an Asahi install, plain and encrypted, and checks `luks-mount.sh` mounts `/boot` and EFI parent first from the install's own fstab, honours `--ro`, and leaves nothing mounted or unlocked however the directory is spelled. `cli-smoke-test.sh` needs no root: every script answers `--help`, refuses an option it does not know, and stops in one line without `sudo`. `uboot-efivar-test.sh` covers the U-Boot variable-file editor. |
-| `docs/` | [COMPATIBILITY](docs/COMPATIBILITY.md) · [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RAM-RESCUE](docs/RAM-RESCUE.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Encrypted /boot research](docs/BOOT-ENCRYPTION-STATUS.md) · [Release history](docs/RELEASE-HISTORY.md) |
-| `tools/boot-probe/` | **Research only, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
+| `boot-guards/` | Two small Asahi-specific boot guards, plus an installer that also upgrades older ones: **ESP stub guard** (a systemd path unit that puts the stub back the moment a stray `grub2-mkconfig` overwrites it) and **stale EFI entry cleaner** (removes U-Boot's leftover entries for unplugged USB installers — from `ubootefi.var` on the ESP, where they actually live; `uboot-efivar.py` reads and edits that file). |
+| `extras/` | Optional. `boot-tripwire/` records every file on `/boot` and the EFI partition at shutdown and reports at the next boot anything changed while the Mac was off. `luks-fetch-cache` is an aligned LUKS/BitLocker status readout for fastfetch; it reads public header metadata only, no key material. `kbd-backlight/` lights a MacBook keyboard at 100% at the LUKS passphrase prompt: a dracut module that adds the backlight drivers to the initramfs, including Fedora's 0-rescue image. |
+| `tests/` | `loopback-core-test.sh`: runs the exact encrypt/resume/recovery-key sequence against a throwaway file-backed loop device — including a hard-kill mid-reencrypt followed by `cryptsetup repair` + `--resume-only`, and a passphrase refused at `cryptsetup`'s prompt, which must leave the device untouched. `multi-install-selection-test.sh`: builds a sparse two-install disk and checks the partition menus exclude the running system, recommend the right root, and pair boot/EFI with it. Safe to run locally with sudo. `luks-mount-test.sh`: builds a three-partition loop image laid out like an Asahi install, plain and encrypted, and checks `luks-mount.sh` mounts `/boot` and EFI parent first from the install's own fstab, honours `--ro`, and leaves nothing mounted or unlocked however the directory is spelled. `cli-smoke-test.sh` needs no root: every script answers `--help`, refuses an option it does not know, and stops in one line without `sudo`. `uboot-efivar-test.sh` covers the U-Boot variable-file editor. `deploy-checks-test.sh`, `boot-tripwire-test.sh` and `boot-guards-test.sh`: see [Tested](#tested). All eight run in CI on every push, the loop-device suites on aarch64 runners. |
+| `docs/` | [COMPATIBILITY](docs/COMPATIBILITY.md) · [INSTALL](docs/INSTALL.md) · [LIVE-USB](docs/LIVE-USB.md) · [SECOND-INSTALL](docs/SECOND-INSTALL.md) · [RAM-RESCUE](docs/RAM-RESCUE.md) · [RECOVERY](docs/RECOVERY.md) · [CRYPTO](docs/CRYPTO.md) · [FAQ](docs/FAQ.md) · [U-Boot bootflow](docs/UBOOT-BOOTFLOW.md) · [Internals](docs/INTERNALS.md) · [Fleet deployment](docs/FLEET.md) · [Tested systems](docs/TESTED-SYSTEMS.md) · [Encrypted /boot research, retired](docs/BOOT-ENCRYPTION-STATUS.md) · [Release history](docs/RELEASE-HISTORY.md) |
+| `tools/boot-probe/` | **Retired research, not part of any install.** Builds throwaway LUKS containers and a self-contained GRUB 2.14 image to measure what argon2id can actually do inside GRUB under U-Boot. Touches no real volume. See [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md). |
 
 ---
 
@@ -259,14 +362,15 @@ running on top of it. Both are in the chain on Fedora Asahi Remix.
 initramfs images. The encrypted root is unlocked by the *initramfs*, not by
 GRUB — see [docs/INTERNALS.md](docs/INTERNALS.md#why-boot-stays-unencrypted).
 
-> Encrypting `/boot` is being **researched**, and the work so far is written up
-> in **[docs/BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md)** —
-> including measurements on real hardware showing GRUB's argon2id is **8.5×
-> slower than the kernel's**, and a reproducible **hard reset** past a certain
-> computation length. It is **not shipped, not enabled, and has no flag**; every
-> released version encrypts root only. Contributions and probe results from
-> other Apple Silicon machines are wanted — the open questions are listed at the
-> end of that document.
+> Encrypting `/boot` was researched here and is **retired**: not shipped, and
+> not pursued. Measured on an M2 Max, GRUB's argon2id is **8.5× slower than the
+> kernel's**, and past a certain length of computation the machine resets, so a
+> `/boot` keyslot as strong as the root's cannot be had; anything weaker becomes
+> the cheapest way in. It would not close the gap anyway: m1n1 stage 2, U-Boot
+> and GRUB sit on the EFI partition, which nothing can encrypt. An unencrypted
+> `/boot` is how LUKS is normally set up, on Fedora's installer as on Ubuntu's
+> and Debian's. The record is kept in
+> [docs/BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md).
 
 ### Partition layout, before and after
 
@@ -296,10 +400,10 @@ cost and sha256.
 | Cipher | `aes-xts-plain64`, 512-bit key (AES-256-XTS) |
 | KDF | argon2id (always — no profile selects pbkdf2) |
 | Memory cost | 4 / 2 / 1 GiB, by profile |
-| Iterations (time cost) | 10 / 8 / 9 — aggressive / moderate / `fast` |
+| Iterations (time cost) | 10 / 8 / 9 — `aggressive` / `moderate` / `fast` |
 | Parallelism | 4 threads |
 | Hash | sha512 — sets both the AF splitter hash and the LUKS2 volume-key digest |
-| Encryption sector | **4096 bytes** when the btrfs sectorsize allows it (it does on every Asahi install), else 512. Apple NVMe is a 4096-byte-sector disk and btrfs writes 4096-byte blocks; cryptsetup's default of 512 made every filesystem block eight XTS blocks with eight IVs. Verified in place for 4096-byte and 512-byte devices alike; `LUKS_SECTOR_SIZE=512` pins the old value. cryptsetup refuses 4096-byte sectors on a partition whose size is not a multiple of 4096 — and on a 512-byte-sector GPT disk the last partition never is (GPT reserves 33 sectors at the end of the disk). The script then asks: type `ALIGN` to move the partition's end down by those few bytes (the table is backed up first; type, name, GUID and attributes are kept; the filesystem, already 32 MiB smaller, loses nothing), or press Enter for 512-byte sectors. `LUKS_ALIGN_PARTITION=yes\|no` answers it non-interactively. On Apple's 4096-byte-sector NVMe the question never comes up |
+| Encryption sector | **4096 bytes** when the btrfs sectorsize allows it (it does on every Asahi install), else 512. Apple NVMe is a 4096-byte-sector disk and btrfs writes 4096-byte blocks; cryptsetup's default of 512 made every filesystem block eight XTS blocks with eight IVs. Verified in place for 4096-byte and 512-byte devices alike; `LUKS_SECTOR_SIZE=512` pins the old value. cryptsetup refuses 4096-byte sectors on a partition whose size is not a multiple of 4096 — and on a 512-byte-sector GPT disk the last partition never is (GPT reserves 33 sectors at the end of the disk). The script then asks: type `align` to move the partition's end down by those few bytes (the table is backed up first; type, name, GUID and attributes are kept; the filesystem, already 32 MiB smaller, loses nothing), or press Enter for 512-byte sectors. `LUKS_ALIGN_PARTITION=yes\|no` answers it non-interactively. On Apple's 4096-byte-sector NVMe the question never comes up |
 
 The KDF re-runs **in the initramfs at every boot**, so its memory cost must be
 allocatable there — and you pay its full cost as unlock latency on every boot.
@@ -314,7 +418,7 @@ than assumes.
 
 | Profile | Memory | Iterations | Threads | At boot, M2 Max | KDF alone, M2 Max | vs stock |
 |---------|--------|-----------|---------|-----------------|-------------------|----------|
-| `aggressive` (default) | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
+| `aggressive` (default*) | 4 GiB | 10 | 4 | **9.5 s** (measured) | 7.3 s | 5x |
 | `moderate` | 2 GiB | 8 | 4 | ~4.2 s | 3.2 s | 2x |
 | `fast` | 1 GiB | 9 | 4 | ~2.7 s | 2.0 s | 1.125x |
 
@@ -325,15 +429,19 @@ runs, re-clocked 2026-11-20 with cryptsetup 2.8.8. Boot runs about 1.3x the KDF
 alone. `luks-tune.sh` also offers `paranoid` (4 GiB x 12): 8.6 s KDF alone,
 ~11.3 s at boot.
 
+\* On every Mac with more than 8 GB. With 8 GB, whatever the chip, the default is `moderate`:
+the KDF's memory must be free in the initramfs at every boot or the volume does
+not open, and 4 GiB is half of that machine. `aggressive` stays on its menu.
+
 ![The luks-deploy.sh KDF profile prompt, showing three argon2id profiles with unlock times benchmarked on the running machine, aggressive marked as the default](docs/images/kdf-profile-menu.png)
 
 *Times shown are from an M2 Max. Your machine is benchmarked at run time, so the
 numbers you see will be your own.*
 
-**Pick `aggressive` unless you have a reason not to.** You pay the KDF once per
+**Take the default unless you have a reason not to.** You pay the KDF once per
 boot; an attacker with an image of your disk pays it once per guess. Memory cost
-only has to be allocatable in the initramfs, which has the machine to itself, so
-every profile is safe on any Asahi-supported Mac including an 8 GiB M1.
+only has to be allocatable in the initramfs, which has the machine to itself;
+on a Mac with 8 GB that is why the default is `moderate`.
 
 **[docs/CRYPTO.md](docs/CRYPTO.md)** has the rest: the full case for
 `aggressive` and what a `paranoid` profile would buy, [changing the KDF on a
@@ -406,7 +514,7 @@ after deployment** — anyone holding it can unlock the disk.
 > GRUB's own argon2id limits — the 4 GiB overflow, the firmware-dependent
 > ceiling below it — do not constrain the root volume, because GRUB never
 > unlocks it. They only matter for a volume GRUB itself must open, such as the
-> encrypted-`/boot` research. See
+> retired encrypted-`/boot` research. See
 > [docs/CRYPTO.md → GRUB and argon2id](docs/CRYPTO.md#grub-and-argon2id).
 
 ---
@@ -452,7 +560,9 @@ every action, and [docs/INTERNALS.md](docs/INTERNALS.md) documents each one.
   worst case of a damaged header.
 - **LUKS protects data at rest, not boot integrity.** Only m1n1 stage 1 is
   cryptographically verified on Asahi; `/boot` is unencrypted and unsigned. An
-  attacker with repeated physical access could tamper with the initramfs.
+  attacker with repeated physical access could tamper with the initramfs. See
+  [What this protects, and what it does not](#what-this-protects-and-what-it-does-not)
+  and the optional boot tripwire.
 - **The passphrase prompt can hide behind boot text.** If the machine looks hung
   right after GRUB, it is probably waiting — type the passphrase and press Enter.
   (The deploy strips the boot splash, and `post-encryption-setup.sh` restores
@@ -508,10 +618,11 @@ Every question and its full answer is in **[docs/FAQ.md](docs/FAQ.md)**:
 - [Why do I have to type a passphrase at every boot? Can't it use the Secure Enclave?](docs/FAQ.md#why-do-i-have-to-type-a-passphrase-at-every-boot-cant-it-use-the-secure-enclave)
 - [Which KDF does this use, and can I change it?](docs/FAQ.md#which-kdf-does-this-use-and-can-i-change-it)
 - [Why is `/boot` left unencrypted?](docs/FAQ.md#why-is-boot-left-unencrypted)
+- [Can swap leak what the encryption protects?](docs/FAQ.md#can-swap-leak-what-the-encryption-protects)
 - [What happens if the encryption is interrupted — power loss, a crash, a closed lid?](docs/FAQ.md#what-happens-if-the-encryption-is-interrupted--power-loss-a-crash-a-closed-lid)
 - [Will a quantum computer break this?](docs/FAQ.md#will-a-quantum-computer-break-this)
 - [Can I run it unattended across several machines?](docs/FAQ.md#can-i-run-it-unattended-across-several-machines)
-- [Will this work on an M1 with only 8 GB of RAM?](docs/FAQ.md#will-this-work-on-an-m1-with-only-8-gb-of-ram)
+- [Will this work on a Mac with only 8 GB of RAM?](docs/FAQ.md#will-this-work-on-a-mac-with-only-8-gb-of-ram)
 - [Does it work on anything other than Asahi?](docs/FAQ.md#does-it-work-on-anything-other-than-asahi)
 - [How do I check what I actually ended up with?](docs/FAQ.md#how-do-i-check-what-i-actually-ended-up-with)
 - [Changing your KDF after installation](docs/FAQ.md#changing-your-kdf-after-installation)
@@ -534,6 +645,7 @@ search: [live USB](https://doug445.github.io/AsahiLocker/live-usb/) ·
 | [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Every M-series Mac, laptop and desktop, tiered by evidence — and what a desktop changes at the passphrase prompt |
 | [TESTED-SYSTEMS.md](docs/TESTED-SYSTEMS.md) | The machines behind the ✅ claims — hardware, layout, what was verified and what was found |
 | [INSTALL.md](docs/INSTALL.md) | Step-by-step install, start to finish, with what each prompt means |
+| [RAM-RESCUE.md](docs/RAM-RESCUE.md) | Encrypting with no USB stick and no second install: build the rescue, encrypt, resume after a power cut, remove it |
 | [LIVE-USB.md](docs/LIVE-USB.md) | Building a Fedora Asahi live USB, and the three ways to boot it |
 | [SECOND-INSTALL.md](docs/SECOND-INSTALL.md) | The other route: encrypting from a second minimal Asahi install when the machine will not boot USB — and removing it cleanly afterwards |
 | [RECOVERY.md](docs/RECOVERY.md) | Interrupted encryption, unbootable system, corrupt header, undoing a shrink |
@@ -542,8 +654,8 @@ search: [live USB](https://doug445.github.io/AsahiLocker/live-usb/) ·
 | [UBOOT-BOOTFLOW.md](docs/UBOOT-BOOTFLOW.md) | Getting to the U-Boot prompt and booting the live USB |
 | [INTERNALS.md](docs/INTERNALS.md) | Every config file changed, the 12-point gate, self-repair, why `/boot` stays plain |
 | [FLEET.md](docs/FLEET.md) | Deploying across several M-series boxes, and the UUID-uniqueness footgun |
-| [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md) | **Research, not a feature.** Encrypted `/boot`: what has been measured, what broke, what is still unknown — and where help is wanted |
-| [BOOT-ENCRYPTION-DESIGN.md](docs/BOOT-ENCRYPTION-DESIGN.md) | **Design only, nothing implemented.** The intended encrypted-`/boot` architecture: the two unlock options and their trade-offs, retrofit rules, detached headers, release plan |
+| [BOOT-ENCRYPTION-STATUS.md](docs/BOOT-ENCRYPTION-STATUS.md) | **Retired research, kept as a record.** Encrypted `/boot`: what was measured on an M2 Max, and why it is not pursued |
+| [BOOT-ENCRYPTION-DESIGN.md](docs/BOOT-ENCRYPTION-DESIGN.md) | **Retired, never implemented.** The encrypted-`/boot` design that research was for |
 
 ---
 
@@ -566,8 +678,11 @@ description of what went wrong is rarely enough to act on.
 **[CONTRIBUTING.md](CONTRIBUTING.md)** has copy-pasteable commands for the
 things that are: a read-only diagnostic bundle, running the loopback suite and
 the CI lint checks locally, dry-running the deploy, and verifying the GRUB
-argon2 constraint on your own machine. It also covers building GRUB 2.14 with
-argon2 into a local prefix, for anyone working on the `/boot` question.
+argon2 constraint on your own machine.
+
+Ran it on your Mac? A [hardware
+report](https://github.com/doug445/AsahiLocker/issues/new?template=hardware_report.yml)
+is the most useful thing you can send, whether it worked or not.
 
 ## Audit
 
@@ -656,7 +771,7 @@ them. Nothing here has changed hands.
   partition menus to the rescue install it was running from, and that the
   cleanup afterwards needs `diskutil` and a Startup Disk change. The `IN USE`
   exclusions, the hard self-target refusal, the neighbour-aware `BOOT`/`EFI`
-  defaults, the `SIBLING` confirmation, the recovery-bundle warning and
+  defaults, the `sibling` confirmation, the recovery-bundle warning and
   [docs/SECOND-INSTALL.md](docs/SECOND-INSTALL.md) all exist because of it.
 - **[kernelzeroday](https://github.com/kernelzeroday)** — for the RAM-only
   rescue. [PR #5](https://github.com/doug445/AsahiLocker/pull/5) and

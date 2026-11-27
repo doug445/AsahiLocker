@@ -24,12 +24,16 @@ body:
       label: Which component
       options:
         - bin/luks-deploy.sh
+        - bin/ram-rescue.sh (the RAM rescue)
+        - bin/luks-mount.sh
         - bin/luks-tune.sh
         - bin/post-encryption-setup.sh
         - bin/save-luks-recovery-bundle.sh
         - boot-guards (ESP stub guard, stale EFI entry cleanup)
-        - extras/luks-fetch-cache
-        - tests/loopback-core-test.sh
+        - extras/boot-tripwire
+        - extras/kbd-backlight
+        - extras/bin/luks-fetch-cache
+        - tests/
         - Documentation
         - Not sure
     validations:
@@ -56,14 +60,14 @@ body:
     attributes:
       label: Stage number it stopped at
       description: The script prints these. If it printed a recovery command list on exit, include it below.
-      placeholder: "stage 7"
+      placeholder: "[7/8]"
 
   - type: input
     id: version
     attributes:
       label: AsahiLocker version
-      description: A release tag, or `git rev-parse --short HEAD`. Only the latest release receives fixes.
-      placeholder: "v1.5.0"
+      description: A release tag, or `git describe --tags --always --dirty`. Only the latest release receives fixes.
+      placeholder: "v4.0.0"
     validations:
       required: true
 
@@ -71,7 +75,7 @@ body:
     id: hardware
     attributes:
       label: Machine and OS
-      placeholder: "MacBook Pro M2 Max, Fedora Asahi Remix 42, kernel 6.15.x"
+      placeholder: "MacBook Pro M2 Max, Fedora Asahi Remix 45, kernel 7.3.x"
     validations:
       required: true
 

@@ -7,7 +7,7 @@ boot it.
 If the stick will not boot, **start with [`usb start`](#if-the-usb-will-not-boot)**;
 if that genuinely gets you nowhere, a second minimal Asahi install on the
 internal disk does the same job — see
-[SECOND-INSTALL.md](SECOND-INSTALL.md).
+[SECOND-INSTALL.md](SECOND-INSTALL.md) — or the RAM-only rescue ([RAM-RESCUE.md](RAM-RESCUE.md)), which needs neither a stick nor a second install.
 
 ---
 
@@ -47,8 +47,8 @@ for s in 1 2; do tr -d '\0' < /proc/device-tree/chosen/asahi,m1n1-stage$s-versio
 The two stages are upgraded separately, and **they carry different risk**.
 
 1. **Stage 2 — do this first.** It lives on the ESP and comes from Fedora's
-   `m1n1` package: `sudo dnf upgrade m1n1`, then reboot. Fedora 44 has
-   shipped 1.9.9 since October 2026. It is an ordinary package update. Then
+   `m1n1` package: `sudo dnf upgrade m1n1`, then reboot. Fedora 45 ships
+   2.0.1. It is an ordinary package update. Then
    try the stick again.
 2. **Stage 1 — the fix reported on the M3 Air.** It lives in the macOS-side
    boot stub and is only changed by the Asahi installer, run from macOS
@@ -208,7 +208,7 @@ list of blessed hardware; what there is, is experience:
   controllers.
 
 None of that is a reason to give up on encrypting the machine: if no stick
-works, [SECOND-INSTALL.md](SECOND-INSTALL.md) gets you there without one.
+works, [SECOND-INSTALL.md](SECOND-INSTALL.md) gets you there without one, or the RAM-only rescue ([RAM-RESCUE.md](RAM-RESCUE.md)), which needs neither a stick nor a second install.
 
 ### 1d. Identify your USB drive — carefully
 
@@ -418,8 +418,9 @@ replug makes Linux enumerate it, the job completes, and boot continues on its
 own. Root is not mounted yet, so this is safe.
 
 It has nothing to do with `resume=` — do not go editing the kernel command line
-for it. If the replug does not help, use
-**[SECOND-INSTALL.md](SECOND-INSTALL.md)**, which needs no USB at all.
+for it. If the replug does not help, use the RAM rescue
+(**[RAM-RESCUE.md](RAM-RESCUE.md)**) or
+**[SECOND-INSTALL.md](SECOND-INSTALL.md)**, neither of which needs USB at all.
 
 ---
 

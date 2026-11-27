@@ -1,6 +1,6 @@
 # U-Boot `bootflow` — booting the live USB on Apple Silicon
 
-The boot chain is **iBoot → m1n1 s1 → m1n1 s2 → U-Boot → bootflow → GRUB → Linux**.
+The boot chain is **iBoot → m1n1 s1 → m1n1 s2 → U-Boot → bootflow → shim → GRUB → Linux**.
 `bootflow` (U-Boot's *bootstd* subsystem) is where you manually choose what to boot —
 e.g. the Fedora Asahi live USB you need in order to run `luks-deploy.sh`, or a specific kernel when GRUB/BLS
 is misbehaving.

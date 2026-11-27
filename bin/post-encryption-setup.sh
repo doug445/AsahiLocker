@@ -45,7 +45,8 @@
 #      the first passphrase prompt was visible. --keep-splash-off (or
 #      RESTORE_SPLASH=0 in the config file) leaves it off for good.
 #      Gives the files the deploy wrote their SELinux labels, if any lack one.
-#   4. Verifies the result and prints a summary.
+#   4. Verifies the result and prints a summary: root on LUKS, crypt support
+#      in the initramfs, swap only in RAM or encrypted, no failed units.
 #
 # Written as a script on purpose: scripts do NOT source ~/.bashrc, so shell
 # aliases (cp='cp -i', rm='rm -i', cat=bat, find=fd ...) cannot corrupt it.
@@ -116,7 +117,7 @@ fi
 SNAPPER_SUBVOLS=("/.snapshots" "/home/.snapshots")
 SNAPPER_CONFIGS="root home"
 ENABLE_SNAPPER=1
-BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.timer)
+BOOT_GUARD_UNITS=(clean-stale-efi-entries.service esp-grub-stub-guard.path esp-grub-stub-guard.service)
 EXTRA_UNITS=()
 RESTORE_SPLASH=1
 
@@ -126,6 +127,13 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
 else
     warn "no config file — using built-in defaults (see post-encryption.conf.example)"
 fi
+# Up to 3.1.0 the stub guard was esp-grub-stub-guard.timer, and a config file
+# copied from that example still names it. boot-guards/install.sh now installs
+# the .path unit instead; take the new name rather than report the old one
+# absent and send the operator to install guards that are already installed.
+for i in "${!BOOT_GUARD_UNITS[@]}"; do
+    [ "${BOOT_GUARD_UNITS[$i]}" = esp-grub-stub-guard.timer ] && BOOT_GUARD_UNITS[i]=esp-grub-stub-guard.path
+done
 # The command line wins over the config file.
 [ "$KEEP_SPLASH_OFF" -eq 1 ] && RESTORE_SPLASH=0
 
@@ -216,7 +224,14 @@ enable_units "boot guards" "${BOOT_GUARD_UNITS[@]}"
 for u in "${BOOT_GUARD_UNITS[@]}"; do
     if [ ! -e "/etc/systemd/system/$u" ] && [ ! -e "/usr/lib/systemd/system/$u" ]; then
         if [ -x "$SELFDIR/../boot-guards/install.sh" ]; then
-            echo "     The boot guards are not installed yet. Install and enable them with:"
+            # A machine set up by 3.1.0 or earlier has the guards, in their
+            # old form; the same installer, run again, brings them up to date.
+            if [ -e /etc/systemd/system/esp-grub-stub-guard.timer ]; then
+                echo "     The boot guards here are an older release's (the 60-second timer of"
+                echo "     3.1.0 and earlier). Run their installer again to bring them up to date:"
+            else
+                echo "     The boot guards are not installed yet. Install and enable them with:"
+            fi
             echo "         sudo $("$READLINK" -f "$SELFDIR/../boot-guards/install.sh")"
         fi
         break
@@ -360,6 +375,32 @@ if "$GREP" -qE 'cryptsetup|dm-crypt' <<< "$INITRD_LIST"; then
 else
     warn "could not confirm crypt support in initramfs-${KVER}.img (lsinitrd unavailable, or crypt genuinely missing — check manually)"
 fi
+
+echo "  --- swap: RAM-only or encrypted? ---"
+# Swap on a plain partition, or a swap file on a filesystem outside LUKS,
+# writes memory (keys, passwords, open documents) to the disk in plain text,
+# past the encryption. luks-deploy.sh read the fstab before encrypting; this
+# checks what is actually swapping now. Fedora's default is zram, in RAM.
+PLAIN_SWAP=0
+while read -r sw_name sw_type _; do
+    [ -n "$sw_name" ] || continue
+    case "$sw_name" in /dev/zram*) ok "swap $sw_name: zram, held in RAM"; continue ;; esac
+    if [ "$sw_type" = "file" ]; then
+        sw_dev=$(/usr/bin/findmnt -no SOURCE -T "$sw_name" 2>/dev/null | "$SED" 's/\[.*//')
+    else
+        sw_dev=$sw_name
+    fi
+    # -s lists the device and everything under it: swap on LVM inside LUKS
+    # counts as encrypted too.
+    sw_types=$(/usr/bin/lsblk -s -n -o TYPE "$sw_dev" 2>/dev/null || true)
+    if [ -n "$sw_dev" ] && "$GREP" -qx crypt <<< "$sw_types"; then
+        ok "swap $sw_name: on $sw_dev, encrypted"
+    else
+        warn "swap $sw_name ($sw_type) is NOT encrypted: what is swapped out reaches the disk in plain text"
+        PLAIN_SWAP=1
+    fi
+done < <(/usr/bin/tail -n +2 /proc/swaps 2>/dev/null)
+[ "$PLAIN_SWAP" -eq 0 ] || warn "the fix: docs/FAQ.md, 'Can swap leak what the encryption protects?'"
 
 echo "  --- failed units ---"
 FAILED=$("$SYSTEMCTL" --failed --no-legend 2>/dev/null | "$WC" -l)

@@ -65,6 +65,8 @@ HELP=(
   "boot-guards/install.sh|--uninstall"
   "extras/install.sh|--uninstall"
   "extras/kbd-backlight/install.sh|--uninstall"
+  "extras/boot-tripwire/install.sh|--uninstall"
+  "extras/boot-tripwire/asahilocker-boot-tripwire|verify DIR"
   "boot-guards/bin/uboot-efivar.py|prune-stale"
 )
 
@@ -101,7 +103,7 @@ else
         if [ "$rc" -ne 0 ] && grep -qi 'sudo' <<< "$out"; then pass "$s status without root asks for sudo"
         else fail "$s status without root (exit $rc): $out"; fi
     done
-    for s in bin/post-encryption-setup.sh bin/save-luks-recovery-bundle.sh boot-guards/install.sh extras/install.sh extras/kbd-backlight/install.sh; do
+    for s in bin/post-encryption-setup.sh bin/save-luks-recovery-bundle.sh boot-guards/install.sh extras/install.sh extras/kbd-backlight/install.sh extras/boot-tripwire/install.sh; do
         out=$("$WORK/$s" 2>&1 </dev/null); rc=$?
         if [ "$rc" -ne 0 ] && grep -qi 'root' <<< "$out"; then pass "$s without root asks for root"
         else fail "$s without root (exit $rc): $out"; fi

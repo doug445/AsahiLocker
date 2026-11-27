@@ -71,7 +71,8 @@ Substitute your own root device. Confirm it first with `lsblk -f`.
 ### 3. If the deploy itself failed
 
 `luks-deploy.sh` writes a state backup to the deployment drive before it touches
-anything. Say which stage it stopped at (the script prints stage numbers), and
+anything. From the RAM rescue, attach the files in
+`/boot/asahilocker-rescue-logs/<time>/` instead (no key material). Say which stage it stopped at (the script prints stage numbers), and
 include the recovery command list it printed on exit — the cleanup trap tailors
 that list to how far the run got.
 
@@ -174,7 +175,11 @@ mokutil --sb-state
 
 ---
 
-## Building GRUB 2.14 with argon2 (for `/boot` work)
+## Building GRUB 2.14 with argon2 (historical: the `/boot` research)
+
+> The encrypted-`/boot` research this served is retired (see
+> [`docs/BOOT-ENCRYPTION-STATUS.md`](docs/BOOT-ENCRYPTION-STATUS.md)). The recipe
+> is kept because the measurements there were made with it.
 
 Fedora ships GRUB 2.12, which has no argon2 at all. Upstream added it in 2.14.
 This builds into a local prefix and **installs nothing system-wide**:

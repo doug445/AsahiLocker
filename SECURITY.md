@@ -16,7 +16,8 @@ patches.
 The [releases page](https://github.com/doug445/AsahiLocker/releases) lists every
 tag, newest first, and each release's notes record what changed in it. This
 project keeps that history in the release notes rather than in a
-`CHANGELOG.md`.
+`CHANGELOG.md` (the notes of the 18 releases removed on 2026-11-20 are in
+[`docs/RELEASE-HISTORY.md`](docs/RELEASE-HISTORY.md)).
 
 If you are running a checkout you pulled weeks ago, `git pull` and retry before
 reporting — the issue may already be fixed. Include what you are running:
@@ -47,7 +48,8 @@ first — this project's output can contain key material.
 
 ## What is in scope
 
-This tooling runs as root from a live USB, rewrites every sector of a root
+This tooling runs as root from a live USB, a second Asahi install or the
+RAM-only rescue, rewrites every sector of a root
 partition in place, enrolls keyslots, and edits `crypttab`, `fstab`, the
 initramfs, the BLS entries and the ESP. A mistake here does not degrade a
 feature — it loses a disk or hands one over. That is the interesting surface:
@@ -60,7 +62,7 @@ feature — it loses a disk or hands one over. That is the interesting surface:
 * **Weakening the crypto without saying so.** Falling back to pbkdf2, enrolling
   a keyslot below the documented argon2id floor, or reporting parameters that
   are not the ones actually written to the header. The `fast` profile's floor is
-  a hard floor by design and is not meant to be reachable from outside.
+  a hard floor by design: no flag, variable or profile goes below it.
 * **A verification gate that passes when it should not.** `luks-deploy.sh` gates
   the reboot behind its verification checks; `post-encryption-setup.sh` verifies
   the result. Either reporting success on a system that is not actually
@@ -74,8 +76,11 @@ feature — it loses a disk or hands one over. That is the interesting surface:
 * **The boot guards not guarding.** The ESP stub guard letting a stray
   `grub2-mkconfig` overwrite the stub an encrypted boot depends on, or
   `restore-esp-grub-stub.sh` restoring a stub that does not match the volume.
+  Likewise the optional boot tripwire staying silent about a file on `/boot`
+  or the EFI partition that changed while the system was off, beyond the
+  limits its README states.
 * **A read-only tool that writes.** `luks-tune.sh` must never create or destroy
-  a keyslot, change a passphrase, or touch data; `extras/luks-fetch-cache` must
+  a keyslot, change a passphrase, or touch data; `extras/bin/luks-fetch-cache` must
   read public header metadata and nothing else; `tools/boot-probe/` must touch
   no real volume. Any of those doing otherwise is in scope, `--dry-run`
   especially.
@@ -87,9 +92,10 @@ feature — it loses a disk or hands one over. That is the interesting surface:
   upstream.
 * **`/boot` being unencrypted and unsigned**, and the evil-maid class of attack
   that permits. This is architectural on Asahi today, not an oversight: only
-  m1n1 stage 1 is cryptographically verified, and GRUB in Fedora 44 has no
-  argon2 support at all. The research and its current blockers are written up in
-  [`docs/BOOT-ENCRYPTION-STATUS.md`](docs/BOOT-ENCRYPTION-STATUS.md).
+  m1n1 stage 1 is cryptographically verified, and the boot code on the EFI
+  partition is as open as `/boot`. The retired research into encrypting `/boot`
+  is kept in [`docs/BOOT-ENCRYPTION-STATUS.md`](docs/BOOT-ENCRYPTION-STATUS.md);
+  the README's "What this protects, and what it does not" sets out the limit.
 * **Having to type the passphrase at every boot.** There is no TPM on Apple
   Silicon and nowhere to seal a key. That is the platform, not a design choice.
 * **GRUB's argon2 memory ceiling**, including the 4 GiB allocation overflow.

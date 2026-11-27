@@ -1,0 +1,22 @@
+[Unit]
+Description=Watch the ESP grub.cfg stub (restores it the moment it is overwritten)
+Documentation=man:systemd.path(5)
+
+[Path]
+# The DIRECTORY that holds the stub, not the stub itself. SELinux on Fedora
+# does not let systemd (init_t) read a file on the EFI partition (dosfs_t), so
+# a watch on grub.cfg is refused, and systemd falls back without a word to
+# watching the directory for NEW files only: an overwrite goes unseen.
+# Measured on Fedora Asahi Remix 45, enforcing. A watch on the directory is
+# allowed, and it reports every file in it that is written and closed. The
+# service then compares the stub's hash, so a write to another file in the
+# directory (a GRUB or shim update) costs one hash and changes nothing.
+# PathChanged, not PathModified: it fires once the writer CLOSES the file.
+# PathModified would fire on the first write() of a rewrite, and restoring the
+# stub under a writer that is still writing leaves a mix of both files.
+# boot-guards/install.sh points this at the stub it found, through a drop-in.
+PathChanged=/boot/efi/EFI/fedora
+Unit=esp-grub-stub-guard.service
+
+[Install]
+WantedBy=paths.target

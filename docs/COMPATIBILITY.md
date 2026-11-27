@@ -17,7 +17,7 @@ there".
 | **D — device tree only** | The kernel this tooling runs on ships a device tree for the machine, but Asahi installer and boot-chain support is not confirmed here. Treat as unsupported until Asahi says otherwise |
 
 The device-tree column is a fact about the shipped kernel: on Fedora Asahi
-Remix 44, `7.1.13-402.asahi`, `/usr/lib/modules/<kver>/dtb/apple/` carries
+Remix 45, `7.3.4-401.asahi`, `/usr/lib/modules/<kver>/dtb/apple/` carries
 one file per machine below. A device tree is necessary for Linux to boot the
 machine; it is not proof that the installer, m1n1 or U-Boot are there yet.
 
@@ -25,7 +25,7 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.
 
 | SoC | Machine | Form | Tier | Evidence |
 |---|---|---|---|---|
-| **M1** `t8103` | MacBook Air (2020) `j313` | laptop | C | Asahi-supported since 2022 |
+| **M1** `t8103` | MacBook Air (2020) `j313` | laptop | C | Asahi-supported since 2022. Like every Mac with 8 GB of RAM (M2 and M3 base models too), an 8 GB M1 gets `moderate` (2 GiB × 8) as the menu default, `aggressive` on request: see [CRYPTO.md](CRYPTO.md#choosing-an-argon2id-profile) |
 | | MacBook Pro 13" (2020) `j293` | laptop | C | Asahi-supported since 2022 |
 | | Mac mini (2020) `j274` | desktop | C | Asahi-supported since 2022 |
 | | iMac 24" (2021) `j456` / `j457` | desktop | C | Asahi-supported since 2022 |
@@ -52,10 +52,13 @@ machine; it is not proof that the installer, m1n1 or U-Boot are there yet.
 | **M3 Max** `t6031` / `t6034` | MacBook Pro 14" / 16" `j514c` / `j516c` / `j514m` / `j516m` | laptop | C | |
 | **M3 Ultra** `t6032` | Mac Studio (2025) `j575d` | desktop | D | device tree shipped; not confirmed further here |
 | **M4** `t8132` | MacBook Air 13" / 15" (2025) `j713` / `j715` | laptop | D | device tree shipped; not confirmed further here |
-| | MacBook Pro 14" (2024) `j773g` | laptop | D | |
-| | Mac mini (2024) `j623` | desktop | D | |
-| | iMac 24" (2024) `j604` | desktop | D | |
-| **M4 Pro / M4 Max** `t6040` / `t6041` | MacBook Pro, Mac mini, Mac Studio | — | **none** | No device tree in the shipped kernel. Linux does not boot these yet |
+| | MacBook Pro 14" (2024) `j604` | laptop | D | |
+| | Mac mini (2024) `j773g` | desktop | D | |
+| | iMac 24" (2024) `j623` / `j624` | desktop | D | |
+| **M4 Pro** `t6040` | MacBook Pro 14" / 16" `j614s` / `j616s`, Mac mini `j773s` | laptop, desktop | D | device tree shipped; not confirmed further here |
+| **M4 Max** `t6041` | MacBook Pro 14" / 16" `j614c` / `j616c`, Mac Studio (2025) `j575c` | laptop, desktop | D | |
+| **M5** `t8142` | MacBook Pro 14" (2026) `j704`, MacBook Air 13" / 15" (2026) `j813` / `j815` | laptop | D | |
+| **A18 Pro** `t8140` | MacBook Neo (2026) `j700` | laptop | D | |
 
 Model names are matched to the `j`-codes from Asahi's platform list. If a
 specific code matters to you, confirm it against `/proc/device-tree/model` on

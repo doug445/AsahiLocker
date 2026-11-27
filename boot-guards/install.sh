@@ -35,6 +35,10 @@
 #      chainload stub, so a stray `grub2-mkconfig -o <ESP path>` cannot replace
 #      it with a full config that has no idea how to cryptomount an encrypted
 #      root. Baseline is generated FROM YOUR OWN CURRENT STUB at install time.
+#      A systemd path unit restores the stub the moment a write to it is
+#      closed, and the service checks it once more at every boot. (Up to
+#      3.1.0 this was a timer that looked every 60 seconds; installing over
+#      such a release replaces the timer.)
 #   2. clean-stale-efi-entries — deletes EFI boot entries whose GPT partition is
 #      no longer attached. U-Boot on Asahi auto-registers an entry for every
 #      shim.efi it finds on removable media, and they linger after you unplug the
@@ -91,11 +95,12 @@ HASHFILE=/root/grub-esp-stub.sha512
 # ─── Uninstall ──────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--uninstall" ]; then
     echo -e "${B}Removing Asahi boot guards...${N}"
-    for u in esp-grub-stub-guard.timer esp-grub-stub-guard.service clean-stale-efi-entries.service; do
+    # .timer: what releases up to 3.1.0 installed in place of the .path unit.
+    for u in esp-grub-stub-guard.path esp-grub-stub-guard.timer esp-grub-stub-guard.service clean-stale-efi-entries.service; do
         "$SYSTEMCTL" disable --now "$u" >/dev/null 2>&1
         "$RM" -f "$UNITS/$u"
     done
-    "$RM" -rf "$UNITS/esp-grub-stub-guard.service.d"
+    "$RM" -rf "$UNITS/esp-grub-stub-guard.service.d" "$UNITS/esp-grub-stub-guard.path.d"
     "$RM" -f "$SBIN/restore-esp-grub-stub.sh" "$SBIN/clean-stale-efi-entries.sh" "$SBIN/esp-grub-stub-rebaseline" "$SBIN/uboot-efivar.py"
     "$SYSTEMCTL" daemon-reload
     ok "boot guards removed (baseline files in /root left in place)"
@@ -140,16 +145,30 @@ fi
 # ─── 3. Units ───────────────────────────────────────────────────────────────
 "$CP" -f "$HERE/systemd/clean-stale-efi-entries.service" "$UNITS/" && ok "installed clean-stale-efi-entries.service"
 if [ "$SKIP_STUB" -eq 0 ]; then
+    # Up to 3.1.0 the guard was a timer that looked every 60 seconds. The path
+    # unit below replaces it; a timer left enabled would only add the polling
+    # back.
+    if [ -e "$UNITS/esp-grub-stub-guard.timer" ]; then
+        "$SYSTEMCTL" disable --now esp-grub-stub-guard.timer >/dev/null 2>&1
+        "$RM" -f "$UNITS/esp-grub-stub-guard.timer"
+        ok "removed esp-grub-stub-guard.timer (the 60-second check of 3.1.0 and earlier)"
+    fi
     "$CP" -f "$HERE/systemd/esp-grub-stub-guard.service" "$UNITS/"
-    "$CP" -f "$HERE/systemd/esp-grub-stub-guard.timer"   "$UNITS/"
-    # The shipped unit's ConditionPathExists names Fedora's EFI/fedora. This
-    # box's stub was found above and may live elsewhere; point the unit at the
-    # real file, or the timer fires every minute, the service is skipped on the
-    # unmet condition, and the guard is installed, enabled and inert.
-    "$MKDIR" -p "$UNITS/esp-grub-stub-guard.service.d"
-    printf '[Unit]\nConditionPathExists=\nConditionPathExists=%s\n' "$ESP" \
+    "$CP" -f "$HERE/systemd/esp-grub-stub-guard.path"    "$UNITS/"
+    # The shipped units name Fedora's EFI/fedora. This box's stub was found
+    # above and may live elsewhere; point both units at it, or the path unit
+    # watches a directory that never changes and the guard is installed,
+    # enabled and inert. The path unit watches the stub's DIRECTORY: SELinux
+    # refuses systemd a watch on the file itself (see the .path unit).
+    # The service is also told the file outright, so the guard compares and
+    # restores the very file that was baselined here rather than looking for
+    # it again at run time.
+    "$MKDIR" -p "$UNITS/esp-grub-stub-guard.service.d" "$UNITS/esp-grub-stub-guard.path.d"
+    printf '[Unit]\nConditionPathExists=\nConditionPathExists=%s\n\n[Service]\nEnvironment="ESP_GRUB_CFG=%s"\n' "$ESP" "$ESP" \
         > "$UNITS/esp-grub-stub-guard.service.d/esp-path.conf"
-    ok "installed esp-grub-stub-guard.service + .timer (watching $ESP)"
+    printf '[Path]\nPathChanged=\nPathChanged=%s\n' "${ESP%/*}" \
+        > "$UNITS/esp-grub-stub-guard.path.d/esp-path.conf"
+    ok "installed esp-grub-stub-guard.path + .service (watching $ESP)"
 fi
 "$SYSTEMCTL" daemon-reload
 
@@ -158,15 +177,21 @@ fi
     && ok "enabled clean-stale-efi-entries.service" \
     || warn "could not enable clean-stale-efi-entries.service"
 if [ "$SKIP_STUB" -eq 0 ]; then
-    "$SYSTEMCTL" enable --now esp-grub-stub-guard.timer >/dev/null 2>&1 \
-        && ok "enabled esp-grub-stub-guard.timer (checks every 60s)" \
-        || warn "could not enable esp-grub-stub-guard.timer"
+    # restart, not enable --now: on a re-install the path unit is already
+    # running, and it must pick up the directory written into its drop-in.
+    "$SYSTEMCTL" enable esp-grub-stub-guard.path >/dev/null 2>&1 \
+        && "$SYSTEMCTL" restart esp-grub-stub-guard.path >/dev/null 2>&1 \
+        && ok "enabled esp-grub-stub-guard.path (restores the stub as soon as it is written)" \
+        || warn "could not enable esp-grub-stub-guard.path"
+    "$SYSTEMCTL" enable esp-grub-stub-guard.service >/dev/null 2>&1 \
+        && ok "enabled esp-grub-stub-guard.service (one more check at every boot)" \
+        || warn "could not enable esp-grub-stub-guard.service"
 fi
 
 echo
 echo -e "${B}Done.${N} Check with:"
 echo "    systemctl status clean-stale-efi-entries.service"
-echo "    systemctl list-timers esp-grub-stub-guard.timer"
+echo "    systemctl status esp-grub-stub-guard.path"
 echo "    journalctl -t esp-grub-stub-guard -t clean-stale-efi"
 echo
 echo "If you ever change the ESP stub on purpose, re-baseline it:"

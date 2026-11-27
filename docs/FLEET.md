@@ -15,7 +15,7 @@ LUKS is the **last** step, not the first:
 2. **Restore user-space** onto the fresh install: reinstall the package set, add
    third-party repos and flatpaks, then rsync your tooling and configs.
 3. **Re-wire services** that a file-level restore leaves half-configured.
-4. **Encrypt** with `luks-deploy.sh` from the live USB.
+4. **Encrypt** with `luks-deploy.sh` from a live USB, the RAM rescue or a second install.
 5. **Post-encryption**, run `post-encryption-setup.sh` and install the boot guards.
 
 > **Never restore another box's `/etc/fstab`, `/etc/crypttab`,

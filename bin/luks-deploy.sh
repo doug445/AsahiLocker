@@ -87,9 +87,9 @@ esac
 # A root partition named on the command line takes its /boot and EFI from the
 # install's own /etc/fstab, matched by UUID: no partition menus. --defaults
 # (-y) also takes the recommended answer wherever a question has one: run the
-# btrfs check, the aggressive KDF profile, enrol a recovery key. Every safety
-# gate stays: the typed ENCRYPT, the Caps Lock check, cryptsetup's own YES
-# and the passphrase itself.
+# btrfs check, the aggressive KDF profile (moderate on a Mac with 8 GB),
+# enrol a recovery key. Every safety gate stays: the typed encrypt, the Caps
+# Lock check, cryptsetup's own YES and the passphrase itself.
 DRY_RUN="${LUKS_DRY_RUN:-0}"
 USE_DEFAULTS=0
 CLI_ROOT=""
@@ -137,7 +137,7 @@ if [ -n "${LUKS_PASSPHRASE_FILE:-}" ]; then
         || { echo "LUKS_PASSPHRASE_FILE=$LUKS_PASSPHRASE_FILE is missing, unreadable, or empty" >&2; exit 1; }
     CRYPT_PASS_ARGS=(--key-file "$LUKS_PASSPHRASE_FILE")
     # --batch-mode also skips cryptsetup's own are-you-sure prompt; this
-    # script's typed ENCRYPT gate remains the consent step.
+    # script's typed encrypt gate remains the consent step.
     CRYPT_BATCH_ARGS=(--batch-mode)
 fi
 
@@ -165,6 +165,31 @@ log()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[LUKS]${NC} $*"; }
 warn() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}[ERROR]${NC} $*" >&2; }
 fatal() { err "$@"; exit 1; }
+
+# ─── Typed confirmations ─────────────────────────────────────────────────────
+# Every word this script asks you to type is lower case: encrypt, configure,
+# swap, battery, mismatch, force, sibling, align, uuid-changed. A word in
+# capitals is what sends a hand to Caps Lock, and Caps Lock still on a moment
+# later inverts the passphrase, both times it is typed, so cryptsetup's
+# type-it-twice check passes and the boot prompt is where it shows (up to
+# 3.1.0 every one of these words was in capitals). A word in lower case cannot
+# be typed with Caps Lock on, so typing it also proves Caps Lock is off. If it
+# arrives in capitals, that is said, and the question asked again.
+#   typed_confirm <word> <prompt>
+# 0 when the word is typed; 1 for any other answer, or when input has closed.
+typed_confirm() {
+    local want="$1" prompt="$2" got caps=0
+    while :; do
+        read -r -p "$prompt" got || { echo ""; return 1; }
+        [ "$got" = "$want" ] && return 0
+        if [ -n "$got" ] && [ "$got" = "${want^^}" ] && [ "$caps" -lt 5 ]; then
+            caps=$((caps + 1))
+            warn "  That arrived as '$got': Caps Lock is on. Turn it off and type '$want' in lower case."
+            continue
+        fi
+        return 1
+    done
+}
 
 # ─── Permissions on the deployment drive ─────────────────────────────────────
 # chmod(2) SUCCEEDS and does nothing on vfat/exfat/ntfs: the mode comes from the
@@ -259,7 +284,9 @@ RELABEL
 #   aggressive  4 GiB  t=10   the default; 4 GiB is argon2id's maximum memory
 #                              cost - cryptsetup refuses anything above
 #                              4194304 KiB - so cost above it buys iterations
-#   moderate    2 GiB  t=8    balanced; half the memory, a faster boot
+#   moderate    2 GiB  t=8    balanced; half the memory, a faster boot. The
+#                              default on a Mac with 8 GB of RAM (see
+#                              kdf_default_profile below)
 #   fast        1 GiB  t=9    the FLOOR, not a discount. cryptsetup's own
 #                              default is argon2id at 1 GiB with iterations
 #                              auto-tuned to ~2000 ms -- t=8 on an M2 Max.
@@ -280,7 +307,7 @@ RELABEL
 #   LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
 #   LUKS_TARGET_EFI=/dev/nvme0n1p4 ./luks-deploy.sh
 # Each pinned device is still fstype-checked, cross-checked against the
-# target's fstab, and subject to the same typed ENCRYPT confirmation.
+# target's fstab, and subject to the same typed encrypt confirmation.
 #
 # Recovery key (2nd keyslot): prompted interactively; pin with
 #   LUKS_RECOVERY_KEY=yes|no ./luks-deploy.sh
@@ -313,18 +340,46 @@ KDF_PROFILE_MODERATE_MEM=2097152;    KDF_PROFILE_MODERATE_ITER=8
 KDF_PROFILE_FAST_MEM=1048576;        KDF_PROFILE_FAST_ITER=9
 KDF_DEFAULT_PARALLEL=4
 
+# ─── The default profile on this Mac ─────────────────────────────────────────
+# aggressive, except on a Mac with 8 GB of RAM (any chip: M1, M2 and M3 base
+# models all come with 8 GB), where the default is moderate. The KDF's memory
+# has to be free in the initramfs at every boot, or the volume does not open;
+# aggressive's 4 GiB is half of such a machine, and the initramfs only grows as
+# firmware and GPU support are added to it. moderate keeps 2 GiB of margin.
+# aggressive stays on the menu, a choice made on purpose. The rule is the RAM,
+# read from MemTotal, so it holds for any Mac Asahi adds. Prints the profile
+# name. The meminfo file can be given, for the tests.
+KDF_SMALL_RAM_KIB=12582912      # 12 GiB: an 8 GB Mac reports about 7.5 GiB
+kdf_default_profile() {
+    local mem_kib
+    mem_kib=$(awk '$1 == "MemTotal:" { print $2; exit }' "${1:-/proc/meminfo}" 2>/dev/null) || mem_kib=""
+    case "$mem_kib" in
+        ''|*[!0-9]*) ;;
+        *) if [ "$mem_kib" -lt "$KDF_SMALL_RAM_KIB" ]; then echo moderate; return 0; fi ;;
+    esac
+    echo aggressive
+}
+KDF_DEFAULT_PROFILE=$(kdf_default_profile)
+
 # Did the caller pin anything explicitly? (checked before defaults are applied)
 KDF_PINNED_BY_ENV=0
 if [ -n "${LUKS_PBKDF_MEMORY:-}" ] || [ -n "${LUKS_PBKDF_ITER:-}" ] || [ -n "${LUKS_PBKDF_PARALLEL:-}" ]; then
     KDF_PINNED_BY_ENV=1
 fi
 
-# Defaults = the aggressive profile, the strongest; the menu (or LUKS_PROFILE)
-# may replace them.
-LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$KDF_PROFILE_AGGRESSIVE_MEM}"
-LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$KDF_PROFILE_AGGRESSIVE_ITER}"
+# Defaults = this Mac's default profile; the menu (or LUKS_PROFILE) may replace
+# them. When anything is pinned in the environment, what was left out falls
+# back to aggressive on every machine, as it always has: pinned parameters must
+# come out the same on every Mac of a fleet.
+if [ "$KDF_PINNED_BY_ENV" -eq 0 ] && [ "$KDF_DEFAULT_PROFILE" = moderate ]; then
+    _kdf_mem=$KDF_PROFILE_MODERATE_MEM;   _kdf_iter=$KDF_PROFILE_MODERATE_ITER;   KDF_PROFILE_NAME="moderate"
+else
+    _kdf_mem=$KDF_PROFILE_AGGRESSIVE_MEM; _kdf_iter=$KDF_PROFILE_AGGRESSIVE_ITER; KDF_PROFILE_NAME="aggressive"
+fi
+LUKS_PBKDF_MEMORY="${LUKS_PBKDF_MEMORY:-$_kdf_mem}"
+LUKS_PBKDF_ITER="${LUKS_PBKDF_ITER:-$_kdf_iter}"
 LUKS_PBKDF_PARALLEL="${LUKS_PBKDF_PARALLEL:-$KDF_DEFAULT_PARALLEL}"
-KDF_PROFILE_NAME="aggressive"
+unset _kdf_mem _kdf_iter
 
 case "$LUKS_PBKDF_MEMORY" in ''|*[!0-9]*) echo "LUKS_PBKDF_MEMORY must be an integer (KiB)" >&2; exit 1;; esac
 case "$LUKS_PBKDF_ITER" in ''|*[!0-9]*) echo "LUKS_PBKDF_ITER must be an integer" >&2; exit 1;; esac
@@ -849,7 +904,7 @@ if [ "$ENV_KIND" = "installed" ] && [ -n "$RUNNING_ROOT_DISK" ]; then
         && ENV_KIND="live"
     # A rescue system on a Thunderbolt or USB4 NVMe enclosure reports
     # TRAN=nvme and removable=0, and would otherwise be taken for a sibling
-    # install on the internal disk -- then walked through the SIBLING
+    # install on the internal disk -- then walked through the sibling
     # confirmation and told its own drive is a rescue install to be erased.
     # HOTPLUG is the kernel's word for "this bus can go away"; it covers those
     # and plain USB alike, and Apple's internal NVMe reports 0.
@@ -914,8 +969,8 @@ for ps_dir in /sys/class/power_supply/*/; do
             err "║  Connect AC power before proceeding.                ║"
             err "╚══════════════════════════════════════════════════════╝"
             echo ""
-            read -r -p "Continue on battery? (Type 'BATTERY' to override): " BAT_OVERRIDE
-            [ "$BAT_OVERRIDE" = "BATTERY" ] || fatal "Connect AC power and try again."
+            typed_confirm battery "Continue on battery? (Type 'battery' to override): " \
+                || fatal "Connect AC power and try again."
         fi
         break
     fi
@@ -1270,8 +1325,7 @@ if [ "$ENV_KIND" = "installed" ]; then
     if [ "${LUKS_ACK_SIBLING:-0}" = "1" ]; then
         log "  LUKS_ACK_SIBLING=1 — confirmation pre-acknowledged."
     else
-        read -r -p "  Confirm (Type 'SIBLING' to proceed): " SIBLING_OK
-        [ "$SIBLING_OK" = "SIBLING" ] || fatal "Aborted for safety."
+        typed_confirm sibling "  Confirm (Type 'sibling' to proceed): " || fatal "Aborted for safety."
     fi
     unset _run_label _tgt_label
 
@@ -1320,7 +1374,7 @@ fi
 # ─── Mounted-Target Guard ────────────────────────────────────────────────────
 # Live desktops (udisks) automount internal partitions, and cryptsetup
 # reencrypt refuses busy devices — catch that NOW, not an hour after the
-# user typed ENCRYPT and walked away.
+# user typed encrypt and walked away.
 ensure_unmounted() {
     # $1 = device; offer to unmount every mountpoint it currently has
     local dev="$1" mps mp
@@ -1701,7 +1755,7 @@ if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
             echo "     last partition is normally this many bytes short of a 4096-byte multiple — and"
             echo "     cryptsetup can only encrypt in ${LUKS_SECTOR_SIZE}-byte sectors a device whose size is one."
             echo "     Two choices:"
-            echo "       ALIGN  move the end of $TARGET_ROOT down by $SECTOR_SHORT bytes: a partition-table"
+            echo "       align  move the end of $TARGET_ROOT down by $SECTOR_SHORT bytes: a partition-table"
             echo "              edit (backed up first to the deployment drive; type, name, GUID and"
             echo "              attributes kept; the filesystem, already 32 MiB smaller, is untouched),"
             echo "              then encrypt in ${LUKS_SECTOR_SIZE}-byte sectors — one XTS block per filesystem block."
@@ -1712,11 +1766,14 @@ if [ "$DEPLOY_MODE" != "config-only" ] && [ "$LUKS_SECTOR_SIZE" -gt 512 ]; then
                 no|NO)   LUKS_SECTOR_SIZE=512; log "  LUKS_ALIGN_PARTITION=no: 512-byte LUKS sectors" ;;
                 "")
                     if [ "$DRY_RUN" = "1" ]; then
-                        log "  [dry-run] a real run asks here; LUKS_ALIGN_PARTITION=yes|no answers it. Showing the ALIGN plan."
+                        log "  [dry-run] a real run asks here; LUKS_ALIGN_PARTITION=yes|no answers it. Showing the align plan."
                         SECTOR_ALIGN=1
                     else
-                        read -r -p "  Type 'ALIGN' to move the partition end, or press Enter for 512-byte sectors: " ALIGN_CHOICE
-                        if [ "${ALIGN_CHOICE:-}" = "ALIGN" ]; then SECTOR_ALIGN=1; else LUKS_SECTOR_SIZE=512; log "  Keeping the partition as it is: 512-byte LUKS sectors"; fi
+                        if typed_confirm align "  Type 'align' to move the partition end, or press Enter for 512-byte sectors: "; then
+                            SECTOR_ALIGN=1
+                        else
+                            LUKS_SECTOR_SIZE=512; log "  Keeping the partition as it is: 512-byte LUKS sectors"
+                        fi
                     fi ;;
                 *) fatal "LUKS_ALIGN_PARTITION must be yes or no (got '$LUKS_ALIGN_PARTITION')" ;;
             esac
@@ -1803,12 +1860,95 @@ cross_check_part() {
     err "    Target fstab wants: UUID=$want for $2"
     err "  The selected $1 partition likely belongs to a DIFFERENT install on"
     err "  this machine. Writing boot config there would break BOTH systems."
-    read -r -p "  Use $3 anyway? (Type 'MISMATCH' to override): " XCHK
-    [ "$XCHK" = "MISMATCH" ] || fatal "Fix the partition selection and re-run."
+    typed_confirm mismatch "  Use $3 anyway? (Type 'mismatch' to override): " \
+        || fatal "Fix the partition selection and re-run."
 }
 log "Cross-checking selected BOOT/EFI partitions against the target's fstab..."
 cross_check_part "BOOT" "/boot"     "$TARGET_BOOT" "$BOOT_UUID"
 cross_check_part "EFI"  "/boot/efi" "$TARGET_EFI"  "$EFI_UUID"
+
+# ─── Swap the encryption would not cover ────────────────────────────────────
+# Swap holds whatever the kernel pages out of memory: keys, passwords, open
+# documents. Fedora Asahi Remix swaps to zram, which is RAM and never reaches
+# the disk. A swap partition or swap file set up by hand is another matter: a
+# partition is not the root partition and stays plain, and so does a swap file
+# on any filesystem but the root's. Encrypting the root alone would leave a
+# plain-text copy of whatever was swapped out, on the same disk.
+#
+#   swap_plain_entries <fstab> <crypttab> <root-btrfs-uuid> [<systemd-unit-dir>]
+# Prints "<swap>  <why>" for each swap, from the fstab and from any *.swap
+# unit, that the encryption will NOT cover. Prints nothing when every swap is
+# zram, a mapper that crypttab lists, or a file on the root filesystem. Reads
+# only the files it is given, so tests/swap-check-test.sh can drive it.
+swap_plain_entries() {
+    local fstab="$1" crypttab="$2" root_uuid="$3" unitdir="${4:-}" spec src mp best len u
+    _in_crypttab() { awk -v n="$1" '$1 !~ /^#/ && $1 == n { f = 1 } END { exit !f }' "$crypttab" 2>/dev/null; }
+    {
+        awk '$1 !~ /^#/ && $3 == "swap" { print $1 }' "$fstab" 2>/dev/null
+        if [ -n "$unitdir" ]; then
+            for u in "$unitdir"/*.swap; do
+                [ -f "$u" ] && sed -n 's/^[[:space:]]*What=[[:space:]]*//p' "$u"
+            done
+        fi
+    } | while IFS= read -r spec; do
+        case "$spec" in
+            /dev/zram*) ;;
+            /dev/mapper/*)
+                _in_crypttab "${spec#/dev/mapper/}" \
+                    || echo "$spec  a device-mapper device that crypttab does not list: not known to be encrypted" ;;
+            UUID=*|PARTUUID=*|LABEL=*|PARTLABEL=*|/dev/*)
+                echo "$spec  a swap partition: it stays plain, outside the encrypted root" ;;
+            /*)
+                # A swap file is on whichever fstab filesystem has the longest
+                # mount point that is a prefix of its path. The trailing slash
+                # comes off first, in a variable of its own: "${mp%/}"/* as a
+                # case pattern does not match anything when mp is "/" (bash
+                # 5.3), which put every swap file on the root down as plain.
+                best=""; len=-1
+                while read -r src mp; do
+                    mp=${mp%/}
+                    case "$spec" in
+                        "$mp"/*) if [ "${#mp}" -gt "$len" ]; then best=$src; len=${#mp}; fi ;;
+                    esac
+                done < <(awk '$1 !~ /^#/ && $2 ~ /^\// && $3 != "swap" { print $1, $2 }' "$fstab" 2>/dev/null)
+                case "$best" in
+                    "UUID=$root_uuid") ;;
+                    /dev/mapper/*)
+                        _in_crypttab "${best#/dev/mapper/}" \
+                            || echo "$spec  a swap file on $best, which crypttab does not list: not known to be encrypted" ;;
+                    *) echo "$spec  a swap file on ${best:-a filesystem the fstab does not name}: it stays plain" ;;
+                esac ;;
+            *) echo "$spec  a kind of swap this check does not know: taken as plain" ;;
+        esac
+    done
+    return 0
+}
+SWAP_PLAIN=$(swap_plain_entries "$TARGET_FSTAB" "/mnt_temp/${ROOT_SUBVOL}/etc/crypttab" \
+                 "$BTRFS_UUID" "/mnt_temp/${ROOT_SUBVOL}/etc/systemd/system")
+if [ -z "$SWAP_PLAIN" ]; then
+    log "Swap: nothing on the disk outside the encryption (zram, or none)."
+else
+    echo ""
+    warn "This install swaps to the disk OUTSIDE the encryption:"
+    while IFS= read -r _sw; do warn "    $_sw"; done <<< "$SWAP_PLAIN"
+    unset _sw
+    warn "  Whatever the kernel swaps out (keys, passwords, open documents) would"
+    warn "  reach the disk in plain text, encrypted root or not. Fedora's own"
+    warn "  default, zram, swaps to RAM and never touches the disk. How to switch"
+    warn "  to it, or to encrypt the swap instead: docs/FAQ.md, 'Can swap leak"
+    warn "  what the encryption protects?'"
+    # Only a fresh encryption stops here. A resume has to finish whatever the
+    # swap, and a config-only run comes after the encryption: the warning is
+    # what they need.
+    if [ "$DEPLOY_MODE" = "encrypt" ]; then
+        if [ "$DRY_RUN" = "1" ]; then
+            log "[dry-run] A real run stops here until you type swap."
+        else
+            typed_confirm swap "  Encrypt anyway, and fix the swap afterwards? (Type 'swap' to continue): " \
+                || fatal "Stopped at the swap check. Fix the swap first (see above), or run again and type swap."
+        fi
+    fi
+fi
 
 # ─── Pre-Encryption State Backup (next to this script) ──────────────────────
 log "  Saving pre-encryption state next to this script..."
@@ -1887,8 +2027,8 @@ if [ "$DO_CHECK" != "n" ] && [ "$DO_CHECK" != "N" ]; then
         log "  Btrfs check: PASSED"
     else
         err "  Btrfs check found errors!"
-        read -r -p "  Continue despite btrfs errors? (Type 'FORCE' to override): " btrfs_override
-        [ "$btrfs_override" = "FORCE" ] || fatal "Fix btrfs errors before encrypting."
+        typed_confirm force "  Continue despite btrfs errors? (Type 'force' to override): " \
+            || fatal "Fix btrfs errors before encrypting."
     fi
 else
     warn "  Skipping btrfs check."
@@ -1904,10 +2044,18 @@ elif [ "$KDF_PINNED_BY_ENV" -eq 1 ]; then
     KDF_PROFILE_NAME="custom (pinned by environment)"
     log "KDF pinned via environment: mem=$((LUKS_PBKDF_MEMORY / 1024)) MiB iters=$LUKS_PBKDF_ITER parallel=$LUKS_PBKDF_PARALLEL"
 elif [ -n "${LUKS_PROFILE:-}" ] || [ "$USE_DEFAULTS" = 1 ]; then
-    LUKS_PROFILE="${LUKS_PROFILE:-aggressive}"
+    if [ -n "${LUKS_PROFILE:-}" ]; then
+        _kdf_why="LUKS_PROFILE"
+    elif [ "$KDF_DEFAULT_PROFILE" = moderate ]; then
+        _kdf_why="--defaults: the default on a Mac with 8 GB of RAM"
+    else
+        _kdf_why="--defaults"
+    fi
+    LUKS_PROFILE="${LUKS_PROFILE:-$KDF_DEFAULT_PROFILE}"
     apply_kdf_profile "$LUKS_PROFILE" \
         || fatal "Unknown LUKS_PROFILE '$LUKS_PROFILE' (expected: aggressive, moderate, or fast)"
-    log "KDF profile: $KDF_PROFILE_NAME (LUKS_PROFILE or --defaults)"
+    log "KDF profile: $KDF_PROFILE_NAME ($_kdf_why)"
+    unset _kdf_why
 else
     echo ""
     log "Benchmarking argon2id on this machine to estimate unlock times..."
@@ -1922,12 +2070,19 @@ else
     echo "   All three are argon2id. None uses pbkdf2."
     echo "  ════════════════════════════════════════════════════════════"
     echo ""
-    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s   [default]\n" "$(kdf_fmt_ms "${EST_AGG:-}")"
+    # The menu as it reads on every Mac but one with 8 GB, where moderate
+    # is the default and the closing paragraph says why.
+    if [ "$KDF_DEFAULT_PROFILE" = moderate ]; then
+        KDF_DEFAULT_CHOICE=2; _mark1="";              _mark2="   [default]"
+    else
+        KDF_DEFAULT_CHOICE=1; _mark1="   [default]";  _mark2=""
+    fi
+    printf "   1) aggressive    4 GiB, 10 iterations    unlock ~%s%s\n" "$(kdf_fmt_ms "${EST_AGG:-}")" "$_mark1"
     echo   "      Strongest. A 24 GB GPU fits only ~6 guesses at once"
     echo   "      against this. 4 GiB is argon2id's maximum memory cost,"
     echo   "      so anything beyond it has to buy iterations instead."
     echo ""
-    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_MOD:-}")"
+    printf "   2) moderate      2 GiB,  8 iterations    unlock ~%s%s\n" "$(kdf_fmt_ms "${EST_MOD:-}")" "$_mark2"
     echo   "      Strong. ~12 concurrent guesses on that same GPU."
     echo ""
     printf "   3) fast          1 GiB,  9 iterations    unlock ~%s\n" "$(kdf_fmt_ms "${EST_FAST:-}")"
@@ -1945,15 +2100,23 @@ else
     echo "   approximate, and they shift with system load. cryptsetup"
     echo "   clamps the benchmark to what it can allocate right now, so"
     echo "   a profile above that clamp is extrapolated, not measured."
-    echo "   You wait this long at EVERY boot. All three fit in the"
-    echo "   initramfs, which has the machine to itself — so any of"
-    echo "   them is safe on any Asahi-supported Mac."
+    if [ "$KDF_DEFAULT_PROFILE" = moderate ]; then
+        echo "   This Mac has 8 GB of RAM, so moderate is"
+        echo "   the default here: the KDF's memory must be free in the"
+        echo "   initramfs at every boot, and 4 GiB is half of this"
+        echo "   machine. aggressive is still yours to choose: type 1."
+    else
+        echo "   You wait this long at EVERY boot. All three fit in the"
+        echo "   initramfs, which has the machine to itself — so any of"
+        echo "   them is safe on any Asahi-supported Mac."
+    fi
     echo ""
+    unset _mark1 _mark2
     # Re-prompt on a typo: by this point the user may have sat through a
     # 5-30 minute btrfs check, so a mistyped digit must not abort the run.
     while true; do
-        read -r -p "  Select KDF profile [1-3, default 1=aggressive]: " KDF_CHOICE
-        case "${KDF_CHOICE:-1}" in
+        read -r -p "  Select KDF profile [1-3, default ${KDF_DEFAULT_CHOICE}=${KDF_DEFAULT_PROFILE}]: " KDF_CHOICE
+        case "${KDF_CHOICE:-$KDF_DEFAULT_CHOICE}" in
             1) apply_kdf_profile aggressive; break ;;
             2) apply_kdf_profile moderate;   break ;;
             3) apply_kdf_profile fast;       break ;;
@@ -2050,11 +2213,9 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$DEPLOY_MODE" = "config-only" ]; then
-    read -r -p "Type 'CONFIGURE' to redo the configuration phase: " CONFIRM
-    [ "$CONFIRM" = "CONFIGURE" ] || fatal "Aborted."
+    typed_confirm configure "Type 'configure' to redo the configuration phase: " || fatal "Aborted."
 else
-    read -r -p "Type 'ENCRYPT' to begin — there is no going back: " CONFIRM
-    [ "$CONFIRM" = "ENCRYPT" ] || fatal "Aborted."
+    typed_confirm encrypt "Type 'encrypt' to begin — there is no going back: " || fatal "Aborted."
 fi
 RECOVERY_HINTS=1
 
@@ -2196,7 +2357,7 @@ else
     # --pbkdf-force-iterations REPLACES time benchmarking, so no --iter-time here.
     # Unlock at boot re-runs this KDF inside the initramfs, so LUKS_PBKDF_MEMORY KiB
     # must be allocatable there — fine for every profile: the initramfs has the
-    # machine to itself, so even 4 GiB (aggressive) fits on an 8 GiB M1.
+    # machine to itself; on an 8 GB Mac moderate is the default (above).
     #
     # In a loop, for one reason: cryptsetup takes the passphrase BEFORE it
     # writes anything, and ends there if the two entries differ, if the quality
@@ -2300,8 +2461,8 @@ if [ "$INNER_UUID" != "$BTRFS_UUID" ]; then
     err "  filesystem. It usually means the open mapper is backed by a DIFFERENT"
     err "  device than expected, or the filesystem was damaged. Continuing"
     err "  would write boot configuration for the wrong system."
-    read -r -p "  Continue with UUID $INNER_UUID anyway? (Type 'UUID-CHANGED' to override): " UUID_OVERRIDE
-    [ "$UUID_OVERRIDE" = "UUID-CHANGED" ] || fatal "Aborted — investigate before configuring anything."
+    typed_confirm uuid-changed "  Continue with UUID $INNER_UUID anyway? (Type 'uuid-changed' to override): " \
+        || fatal "Aborted — investigate before configuring anything."
     warn "  Override accepted — updating BTRFS_UUID to $INNER_UUID."
     BTRFS_UUID="$INNER_UUID"
 fi
