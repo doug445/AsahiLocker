@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-10-28">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Build and boot a Fedora Asahi Remix live USB on an Apple Silicon Mac",
       "description": "How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-10-28",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">How to build a Fedora Asahi Remix live USB with asahi-fedora-usb and boot it on an Apple Silicon Mac (M1, M2, M3): the m1n1 requirement for M3, and what to do when U-Boot cannot see the stick.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/LIVE-USB.md"><code>docs/LIVE-USB.md</code></a> from the repository,
-      last changed 2026-10-28.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
@@ -110,7 +110,7 @@ boot it.</p>
 <p>If the stick will not boot, <strong>start with <a href="#if-the-usb-will-not-boot"><code>usb start</code></a></strong>;
 if that genuinely gets you nowhere, a second minimal Asahi install on the
 internal disk does the same job — see
-<a href="../second-install/">SECOND-INSTALL.md</a>.</p>
+<a href="../second-install/">SECOND-INSTALL.md</a> — or the RAM-only rescue (<a href="../ram-rescue/">RAM-RESCUE.md</a>), which needs neither a stick nor a second install.</p>
 <hr>
 <h2 id="the-apple-silicon-prerequisite">The Apple Silicon prerequisite</h2>
 <blockquote>
@@ -141,8 +141,8 @@ device tree:</p>
 <ol>
 <li>
 <p><strong>Stage 2 — do this first.</strong> It lives on the ESP and comes from Fedora's
-<code>m1n1</code> package: <code>sudo dnf upgrade m1n1</code>, then reboot. Fedora 44 has
-shipped 1.9.9 since October 2026. It is an ordinary package update. Then
+<code>m1n1</code> package: <code>sudo dnf upgrade m1n1</code>, then reboot. Fedora 45 ships
+2.0.1. It is an ordinary package update. Then
 try the stick again.</p>
 </li>
 <li>
@@ -276,7 +276,7 @@ USB stack is not Linux's, and it is far less forgiving of slow or quirky
 controllers.</li>
 </ul>
 <p>None of that is a reason to give up on encrypting the machine: if no stick
-works, <a href="../second-install/">SECOND-INSTALL.md</a> gets you there without one.</p>
+works, <a href="../second-install/">SECOND-INSTALL.md</a> gets you there without one, or the RAM-only rescue (<a href="../ram-rescue/">RAM-RESCUE.md</a>), which needs neither a stick nor a second install.</p>
 <h3 id="1d-identify-your-usb-drive--carefully">1d. Identify your USB drive — carefully</h3>
 <div class="codeblock"><pre><code>lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,VENDOR,LABEL</code></pre></div>
 <p>Find the entry matching your USB stick by <strong>size and model</strong>. Confirm it is not
@@ -427,8 +427,9 @@ bug, not a problem with your build:
 replug makes Linux enumerate it, the job completes, and boot continues on its
 own. Root is not mounted yet, so this is safe.</p>
 <p>It has nothing to do with <code>resume=</code> — do not go editing the kernel command line
-for it. If the replug does not help, use
-<strong><a href="../second-install/">SECOND-INSTALL.md</a></strong>, which needs no USB at all.</p>
+for it. If the replug does not help, use the RAM rescue
+(<strong><a href="../ram-rescue/">RAM-RESCUE.md</a></strong>) or
+<strong><a href="../second-install/">SECOND-INSTALL.md</a></strong>, neither of which needs USB at all.</p>
 <hr>
 <h2 id="once-booted">Once booted</h2>
 <p>Log in as <code>root</code> / <code>fedora</code>, then continue with
@@ -450,7 +451,7 @@ internal disk without rebuilding.</p>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-10-28.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

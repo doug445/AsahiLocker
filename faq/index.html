@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-11-20">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Asahi Linux disk encryption: frequently asked questions",
       "description": "Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-11-20",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Answers on encrypting Asahi Linux after install: is macOS safe, why a passphrase at every boot, the Secure Enclave, why /boot stays clear, interruptions, 8 GB M1 Macs, and checking what you ended up with.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/FAQ.md"><code>docs/FAQ.md</code></a> from the repository,
-      last changed 2026-11-20.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
@@ -129,19 +129,33 @@ iteration and thread costs freely, at deploy time or on an existing volume; see
 What you cannot sensibly do is swap the algorithm out — see
 <a href="../argon2id/#never-use-pbkdf2">Never use pbkdf2</a>.</p>
 <h2 id="why-is-boot-left-unencrypted">Why is <code>/boot</code> left unencrypted?</h2>
-<p>GRUB has to read the kernel and initramfs before anything is unlocked. The
-encrypted root is opened by the <em>initramfs</em>, not by GRUB, so keeping <code>/boot</code>
-plain avoids putting GRUB on the unlock path at all — where the KDF is limited
-by however much heap the <strong>firmware</strong> grants it, and where GRUB 2.12 (current
-in Fedora 44) has no argon2 support whatsoever. With GRUB 2.14 (which does
-support argon2id), that firmware limit has always been 1 GiB on x86 vendor
-UEFI; under Asahi's U-Boot it is higher — this project's self-built GRUB 2.14
-measured 2 GiB working on an M2 Max. Exceeding whatever the firmware affords
-does not mean a slow boot, it means no boot: GRUB fails to allocate. And at
-exactly 4 GiB it is worse than a failure — a 32-bit overflow in its
-<code>argon2_init</code> wraps the allocation to zero, so it proceeds instead of rejecting
-the parameters. The trade-off of keeping <code>/boot</code> plain is that it is unsigned;
-see <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#risks--read-this">Risks</a>.</p>
+<p>Because that is the normal LUKS arrangement, and because encrypting it on a
+Mac would cost a great deal and protect almost nothing.</p>
+<ul>
+<li>
+<strong>It is how encrypted Linux is normally installed.</strong> Fedora's own installer,
+with "Encrypt my data" ticked, leaves <code>/boot</code> unencrypted; so do Ubuntu's and
+Debian's. The kernel and initramfs are read from <code>/boot</code>, and the initramfs
+unlocks the root. That is exactly what AsahiLocker sets up.</li>
+<li>
+<strong>On Apple Silicon it would move the weak spot, not remove it.</strong> m1n1
+stage 2, U-Boot and GRUB live on the EFI partition, which nothing can
+encrypt and nothing on this platform verifies (only m1n1 stage 1 is
+verified). Anyone who could change <code>/boot</code> could change those instead.</li>
+<li>
+<strong>GRUB is the wrong place to run argon2id.</strong> Measured on an M2 Max, GRUB's
+argon2id is 8.5 times slower than the kernel's. The root's 4 GiB x 10 would
+take about 80 seconds there, past the point where the machine was seen to
+reset (somewhere between 40 and 80 seconds of uninterrupted work), and GRUB
+cannot take 4 GiB at all: a 32-bit overflow in its <code>argon2_init</code>. Whatever
+fits is a weaker keyslot than the root's, and so the cheapest way in.
+GRUB 2.12, the one in Fedora 45, has no argon2 support at all.</li>
+</ul>
+<p>The research that measured all this is retired and kept as a record:
+<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/BOOT-ENCRYPTION-STATUS.md">BOOT-ENCRYPTION-STATUS.md</a>. What is left open by
+an unencrypted, unsigned <code>/boot</code>, and what helps (the optional boot tripwire
+that reports changes to it), is in
+<a href="https://github.com/doug445/AsahiLocker/blob/main/README.md#what-this-protects-and-what-it-does-not">What this protects, and what it does not</a>.</p>
 <h2 id="what-happens-if-the-encryption-is-interrupted--power-loss-a-crash-a-closed-lid">What happens if the encryption is interrupted — power loss, a crash, a closed lid?</h2>
 <p>Nothing fatal. LUKS2 re-encryption is journaled with checksum resilience. Re-run
 <code>luks-deploy.sh</code> and it detects the interrupted state and resumes it
@@ -184,7 +198,7 @@ diceware words instead of eight.</li>
 </ul>
 <p>What quantum <em>will</em> eventually change, for context: TLS and SSH key exchange,
 GPG or age files encrypted to RSA/ECC public keys, and the RSA signatures that
-Secure Boot verifies — including on a UKI this tool re-signs. Those are the
+Secure Boot verifies (not used on Asahi). Those are the
 firmware and protocol ecosystems' migrations, they are not a way into the data
 on this disk, and the disk does not need to wait for them.</p>
 <h2 id="can-i-run-it-unattended-across-several-machines">Can I run it unattended across several machines?</h2>
@@ -193,12 +207,45 @@ on this disk, and the disk does not need to wait for them.</p>
 <code>LUKS_PASSPHRASE_FILE</code> supplies the passphrase, so no menu appears. Read
 <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/FLEET.md">docs/FLEET.md</a> first — there is a real UUID-uniqueness footgun
 when imaging several boxes from one source.</p>
-<h2 id="will-this-work-on-an-m1-with-only-8-gb-of-ram">Will this work on an M1 with only 8 GB of RAM?</h2>
-<p>Yes, on any profile including <code>aggressive</code> at 4 GiB. The memory cost only has to
-be allocatable in the initramfs, which has the machine entirely to itself. A base
-M1 is slower than an M2 Max at identical parameters because argon2id is
-memory-bandwidth-bound — which is why the installer benchmarks your machine
+<h2 id="will-this-work-on-a-mac-with-only-8-gb-of-ram">Will this work on a Mac with only 8 GB of RAM?</h2>
+<p>Yes. On any Mac with 8 GB, M1, M2 or M3 alike, the default profile is
+<code>moderate</code>, 2 GiB x 8: twice the work per guess of <code>cryptsetup</code>'s own default,
+and the one the menu and <code>--defaults</code> choose there. The KDF's memory has to be
+free in the initramfs at every boot or the volume does not open; 4 GiB is half
+of an 8 GB machine, and the initramfs only grows as firmware and GPU support are
+added to it. The rule is the RAM, not the chip. <code>aggressive</code> stays on the menu,
+and <code>LUKS_PROFILE=aggressive</code> takes it. Every Mac with more than 8 GB keeps
+<code>aggressive</code> as the default.</p>
+<p>A base M1 is slower than an M2 Max at identical parameters because argon2id is
+memory-bandwidth-bound, which is why the installer benchmarks your machine
 instead of quoting someone else's numbers.</p>
+<h2 id="can-swap-leak-what-the-encryption-protects">Can swap leak what the encryption protects?</h2>
+<p>Only if it is on the disk outside the encryption. Fedora Asahi Remix swaps to
+<strong>zram</strong>, compressed RAM that never reaches the disk; that needs nothing. A
+swap <em>partition</em>, or a swap <em>file</em> on any filesystem but the root (on <code>/boot</code>,
+say), stays plain: whatever the kernel swaps out, keys, passwords and open
+documents included, lands on the disk unencrypted, root encrypted or not. A
+swap file on the root filesystem is inside the encryption and fine.</p>
+<p><code>luks-deploy.sh</code> reads the install's fstab and its <code>.swap</code> units before it
+encrypts, names any such swap and stops until you type <code>swap</code>;
+<code>post-encryption-setup.sh</code> checks again what is actually swapping.</p>
+<p>Two ways to fix it, on the encrypted system:</p>
+<p><strong>Swap to zram only, Fedora's default</strong> (the simple one):</p>
+<div class="codeblock"><pre><code>sudo swapoff /boot/swapfile     <span class="pl-c"><span class="pl-c">#</span> the swap the check named</span>
+sudoedit /etc/fstab             <span class="pl-c"><span class="pl-c">#</span> delete its line</span>
+sudo rm /boot/swapfile</code></pre></div>
+<p>For a swap partition, <code>swapoff</code> it and delete its fstab line the same way. Its
+old contents are still on it in plain text: <code>sudo blkdiscard /dev/nvme0n1pN</code>
+discards them; then reuse or delete the partition.</p>
+<p><strong>Keep a disk swap, encrypted with a new random key at every boot.</strong> In
+<code>/etc/crypttab</code>, and in <code>/etc/fstab</code> in place of the old swap line:</p>
+<div class="codeblock"><pre><code>swap  PARTUUID=&lt;its PARTUUID&gt;  /dev/urandom  swap,cipher=aes-xts-plain64,size=512,sector-size=4096
+/dev/mapper/swap  none  swap  defaults  0 0
+</code></pre></div>
+<p>Name the partition by <code>PARTUUID</code> (<code>lsblk -o NAME,PARTUUID</code>), never <code>UUID=</code> or
+<code>LABEL=</code>: the random key rewrites the swap signature at every boot, and the
+filesystem UUID with it. Nothing survives a reboot, so there is no hibernation,
+which Asahi does not offer anyway.</p>
 <h2 id="does-it-work-on-anything-other-than-asahi">Does it work on anything other than Asahi?</h2>
 <p>No. AsahiLocker is for Fedora Asahi Remix on Apple Silicon (aarch64) only. The
 boot guards, the ESP stub handling and the U-Boot documentation are
@@ -244,7 +291,7 @@ the <a href="https://github.com/doug445/AsahiLocker/blob/main/README.md">README<
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-20.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-11-20">
-<meta property="article:modified_time" content="2026-11-25">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Encrypting Fedora Asahi Remix from a RAM-only rescue, with no USB stick",
       "description": "Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.",
       "datePublished": "2026-11-20",
-      "dateModified": "2026-11-25",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Encrypt an installed Fedora Asahi Remix system with LUKS2 without a USB stick or a second install: AsahiLocker's ram-rescue.sh boots your own kernel from RAM and encrypts the root in place, surviving a power cut midway.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RAM-RESCUE.md"><code>docs/RAM-RESCUE.md</code></a> from the repository,
-      last changed 2026-11-25.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
@@ -156,7 +156,8 @@ including a root that is already encrypted.</li>
 partition, exactly as the other two do.</li>
 </ul>
 <p>RAM is not a concern on any Apple Silicon Mac. The image is small, and the
-Argon2id KDF needs at most the memory of the profile you pick (1–4 GiB).</p>
+Argon2id KDF needs at most the memory of the profile you pick (1–4 GiB). On a
+Mac with 8 GB the default profile is <code>moderate</code>, 2 GiB.</p>
 <h2 id="step-1--build-the-rescue">Step 1 — Build the rescue</h2>
 <p>On the Mac you are about to encrypt, booted normally:</p>
 <div class="codeblock"><pre><code>git clone https://github.com/doug445/AsahiLocker.git
@@ -297,9 +298,8 @@ same way it treats a live USB's overlay. On top of that:</p>
 </table></div>
 <h2 id="tested">Tested</h2>
 <p>Tested end to end in a KVM guest running the official Fedora Asahi Remix 45
-image, including a power cut in the middle of the encryption. Not yet run on
-Apple hardware. kernelzeroday first demonstrated this route, on M1 hardware,
-in PR #5 and <a href="https://github.com/kernelzeroday/asahi-ram-rescue">asahi-ram-rescue</a>.</p>
+image, including a power cut in the middle of the encryption, and tested and
+deployed on an M2 Max.</p>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <div class="table-scroll"><table>
 <thead>
@@ -351,7 +351,7 @@ the other two routes</li>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-25.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

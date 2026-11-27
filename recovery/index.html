@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-11-25">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Recovery: every failure mode of in-place LUKS2 encryption on Asahi, and the way out",
       "description": "Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-11-25",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Every failure mode of in-place LUKS2 encryption on Fedora Asahi Remix and how to get out: undoing the btrfs shrink, resuming an interrupted re-encryption, repairing an encrypted root that will not boot.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/RECOVERY.md"><code>docs/RECOVERY.md</code></a> from the repository,
-      last changed 2026-11-25.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
@@ -235,6 +235,7 @@ cat /etc/dracut.conf.d/99-luks.conf          <span class="pl-c"><span class="pl-
 
 <span class="pl-c"><span class="pl-c">#</span> dracut modules</span>
 <span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">'</span>add_dracutmodules+=" crypt dm btrfs "<span class="pl-pds">'</span></span> <span class="pl-k">&gt;</span> /etc/dracut.conf.d/99-luks.conf
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">'</span>add_drivers+=" dm-crypt "<span class="pl-pds">'</span></span> <span class="pl-k">&gt;&gt;</span> /etc/dracut.conf.d/99-luks.conf
 
 <span class="pl-c"><span class="pl-c">#</span> rebuild every initramfs</span>
 dracut --regenerate-all --force
@@ -347,7 +348,8 @@ sudo umount /mnt <span class="pl-k">&amp;&amp;</span> sudo cryptsetup close fedo
 <h2 id="nothing-here-worked">Nothing here worked</h2>
 <p>You cannot brick the Mac — Apple Silicon DFU / System Recovery always works, and
 macOS is on separate APFS partitions this tooling never touches. Worst case you
-reinstall Fedora Asahi and restore from the backup you took in Step 2.</p>
+reinstall Fedora Asahi and restore from the backup you took before you began
+(<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/INSTALL.md#before-you-begin">INSTALL.md → Before you begin</a>, item 2).</p>
 <p>When asking for help, include:</p>
 <div class="codeblock"><pre><code>sudo cryptsetup luksDump /dev/nvme0n1p6 <span class="pl-k">|</span> head -30
 cat /etc/crypttab /etc/fstab /etc/kernel/cmdline
@@ -365,7 +367,7 @@ grep options /boot/loader/entries/<span class="pl-k">*</span>.conf</code></pre><
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-25.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

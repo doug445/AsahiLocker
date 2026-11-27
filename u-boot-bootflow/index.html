@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-09-18">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "U-Boot bootflow: booting a USB stick or a specific kernel on Apple Silicon",
       "description": "Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-09-18",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,12 +99,12 @@
     <p class="lede">Booting a USB stick or a chosen kernel on an Apple Silicon Mac from the U-Boot prompt: bootflow scan, picking an entry, persisting the boot order, and why efibootmgr misleads you on Asahi.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/UBOOT-BOOTFLOW.md"><code>docs/UBOOT-BOOTFLOW.md</code></a> from the repository,
-      last changed 2026-09-18.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
 <main class="wrap doc">
-<p>The boot chain is <strong>iBoot → m1n1 s1 → m1n1 s2 → U-Boot → bootflow → GRUB → Linux</strong>.
+<p>The boot chain is <strong>iBoot → m1n1 s1 → m1n1 s2 → U-Boot → bootflow → shim → GRUB → Linux</strong>.
 <code>bootflow</code> (U-Boot's <em>bootstd</em> subsystem) is where you manually choose what to boot —
 e.g. the Fedora Asahi live USB you need in order to run <code>luks-deploy.sh</code>, or a specific kernel when GRUB/BLS
 is misbehaving.</p>
@@ -241,7 +241,7 @@ with your install.</li>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-09-18.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

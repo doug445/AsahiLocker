@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-09-21">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "Encrypting Fedora Asahi Remix from a second, minimal Asahi install",
       "description": "Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-09-21",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,14 +99,18 @@
     <p class="lede">Encrypt an installed Fedora Asahi Remix system without a live USB: install a second minimal Asahi alongside it, encrypt the first from there, then delete it and give the space back to macOS.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/SECOND-INSTALL.md"><code>docs/SECOND-INSTALL.md</code></a> from the repository,
-      last changed 2026-09-21.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
 <main class="wrap doc">
-<p>The live USB is the recommended way to run <code>luks-deploy.sh</code>. This is the other
-way: install a second, minimal Fedora Asahi alongside your real one, boot
-that, encrypt from there, then delete it and give the space back to macOS.</p>
+<p>There are three places to run <code>luks-deploy.sh</code> from: the built-in RAM rescue
+(<a href="../ram-rescue/">RAM-RESCUE.md</a>, nothing to plug in, nothing to install), a
+live USB (<a href="../live-usb/">LIVE-USB.md</a>), and this one: install a second, minimal
+Fedora Asahi alongside your real one, boot that, encrypt from there, then
+delete it and give the space back to macOS. The RAM rescue is the lighter way
+round a Mac that will not boot USB; this route is for when you want a full
+system to work from.</p>
 <p>It exists because the live USB route has a hard dependency on something Apple
 Silicon is not reliable about — U-Boot enumerating a USB mass storage device.
 When a stick never lights up at the U-Boot prompt, no amount of <code>bootflow</code>
@@ -187,7 +191,7 @@ Asahi layout are that install's own.</p>
 </li>
 <li>
 <p>Before the KDF benchmark it prints both systems side by side and asks you to
-type <code>SIBLING</code>:</p>
+type <code>sibling</code>:</p>
 <div class="codeblock"><pre><code>  Running FROM  : /dev/nvme0n1p9  [fedora]  20G
   Encrypting    : /dev/nvme0n1p6  [fedora]  250G
 </code></pre></div>
@@ -271,7 +275,9 @@ refuses outright — this is the one gate with no override word.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li>
-<a href="../live-usb/">LIVE-USB.md</a> — the recommended route, and <code>usb start</code>
+<a href="../ram-rescue/">RAM-RESCUE.md</a> — the route with nothing to plug in and nothing to install</li>
+<li>
+<a href="../live-usb/">LIVE-USB.md</a> — the live USB route, and <code>usb start</code>
 </li>
 <li>
 <a href="../u-boot-bootflow/">UBOOT-BOOTFLOW.md</a> — getting to the <code>=&gt;</code> prompt</li>
@@ -292,7 +298,7 @@ refuses outright — this is the one gate with no override word.</p>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-09-21.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 

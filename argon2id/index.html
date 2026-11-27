@@ -20,7 +20,7 @@
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
 <meta property="article:published_time" content="2026-10-24">
-<meta property="article:modified_time" content="2026-11-21">
+<meta property="article:modified_time" content="2026-11-27">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">
 {
@@ -32,7 +32,7 @@
       "headline": "argon2id and AES-256-XTS for LUKS2 on Apple Silicon: choosing a KDF profile",
       "description": "Choosing an argon2id profile for LUKS2 on an Apple Silicon Mac, changing the KDF on a volume that already exists, why pbkdf2 is never used, and how this compares with FileVault's key derivation.",
       "datePublished": "2026-10-24",
-      "dateModified": "2026-11-21",
+      "dateModified": "2026-11-27",
       "image": "https://doug445.github.io/AsahiLocker/asahilocker-logo.jpg",
       "inLanguage": "en",
       "author": {
@@ -99,7 +99,7 @@
     <p class="lede">Choosing an argon2id profile for LUKS2 on an Apple Silicon Mac, changing the KDF on a volume that already exists, why pbkdf2 is never used, and how this compares with FileVault&#x27;s key derivation.</p>
     <p class="meta">Part of the <a href="../">AsahiLocker guide</a>. This page is
       <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/CRYPTO.md"><code>docs/CRYPTO.md</code></a> from the repository,
-      last changed 2026-11-21.</p>
+      last changed 2026-11-27.</p>
   </div>
 </header>
 
@@ -142,7 +142,7 @@ numbers you see will be your own.</em></p>
 <tbody>
 <tr>
 <td>
-<code>aggressive</code> (default)</td>
+<code>aggressive</code> (default)¹</td>
 <td>4 GiB</td>
 <td>10</td>
 <td>4</td>
@@ -182,9 +182,18 @@ between the two.</p>
 <p><strong>"vs stock"</strong> is work (memory x iterations) against what <code>cryptsetup</code> picks on
 this machine unaided — 1 GiB x 8, its <code>--iter-time</code> default of 2000 ms. Every
 profile is above 1.0x by construction, and a runtime guard enforces it (below).</p>
+<p>¹ On every Mac with more than 8 GB. On a Mac with 8 GB of RAM, whatever the
+chip (M1, M2 and M3 base models all come with 8 GB), the default is <code>moderate</code>,
+and the menu says why: the KDF's memory has to be free in the initramfs at
+every boot, or the volume does not open; 4 GiB is half of such a machine, and
+the initramfs only grows as firmware and GPU support are added to it. The rule
+is the RAM, not the model. <code>aggressive</code> stays on the menu, and
+<code>LUKS_PROFILE=aggressive</code> takes it. The detection reads <code>MemTotal</code> (under
+12 GiB reported counts as 8 GB); anything pinned with
+<code>LUKS_PBKDF_*</code> falls back to <code>aggressive</code> on every machine, so a fleet's pinned
+parameters do not change from one Mac to the next.</p>
 <p><strong>All three are argon2id — none uses pbkdf2.</strong> Memory cost only has to be
-allocatable in the initramfs, which has the machine to itself, so any profile is
-safe on any Asahi-supported Mac including an 8 GiB M1.</p>
+allocatable in the initramfs, which has the machine to itself.</p>
 <h3 id="the-case-for-aggressive--and-for-paranoid-after-it">The case for <code>aggressive</code> — and for <code>paranoid</code> after it</h3>
 <p>Pick <code>aggressive</code> unless you have a reason not to. Here is the reason to.</p>
 <p><strong>You pay the KDF once per boot. The attacker pays it once per guess.</strong> An
@@ -237,8 +246,6 @@ script here will do it for you.</p>
 <p>The two conditions are separate because they fail differently: dropping below
 1 GiB loses the memory-hardness that is the entire point, and dropping total
 work below <code>fast</code> is cheaper per guess however you trade the two off.</p>
-<p>If you genuinely want a cheaper KDF, run <code>cryptsetup luksConvertKey</code> yourself.
-This script will not write one for you.</p>
 <p><strong>And a runtime guard on top of that.</strong> Before formatting, the script reads
 what <code>cryptsetup</code> itself would have chosen on this machine (argon2id at its
 default memory with iterations auto-tuned to <code>--iter-time</code>, 2000 ms) and
@@ -268,7 +275,7 @@ graphical installers produced argon2id memory costs of roughly <strong>350-600 M
 much RAM happened to be free while it was being written.</p>
 <p>The partition menus can be pinned the same way as the KDF (each pinned device
 is still fstype-checked and cross-checked against the target's own fstab, and
-the typed <code>ENCRYPT</code> confirmation still applies):</p>
+the typed <code>encrypt</code> confirmation still applies):</p>
 <div class="codeblock"><pre><code>sudo LUKS_TARGET_ROOT=/dev/nvme0n1p6 LUKS_TARGET_BOOT=/dev/nvme0n1p5 \
      LUKS_TARGET_EFI=/dev/nvme0n1p4 ./bin/luks-deploy.sh</code></pre></div>
 <p>Fully hands-off (fleet imaging, automated testing): <code>LUKS_PASSPHRASE_FILE=&lt;path&gt;</code>
@@ -325,7 +332,7 @@ sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
 sudo cryptsetup luksConvertKey --hash sha512 --pbkdf argon2id \
      --pbkdf-memory 4194304 --pbkdf-force-iterations 12 --pbkdf-parallel 4 \
      /dev/nvme0n1p6</code></pre></div>
-<p>Two things that trip people up:</p>
+<p>Three things that trip people up:</p>
 <ul>
 <li>
 <p><strong><code>--hash sha512</code> is not optional here.</strong> <code>luksConvertKey</code> rewrites the
@@ -732,9 +739,9 @@ Enrol a recovery key in a second keyslot as well — see
 <h2 id="grub-and-argon2id">GRUB and argon2id</h2>
 <p>None of this constrains the root volume, because
 GRUB never unlocks it — the initramfs does. It only matters if you have some
-<em>other</em> volume that GRUB itself must unlock — for example the experimental
-encrypted-<code>/boot</code> research, which runs a self-built GRUB 2.14 with argon2id
-(see <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/BOOT-ENCRYPTION-STATUS.md">docs/BOOT-ENCRYPTION-STATUS.md</a>).</p>
+<em>other</em> volume that GRUB itself must unlock. The encrypted-<code>/boot</code> research
+these numbers come from is retired and kept as a record
+(<a href="https://github.com/doug445/AsahiLocker/blob/main/docs/BOOT-ENCRYPTION-STATUS.md">BOOT-ENCRYPTION-STATUS.md</a>).</p>
 <p>For those volumes: <strong>never use 4 GiB</strong> — a 32-bit overflow in GRUB's
 <code>argon2_init</code> wraps the allocation size to zero, so it proceeds instead of
 rejecting the parameters. That rule is unconditional.</p>
@@ -744,7 +751,7 @@ worked — that firmware leaves GRUB too little heap, which is where the usual
 "GRUB caps at 1 GiB" comes from. Under Asahi's U-Boot it is not the same
 number: 2 GiB is measured working on an M2 Max. Use 1 GiB as the portable
 default; treat more as opt-in and measured. An allocation failure here means
-the machine does not boot. GRUB 2.12 (current in Fedora 44) has no argon2
+the machine does not boot. GRUB 2.12 (current in Fedora 45) has no argon2
 support at all.</p>
 <p>Do not answer any of that by downgrading the volume to pbkdf2 — argon2id at
 1 GiB is memory-hard, pbkdf2 is not, and the gap matters far more than the
@@ -761,7 +768,7 @@ memory cost does.</p>
       <a href="https://github.com/doug445/AsahiLocker/releases">Releases</a> ·
       <a href="https://github.com/doug445/AsahiLocker/issues">Issues</a></p>
     <p>Unofficial. Not affiliated with or endorsed by Asahi Linux, the Fedora Project or Apple.</p>
-    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-21.</p>
+    <p>Copyright © 2026 William MacKinnon. Code under the MIT licence. Page last updated 2026-11-27.</p>
   </div>
 </footer>
 
