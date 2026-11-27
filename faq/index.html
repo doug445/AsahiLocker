@@ -133,12 +133,11 @@ What you cannot sensibly do is swap the algorithm out — see
 Mac would cost a great deal and protect almost nothing.</p>
 <ul>
 <li>
-<strong>It is how encrypted Linux is normally installed.</strong> No mainstream Linux
-installer encrypts <code>/boot</code>. Fedora's, with "Encrypt my data" ticked, leaves it
-unencrypted; so do Ubuntu's and Debian's; openSUSE's and Manjaro's do not
-encrypt by default at all. An encrypted <code>/boot</code> is always a job done after
-installing, by hand: PBKDF2, or a GRUB 2.14 built from source for argon2id,
-which on x86 stops at exactly 1 GiB. The kernel and initramfs are read from
+<strong>It is how encrypted Linux is normally installed.</strong> Fedora's, Ubuntu's and
+Debian's installers, the ones most people use, encrypt the root and leave
+<code>/boot</code> unencrypted. Where an installer does encrypt <code>/boot</code>, GRUB opens it
+with PBKDF2; an argon2id <code>/boot</code> needs a GRUB 2.14 built by hand, and on x86
+stops at exactly 1 GiB. The kernel and initramfs are read from
 <code>/boot</code>, and the initramfs unlocks the root. That is exactly what AsahiLocker
 sets up.</li>
 <li>

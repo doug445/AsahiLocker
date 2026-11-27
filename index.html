@@ -85,7 +85,7 @@
         {
           "@type": "Question",
           "name": "Why is /boot left unencrypted?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Because that is the normal LUKS arrangement: no mainstream Linux installer encrypts /boot. Fedora's, Ubuntu's and Debian's leave it unencrypted, and openSUSE's and Manjaro's do not encrypt by default; an encrypted /boot is always done by hand after installing. On a Mac it would protect almost nothing, because m1n1 stage 2, U-Boot and GRUB sit on the EFI partition, which nothing can encrypt. Measured on an M2 Max, GRUB's argon2id is also 8.5 times slower than the kernel's. An optional boot tripwire reports any change to /boot or the EFI partition made while the Mac was off." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Because that is the normal LUKS arrangement: Fedora's, Ubuntu's and Debian's installers encrypt the root and leave /boot unencrypted. Where an installer does encrypt /boot, GRUB opens it with PBKDF2; an argon2id /boot needs a GRUB 2.14 built by hand. On a Mac it would protect almost nothing, because m1n1 stage 2, U-Boot and GRUB sit on the EFI partition, which nothing can encrypt. Measured on an M2 Max, GRUB's argon2id is also 8.5 times slower than the kernel's. An optional boot tripwire reports any change to /boot or the EFI partition made while the Mac was off." }
         },
         {
           "@type": "Question",
@@ -288,10 +288,10 @@
     EFI partition to capture the passphrase at the next boot. Both stay unencrypted and unsigned,
     as on every Asahi install. The optional boot tripwire tells you afterwards; nothing can
     prevent it on this platform.</li>
-  <li><strong>An unencrypted <code>/boot</code> is normal.</strong> No mainstream Linux installer
-    encrypts it: Fedora's, Ubuntu's and Debian's leave it plain, and openSUSE's and Manjaro's do
-    not encrypt by default. Wherever <code>/boot</code> is encrypted, it was done by hand after
-    installing.</li>
+  <li><strong>An unencrypted <code>/boot</code> is normal.</strong> Fedora's, Ubuntu's and
+    Debian's installers, the ones most people use, encrypt the root and leave <code>/boot</code>
+    unencrypted. Where an installer does encrypt <code>/boot</code>, GRUB opens it with PBKDF2; an
+    argon2id <code>/boot</code> needs a GRUB 2.14 built by hand.</li>
 </ul>
 
 <h2 id="proof">The evidence: tests, machines, audits</h2>
@@ -581,8 +581,9 @@ systemctl --failed</code></pre></div>
 </details>
 <details>
   <summary>Why is <code>/boot</code> left unencrypted?</summary>
-  <p>Because that is the normal LUKS arrangement: no mainstream Linux installer encrypts
-    <code>/boot</code>; where it is encrypted, that was done by hand after installing. On a Mac it would protect almost nothing: m1n1 stage 2, U-Boot and GRUB
+  <p>Because that is the normal LUKS arrangement: Fedora's, Ubuntu's and Debian's installers
+    encrypt the root and leave <code>/boot</code> unencrypted, and where an installer does encrypt
+    <code>/boot</code>, GRUB opens it with PBKDF2. On a Mac it would protect almost nothing: m1n1 stage 2, U-Boot and GRUB
     sit on the EFI partition, which nothing can encrypt. Measured on an M2 Max, GRUB's argon2id is
     also 8.5 times slower than the kernel's. The
     <a href="https://github.com/doug445/AsahiLocker/blob/main/docs/BOOT-ENCRYPTION-STATUS.md">research</a>
